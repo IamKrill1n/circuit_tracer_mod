@@ -1,0 +1,25 @@
+Fact: The capital of the country where the Amazon rainforest is primarily located is Brasília
+Fact: The language spoken in the country whose capital is Tokyo is Japanese
+Fact: The continent where the Nile River flows is called Africa
+Fact: The inventor of the telephone used in modern communication is Alexander
+Fact: The capital of the state where Silicon Valley is located is Sacramento
+Fact: The animal that produces the material used to make silk is the silkworm
+Fact: The capital of the country where the Great Pyramid of Giza is located is Cairo
+Fact: The capital of the US state containing Dallas is the city of Austin
+Fact: The capital of the country north of the United States is the city of Ottawa
+Fact: The currency used in the country containing the Eiffel Tower is the euro
+Fact: The continent containing the Nile River is the continent Africa
+Fact: The capital of the country containing Mount Everest is the city of Kathmandu
+Fact: The largest ocean on Earth is the ocean Pacific
+Fact: The country whose flag contains a maple leaf is the country Canada
+Fact: The capital of the country containing the Colosseum is the city of Rome
+Fact: The capital of the country hosting Oktoberfest is the city of Berlin
+Fact: The author of the play featuring Hamlet is named William
+Fact: The capital of the country containing the Taj Mahal is the city of Delhi
+Fact: The country where kangaroos are native is the country Australia
+Fact: The capital of the country containing the Statue of Liberty is the city of Washington
+Fact: The hardest natural material on Earth is the material diamond
+Fact: The capital of the country containing the Great Wall is the city of Beijing
+Fact: The capital of the country containing the pyramids of Giza is the city of Cairo
+Fact: The country containing the Alps mountain range is the country Switzerland
+Fact: The capital of the country containing the Louvre Museum is the city of Paris

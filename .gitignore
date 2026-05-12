@@ -184,3 +184,5 @@ demos/graph_files/
 nohup.out
 runs/
 
+# agent
+.claude/

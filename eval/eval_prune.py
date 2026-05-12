@@ -1,4 +1,5 @@
 """Evaluate PruneGraphs produced by ``eval/prune_graphs.py``.
+Old code, might not use
 
 Reads a manifest.json describing the prune sweep and computes a battery of
 metrics per prune cell. In addition to the existing combined completeness

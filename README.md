@@ -5,7 +5,7 @@ The summarization pipeline consists of 2 stage:
 1. Prunning: prune the attribution graph down to a subgraph containing important nodes and edges. 
 - Key idea: introduce **relevance** and use along with **influence** (from original clt paper) to align the subgraph with human rationale better (features activating on useless tokens are pruned).
 2. Clustering: cluster functionally similar feature nodes together, further simplify the summarization graph and aid steering.
-- Key idea: use spectral clustering on a weighted edge profile similarity matrix, penalize clustering features of long layer span, and force DAG post process.
+- Key idea: use agglomerative clustering on a weighted edge profile similarity matrix with layer span penalty, ensuring DAG.
 
 ## Evaluation Methodology
 
@@ -41,12 +41,4 @@ To ensure a fair comparison across algorithms, we strictly control the resolutio
     *   **Decay Rate ($\gamma$):** We sweep the temporal decay parameter governing layer-span distance penalties from $0.0$ to $1.0$ with a step size of $0.1$ ($\gamma \in \{0.0, 0.1, 0.2, \dots, 1.0\}$). This allows us to quantify the exact trade-off between localized DAG enforcement (high decay) and global conceptual grouping (low decay).
 
 ### 4. Ablation study
-To validate our pruning methodology, we measure the effect of ablating features in our subgraph on the output logit. 
-We measure the KL divergence between the model with ablation and the clean forward pass. The ablation we use is constraint patching on every feature. (to be implemented)
-
 We experiment with steering with our summarization graph on multihop reasoning dataset. (to be implemented)
-
-### 5. Neuronpedia
-Neuronpedia api is used to generate attribution graphs, upload supernode graph (neuronpedia calls it subgraph), and steering. The api doc is here https://www.neuronpedia.org/api-doc
-
-
