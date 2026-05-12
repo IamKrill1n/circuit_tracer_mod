@@ -9,7 +9,7 @@ import streamlit as st
 
 from api import save_subgraph
 from summarization.cluster import (
-    cluster_graph,
+    cluster_graph_spectral,
     cluster_graph_agglomerative,
     clusters_to_supernodes,
 )
@@ -95,7 +95,7 @@ act_ub = sb.number_input(
 sb.header("Cluster settings")
 algorithm = sb.selectbox(
     "algorithm",
-    ["spectral (cluster_graph)", "agglomerative (cluster_graph_agglomerative)"],
+    ["spectral (cluster_graph_spectral)", "agglomerative (cluster_graph_agglomerative)"],
 )
 is_spectral = algorithm.startswith("spectral")
 
@@ -158,7 +158,7 @@ if run and selected_path is not None:
                 decay_rate=decay_rate,
             )
             if is_spectral:
-                clusters = cluster_graph(
+                clusters = cluster_graph_spectral(
                     prune_graph,
                     **cluster_kwargs,
                     enforce_dag=enforce_dag,

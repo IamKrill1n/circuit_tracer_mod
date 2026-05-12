@@ -97,23 +97,11 @@ def main() -> None:
             verbose=True,
         )
 
-        # out = args.output_dir / f"{idx:03d}.pt"
-        # graph.to_pt(out)
-        # print(f"  saved → {out}")
+        out = args.output_dir / f"{idx:03d}.pt"
+        graph.to_pt(out)
+        print(f"  saved → {out}")
         kept += 1
         cleanup_cuda()
-        slug = f"graph_{idx}"
-        graph_file_dir = "demos/temp_graph_files/clt-hp"
-        node_threshold = 1
-        edge_threshold = 1
-
-        create_graph_files(
-            graph_or_path=graph,  # the graph to create files for
-            slug=slug,
-            output_path=graph_file_dir,
-            node_threshold=node_threshold,
-            edge_threshold=edge_threshold,
-        )
 
     print(f"\n{kept}/{len(pairs)} graphs generated → {args.output_dir}")
 

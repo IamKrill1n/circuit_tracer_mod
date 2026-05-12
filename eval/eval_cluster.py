@@ -15,7 +15,7 @@ from sklearn.cluster import SpectralClustering
 
 from summarization.cluster_scoring import score_k
 from summarization.cluster import (
-    cluster_graph,
+    cluster_graph_spectral,
     cluster_graph_agglomerative,
     compute_similarity,
     labels_to_supernodes,
@@ -365,7 +365,7 @@ def _evaluate_ours_fixed_k(
         decay_rate=decay_rate,
         max_layer_span=max_layer_span,
     )
-    clusters = cluster_graph(
+    clusters = cluster_graph_spectral(
         prune_graph,
         target_k=target_k,
         max_layer_span=max_layer_span,

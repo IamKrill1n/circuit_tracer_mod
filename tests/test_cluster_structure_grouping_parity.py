@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from summarization.cluster import cluster_graph, compute_similarity
+from summarization.cluster import cluster_graph_spectral, compute_similarity
 from summarization.prune import PruneGraph
 from summarization.utils import _node_from_json_dict
 
@@ -53,7 +53,7 @@ def test_compute_similarity_shape_and_range() -> None:
 
 def test_cluster_graph_spectral_output_shape() -> None:
     prune_graph = _build_test_graph()
-    supernodes = cluster_graph(
+    supernodes = cluster_graph_spectral(
         prune_graph,
         target_k=2,
         max_layer_span=4,

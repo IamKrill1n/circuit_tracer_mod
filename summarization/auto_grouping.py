@@ -6,7 +6,7 @@ import numpy as np
 from scipy.linalg import eigvalsh
 
 from summarization.cluster import (
-    cluster_graph,
+    cluster_graph_spectral,
     clusters_to_supernodes,
     compute_similarity,
 )
@@ -68,7 +68,7 @@ def find_best_k(
     n_init: int = 20,
 ) -> tuple[int, dict[int, dict[str, Any]]]:
     """
-    Auto-select k for `cluster_graph` and return sweep metrics.
+    Auto-select k for `cluster_graph_spectral` and return sweep metrics.
 
     Returns `(best_k, results)` where each results[k] includes `final_supernodes`.
     """
@@ -95,7 +95,7 @@ def find_best_k(
     del weights  # legacy weight kwargs are no longer used by score_k
     results: dict[int, dict[str, Any]] = {}
     for k in range(k_min, k_max + 1):
-        supernodes = cluster_graph(
+        supernodes = cluster_graph_spectral(
             prune_graph,
             target_k=k,
             max_layer_span=max_layer_span,

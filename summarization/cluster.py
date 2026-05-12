@@ -283,7 +283,7 @@ def labels_to_supernodes(
     return middle_clusters + emb_singletons + logit_singletons
 
 
-def cluster_graph(
+def cluster_graph_spectral(
     prune_graph: PruneGraph,
     target_k: int = 7,
     max_layer_span: int = 4,
@@ -312,7 +312,7 @@ def cluster_graph(
         List of supernodes where each supernode is a list of node ids.
         Embedding/logit nodes are returned as singleton supernodes.
     """
-    logger.info("Starting cluster_graph (target_k=%d, max_layer_span=%s)", target_k, max_layer_span)
+    logger.info("Starting cluster_graph_spectral (target_k=%d, max_layer_span=%s)", target_k, max_layer_span)
     kept_ids = prune_graph.node_ids
     nodes_by_id = _nodes_by_id(prune_graph)
 
@@ -555,13 +555,19 @@ def cluster_graph_agglomerative(
 
 def cluster_graph_with_labels(
     prune_graph: PruneGraph,
+    method: Literal["spectral", "agglomerative"] = "spectral",
     **kwargs,
 ) -> list[list[str]]:
     """
     Convenience wrapper for Neuronpedia-style format:
     [[label, node_id, ...], ...]
     """
-    raw = cluster_graph(prune_graph, **kwargs)
+    if method == "spectral":
+        raw = cluster_graph_spectral(prune_graph, **kwargs)
+    elif method == "agglomerative":
+        raw = cluster_graph_agglomerative(prune_graph, **kwargs)
+    else:
+        raise ValueError(f"Invalid method: {method}")
     out: list[list[str]] = []
     for i, members in enumerate(raw):
         if len(members) == 1:
@@ -575,7 +581,7 @@ def clusters_to_supernodes(
     supernodes: list[list[str]],
     middle_prefix: str = "SN",
 ) -> list[Supernode]:
-    """Convert `cluster_graph` member lists into named `Supernode` rows (middle + emb + logit)."""
+    """Convert `cluster_graph_spectral` member lists into named `Supernode` rows (middle + emb + logit)."""
     nodes_by_id = _nodes_by_id(prune_graph)
     middle: list[list[str]] = []
     emb: list[list[str]] = []
@@ -614,7 +620,7 @@ def supernodes_to_mapping(
     supernodes: list[list[str]],
     middle_prefix: str = "SN",
 ) -> dict[str, list[str]]:
-    """Convert `cluster_graph` output into a named supernode mapping (dict shim)."""
+    """Convert `cluster_graph_spectral` output into a named supernode mapping (dict shim)."""
     rows = clusters_to_supernodes(prune_graph, supernodes, middle_prefix=middle_prefix)
     return {s.name: s.member_node_ids() for s in rows}
 

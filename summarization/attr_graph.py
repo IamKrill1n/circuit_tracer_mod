@@ -8,7 +8,7 @@ from typing import Any
 import torch
 from summarization.supernode_graph import Node
 from summarization.utils import get_data_from_json
-
+from circuit_tracer.graph import Graph
 
 @dataclass
 class AttrGraph:
@@ -29,12 +29,16 @@ class AttrGraph:
         return cls(nodes=nodes, adj=adj, metadata=metadata)
 
     @classmethod
-    def from_graph(cls, graph: Any) -> AttrGraph:
+    def from_graph(cls, graph_or_path: Graph | str) -> AttrGraph:
         """Convert a ``circuit_tracer.graph.Graph`` into attribute-oriented nodes and adjacency."""
         from circuit_tracer.graph import Graph as GraphCls
 
-        if not isinstance(graph, GraphCls):
-            raise TypeError(f"expected Graph, got {type(graph)!r}")
+        if isinstance(graph_or_path, Graph):
+            graph = graph_or_path
+        else:
+            graph = Graph.from_pt(graph_or_path)
+            if not isinstance(graph, GraphCls):
+                raise TypeError(f"expected Graph, got {type(graph)!r}")
 
         n_feat = len(graph.selected_features)
         n_pos = graph.n_pos

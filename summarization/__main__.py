@@ -11,7 +11,7 @@ import requests
 
 from api import generate_graph, save_subgraph
 from summarization.auto_grouping import find_best_k
-from summarization.cluster import cluster_graph, clusters_to_supernodes
+from summarization.cluster import cluster_graph_spectral, clusters_to_supernodes
 from summarization.cluster_viz import supernode_graph_figure
 from summarization.prune import prune_graph_pipeline
 from summarization.supernode_graph import SummarizationGraph
@@ -159,7 +159,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     if resolved_k is None:
         resolved_k = 7
 
-    clusters = cluster_graph(
+    clusters = cluster_graph_spectral(
         prune_graph,
         target_k=resolved_k,
         max_layer_span=args.max_layer_span,
