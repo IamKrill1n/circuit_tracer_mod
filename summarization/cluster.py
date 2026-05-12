@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+import logging
 import numpy as np
 import torch
 from sklearn.cluster import SpectralClustering
@@ -16,6 +17,8 @@ from summarization.utils import (
     node_is_fixed,
     node_is_logit,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _nodes_by_id(prune_graph: PruneGraph) -> dict[str, Node]:
@@ -309,12 +312,15 @@ def cluster_graph(
         List of supernodes where each supernode is a list of node ids.
         Embedding/logit nodes are returned as singleton supernodes.
     """
+    logger.info("Starting cluster_graph (target_k=%d, max_layer_span=%s)", target_k, max_layer_span)
     kept_ids = prune_graph.node_ids
     nodes_by_id = _nodes_by_id(prune_graph)
 
     if not kept_ids:
+        logger.info("No kept_ids found, returning empty clusters.")
         return []
 
+    logger.info("Computing similarity matrix...")
     sim = compute_similarity(
         prune_graph,
         mean_method=mean_method,
@@ -325,13 +331,14 @@ def cluster_graph(
 
     middle_idx = [i for i, nid in enumerate(kept_ids) if not node_is_fixed(nodes_by_id[nid])]
     middle_ids = [kept_ids[i] for i in middle_idx]
+    logger.info("Extracted %d middle nodes.", len(middle_ids))
 
     if not middle_ids:
+        logger.info("No middle nodes found, returning singletons.")
         fixed_only = [[nid] for nid in kept_ids]
         return fixed_only
 
     mid_sim = sim[middle_idx][:, middle_idx].detach().cpu().numpy().clip(0.0, 1.0)
-
     mid_sim = ((mid_sim + mid_sim.T) / 2.0).clip(0.0, 1.0)
     target_k = max(1, min(target_k, len(middle_ids)))
 
@@ -340,6 +347,7 @@ def cluster_graph(
     elif target_k == len(middle_ids):
         labels = np.arange(len(middle_ids), dtype=np.int64)
     else:
+        logger.info("Running SpectralClustering with target_k=%d...", target_k)
         labels = SpectralClustering(
             n_clusters=target_k,
             affinity="precomputed",
@@ -347,6 +355,7 @@ def cluster_graph(
             random_state=int(random_state),
             n_init=int(n_init),
         ).fit_predict(mid_sim)
+        logger.info("Finished SpectralClustering.")
 
     grouped: dict[int, list[str]] = {}
     for nid, lbl in zip(middle_ids, labels):
@@ -354,17 +363,18 @@ def cluster_graph(
     middle_clusters = list(grouped.values())
 
     if enforce_dag and max_layer_span is not None:
+        logger.info("Enforcing layer span constraints (max_span=%d)...", max_layer_span)
         span_safe: list[list[str]] = []
         for cluster in middle_clusters:
             span_safe.extend(_split_cluster_by_span(cluster, nodes_by_id, max_layer_span=max_layer_span))
         middle_clusters = span_safe
 
     if enforce_dag:
-        print(f"Resolving layer interleaving in {len(middle_clusters)} initial clusters...")
+        logger.info("Resolving layer interleaving in %d initial clusters...", len(middle_clusters))
         middle_clusters = _resolve_layer_interleaving(middle_clusters, nodes_by_id)
 
     if max_sn is not None and enforce_dag:
-        print(f"Merging to budget of {max_sn} supernodes...")
+        logger.info("Merging to budget of %d supernodes...", max_sn)
         middle_clusters = _merge_to_budget(middle_clusters, nodes_by_id, max_sn=max_sn)
 
     # Keep deterministic naming order for middle SNs, but return member lists only.
@@ -374,6 +384,7 @@ def cluster_graph(
     logit_singletons = [[nid] for nid in kept_ids if node_is_logit(nodes_by_id[nid])]
 
     supernodes = list(named_middle.values()) + emb_singletons + logit_singletons
+    logger.info("Returning %d total supernodes.", len(supernodes))
     return supernodes
 
 
@@ -419,12 +430,15 @@ def cluster_graph_agglomerative(
     and (b) does not create a cycle in the supernode DAG, until target_k middle clusters
     remain. The DAG guarantee is native — no post-processing needed.
     """
+    logger.info("Starting cluster_graph_agglomerative (target_k=%d)...", target_k)
     kept_ids = prune_graph.node_ids
     nodes_by_id = _nodes_by_id(prune_graph)
 
     if not kept_ids:
+        logger.info("No kept_ids, returning empty list.")
         return []
 
+    logger.info("Computing similarity matrix...")
     sim = compute_similarity(
         prune_graph,
         mean_method=mean_method,
@@ -437,10 +451,12 @@ def cluster_graph_agglomerative(
     middle_ids = [kept_ids[i] for i in middle_idx]
 
     if not middle_ids:
+        logger.info("No middle nodes, returning mapped fixed nodes as separate clusters.")
         return [[nid] for nid in kept_ids]
 
     m = len(middle_ids)
     target_k = max(1, min(target_k, m))
+    logger.info("Extracted %d middle nodes.", m)
 
     # Symmetrized similarity between middle nodes
     mid_sim = sim[middle_idx][:, middle_idx].detach().cpu().numpy().clip(0.0, 1.0)
@@ -455,6 +471,7 @@ def cluster_graph_agglomerative(
     # members[k] = list of indices into middle_ids
     members: dict[int, list[int]] = {i: [i] for i in range(m)}
 
+    logger.info("Initializing cluster-level DAG...")
     # Cluster-level DAG: ca[s, t] = True iff any edge from cluster s -> cluster t
     # pruned_adj[target, source]: pruned_adj[t, s] > 0 means edge s -> t
     full_adj = prune_graph.pruned_adj.detach().cpu().numpy()
@@ -471,6 +488,7 @@ def cluster_graph_agglomerative(
     # Precompute per-node layer values for span checks
     node_layers = [_layer_numeric(nid, nodes_by_id) for nid in middle_ids]
 
+    logger.info("Starting agglomerative merge loop...")
     while len(active) > target_k:
         active_list = sorted(active)
         best_sim = -np.inf
@@ -493,7 +511,10 @@ def cluster_graph_agglomerative(
                 best_a, best_b = a, b
 
         if best_a < 0:
+            logger.info("No valid merge remaining. Terminating merge early.")
             break  # no valid merge remains
+
+        logger.debug("Merging cluster index %d into %d. Remaining clusters: %d", best_b, best_a, len(active) - 1)
 
         # Merge best_b into best_a (weighted average linkage)
         sa, sb = sizes[best_a], sizes[best_b]
@@ -516,14 +537,19 @@ def cluster_graph_agglomerative(
 
         active.discard(best_b)
 
+    logger.info("Finished agglomeration loop. Formulating output clusters...")
     middle_clusters = [[middle_ids[i] for i in members[k]] for k in sorted(active)]
 
     if max_sn is not None and len(middle_clusters) > max_sn:
+        logger.info("Merging up to maximum supernode budget of %d...", max_sn)
         middle_clusters = _merge_to_budget(middle_clusters, nodes_by_id, max_sn=max_sn)
 
     named_middle = _name_middle_supernodes(middle_clusters, nodes_by_id)
     emb_singletons = [[nid] for nid in kept_ids if node_is_embedding(nodes_by_id[nid])]
     logit_singletons = [[nid] for nid in kept_ids if node_is_logit(nodes_by_id[nid])]
+    
+    total_supernodes = len(named_middle) + len(emb_singletons) + len(logit_singletons)
+    logger.info("Agglomerative clustering done. Returning %d total supernodes.", total_supernodes)
     return list(named_middle.values()) + emb_singletons + logit_singletons
 
 

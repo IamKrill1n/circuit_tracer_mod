@@ -16,6 +16,7 @@ from sklearn.cluster import SpectralClustering
 from summarization.cluster_scoring import score_k
 from summarization.cluster import (
     cluster_graph,
+    cluster_graph_agglomerative,
     compute_similarity,
     labels_to_supernodes,
     supernodes_to_mapping,
@@ -164,11 +165,7 @@ def _discover_prune_graphs(
 
 def _default_input_paths() -> list[str]:
     candidates = [
-        "demos/eval_shap_prune",
-        "demos/subgraph/clt-hp",
-        "demos/subgraph/clt",
-        "demos/subgraph/gemma-scope-16k",
-        "demos/subgraph/gemmascope-transcoder-16k",
+        "eval_outputs/prune/subgraph/clt-hp"
     ]
     existing = [path for path in candidates if Path(path).exists()]
     return existing or ["demos/eval_shap_prune"]
@@ -430,6 +427,81 @@ def _evaluate_ours_fixed_k(
     return result_payload
 
 
+def _evaluate_ours_agglomerative_fixed_k(
+    *,
+    prune_graph: PruneGraph,
+    graph_path: Path,
+    graph_name: str,
+    dataset: str,
+    output_dir: Path,
+    method_config: dict[str, str | float],
+    target_k: int,
+    k_selection: str,
+    num_nodes: int,
+    max_layer_span: int,
+    eval_similarity: np.ndarray,
+) -> dict[str, Any]:
+    mean_method = cast(Literal["geo", "harm", "arith"], method_config["mean_method"])
+    decay_rate = float(cast(float, method_config["decay_rate"]))
+    clusters = cluster_graph_agglomerative(
+        prune_graph,
+        target_k=target_k,
+        max_layer_span=max_layer_span,
+        mean_method=mean_method,
+        decay_rate=decay_rate,
+    )
+    final_supernodes = supernodes_to_mapping(prune_graph, clusters)
+    base_score = score_k(
+        final_supernodes,
+        prune_graph,
+        eval_similarity,
+        enforce_dag=True,
+    )
+
+    method_slug = f"ours-agglomerative-{method_config['mean_method']}-decay-{decay_rate:.1f}"
+    run_dir = output_dir / "runs" / graph_name / method_slug / k_selection
+    supernode_map_path = run_dir / "supernode_map.json"
+    auto_k_sweep_path = run_dir / "fixed_k_metrics.json"
+    result_path = run_dir / "result.json"
+
+    _write_json(supernode_map_path, final_supernodes)
+    _write_json(
+        auto_k_sweep_path,
+        {
+            "k_selection": k_selection,
+            "target_k": target_k,
+            "num_nodes": num_nodes,
+            "metrics": {key: value for key, value in base_score.items()},
+        },
+    )
+
+    summary_row = _flatten_metrics(
+        graph_name=graph_name,
+        dataset=dataset,
+        graph_path=graph_path,
+        num_nodes=num_nodes,
+        k_selection=k_selection,
+        method=method_slug,
+        method_family="ours-agglomerative",
+        mean_method=str(method_config["mean_method"]),
+        decay_rate=decay_rate,
+        best_k=target_k,
+        auto_k_candidates=0,
+        final_supernodes=final_supernodes,
+        base_score=base_score,
+        result_path=result_path,
+        supernode_map_path=supernode_map_path,
+        auto_k_sweep_path=auto_k_sweep_path,
+    )
+    result_payload = {
+        **summary_row,
+        "final_supernodes": final_supernodes,
+        "score_details": base_score.get("details", {}),
+    }
+    _write_json(result_path, result_payload)
+    return result_payload
+
+
 def _evaluate_baseline_fixed_k(
     *,
     prune_graph: PruneGraph,
@@ -533,6 +605,24 @@ def evaluate_prune_graph(
                     max_layer_span=max_layer_span,
                     random_state=random_state,
                     n_init=n_init,
+                    eval_similarity=eval_similarity,
+                )
+            )
+
+    for method_config in METHOD_GRID:
+        for k_selection, target_k in k_schedule:
+            rows.append(
+                _evaluate_ours_agglomerative_fixed_k(
+                    prune_graph=prune_graph,
+                    graph_path=graph_path,
+                    graph_name=graph_name,
+                    dataset=dataset,
+                    output_dir=output_dir,
+                    method_config=method_config,
+                    target_k=target_k,
+                    k_selection=k_selection,
+                    num_nodes=num_nodes,
+                    max_layer_span=max_layer_span,
                     eval_similarity=eval_similarity,
                 )
             )
