@@ -41,7 +41,7 @@ class AttrGraph:
         n_layers = int(graph.cfg.n_layers)
         n_err = n_pos * n_layers
         n_tok = len(graph.input_tokens)
-        n_log = len(graph.logit_tokens)
+        n_log = len(graph.logit_token_ids)
         device = graph.adjacency_matrix.device
         dtype = graph.adjacency_matrix.dtype
 
@@ -149,7 +149,7 @@ class AttrGraph:
         # --- Logit nodes ---
         num_layers_cfg = n_layers
         for pos in range(n_log):
-            vocab_idx = graph.logit_tokens[pos]
+            vocab_idx = graph.logit_token_ids[pos]
             vid = int(vocab_idx.item()) if hasattr(vocab_idx, "item") else int(vocab_idx)
             tok_str = tokenizer.decode([vid]) if tokenizer is not None else str(vid)
             layer_logit = str(num_layers_cfg + 1)

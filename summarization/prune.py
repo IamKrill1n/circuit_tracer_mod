@@ -503,6 +503,33 @@ def prune_masks_from_attr_graph(
     )
 
 
+def prune_pt_graph(
+    graph: Any,
+    logit_weights: LogitWeightMode = "probs",
+    token_weights: list[float] | None = None,
+    node_threshold: float = 0.8,
+    edge_threshold: float = 0.98,
+    combine_method: CombineMethod = "geometric",
+    normalization: NormalizationMethod = "rank",
+    alpha: float = 0.5,
+    keep_all_tokens_and_logits: bool = True,
+) -> PruneGraph:
+    """Prune a circuit_tracer Graph (.pt) directly to a PruneGraph."""
+    from summarization.attr_graph import AttrGraph
+    attr_graph = AttrGraph.from_graph(graph)
+    return prune_attr_graph(
+        attr_graph,
+        logit_weights=logit_weights,
+        token_weights=token_weights,
+        node_threshold=node_threshold,
+        edge_threshold=edge_threshold,
+        combine_method=combine_method,
+        normalization=normalization,
+        alpha=alpha,
+        keep_all_tokens_and_logits=keep_all_tokens_and_logits,
+    )
+
+
 if __name__ == "__main__":
     prune_graph = prune_graph_pipeline(
         json_path="demos/temp_graph_files/austin_clt.json",

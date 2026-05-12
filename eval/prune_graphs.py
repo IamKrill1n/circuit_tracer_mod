@@ -354,7 +354,6 @@ def run_prune_sweep(args: argparse.Namespace) -> None:
         "n_result_rows": len(rows_out),
         "results_json": str(results_path),
         "summary_csv": str(summary_path),
-        "records": rows_out,
         "failures": failures,
     }
     _write_json(manifest_path, manifest)

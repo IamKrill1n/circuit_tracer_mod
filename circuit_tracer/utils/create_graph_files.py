@@ -158,6 +158,84 @@ def build_model(graph: Graph, used_nodes, used_edges, slug, scan, node_threshold
     return full_model
 
 
+def create_graph_files_from_prune_graph(
+    prune_graph,
+    slug: str,
+    output_path,
+):
+    """Write frontend JSON files from a PruneGraph (e.g. produced by prune_pt_graph).
+
+    Mirrors create_graph_files but skips the pruning step since PruneGraph is
+    already pruned.
+    """
+    from summarization.prune import PruneGraph
+
+    if not isinstance(prune_graph, PruneGraph):
+        raise TypeError(f"expected PruneGraph, got {type(prune_graph)!r}")
+
+    if os.path.exists(output_path):
+        assert os.path.isdir(output_path)
+    else:
+        os.makedirs(output_path, exist_ok=True)
+
+    meta_raw = prune_graph.metadata
+    scan = meta_raw.get("scan") or ""
+    if isinstance(scan, list):
+        transcoder_list = scan
+        scan = "-".join(scan)
+    else:
+        transcoder_list = []
+
+    # Convert summarization Nodes → frontend Nodes (same fields, different class)
+    frontend_nodes = [
+        Node(
+            node_id=n.node_id,
+            feature=n.feature,
+            layer=n.layer,
+            ctx_idx=n.ctx_idx,
+            feature_type=n.feature_type,
+            token_prob=n.token_prob,
+            is_target_logit=n.is_target_logit,
+            run_idx=n.run_idx,
+            reverse_ctx_idx=n.reverse_ctx_idx,
+            jsNodeId=n.jsNodeId,
+            clerp=n.clerp,
+            influence=n.influence,
+            activation=n.activation,
+        )
+        for n in prune_graph.nodes
+    ]
+
+    # Build links from pruned_adj (adj[dst, src] = weight)
+    adj = prune_graph.pruned_adj.cpu()
+    dsts, srcs = adj.nonzero(as_tuple=True)
+    id_map = {n.node_idx: n.node_id for n in prune_graph.nodes}
+    used_edges = [
+        {
+            "source": id_map[int(srcs[i])],
+            "target": id_map[int(dsts[i])],
+            "weight": float(adj[int(dsts[i]), int(srcs[i])].item()),
+        }
+        for i in range(len(srcs))
+    ]
+
+    meta = Metadata(
+        slug=slug,
+        scan=scan,
+        transcoder_list=transcoder_list,
+        prompt_tokens=meta_raw.get("prompt_tokens", []),
+        prompt=meta_raw.get("prompt", ""),
+        node_threshold=None,
+    )
+    qparams = QParams(pinnedIds=[], supernodes=[], linkType="both", clickedId="", sg_pos="")
+    full_model = Model(metadata=meta, qParams=qparams, nodes=frontend_nodes, links=used_edges)
+
+    with open(os.path.join(output_path, f"{slug}.json"), "w") as f:
+        f.write(full_model.model_dump_json(indent=2))
+    add_graph_metadata(full_model.metadata.model_dump(), output_path)
+    logger.info("Graph data written to %s", output_path)
+
+
 def create_graph_files(
     graph_or_path: Graph | str,
     slug: str,

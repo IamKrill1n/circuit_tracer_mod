@@ -4,6 +4,7 @@ import json
 
 import torch
 
+from circuit_tracer.attribution.targets import LogitTarget
 from circuit_tracer.graph import Graph
 from circuit_tracer.utils.tl_nnsight_mapping import UnifiedConfig
 from summarization.attr_graph import AttrGraph
@@ -39,7 +40,7 @@ def test_attr_graph_from_graph_matches_expected_order_and_adjacency() -> None:
     selected_features = torch.tensor([0, 1], dtype=torch.long)
     activation_values = torch.tensor([0.5, 0.25], dtype=torch.float32)
     input_tokens = torch.tensor([101, 102], dtype=torch.long)
-    logit_tokens = torch.tensor([201, 202], dtype=torch.long)
+    logit_targets = [LogitTarget(token_str="", vocab_idx=201), LogitTarget(token_str="", vocab_idx=202)]
     logit_probabilities = torch.tensor([0.7, 0.3], dtype=torch.float32)
     adjacency_matrix = torch.randn(n_total, n_total)
 
@@ -49,7 +50,7 @@ def test_attr_graph_from_graph_matches_expected_order_and_adjacency() -> None:
         active_features=active_features,
         adjacency_matrix=adjacency_matrix,
         cfg=cfg,
-        logit_tokens=logit_tokens,
+        logit_targets=logit_targets,
         logit_probabilities=logit_probabilities,
         selected_features=selected_features,
         activation_values=activation_values,
@@ -77,7 +78,7 @@ def test_prune_masks_from_attr_graph_accepts_native_seeds(tmp_path) -> None:
             active_features=torch.tensor([[0, 0, 1], [1, 1, 2]], dtype=torch.long),
             adjacency_matrix=torch.zeros(10, 10),
             cfg=cfg,
-            logit_tokens=torch.tensor([3, 4], dtype=torch.long),
+            logit_targets=[LogitTarget(token_str="", vocab_idx=3), LogitTarget(token_str="", vocab_idx=4)],
             logit_probabilities=torch.tensor([1.0, 0.0], dtype=torch.float32),
             selected_features=torch.tensor([0, 1], dtype=torch.long),
             activation_values=torch.tensor([1.0, 1.0], dtype=torch.float32),
