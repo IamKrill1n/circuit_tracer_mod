@@ -1,0 +1,24 @@
+{
+  "graphs": [
+    {
+      "slug": "example",
+      "scan": "mntss/clt-gemma-2-2b-2.5M",
+      "transcoder_list": [],
+      "prompt_tokens": [
+        "<bos>",
+        "Fact",
+        ":",
+        " The",
+        " capital",
+        " of",
+        " state",
+        " containing",
+        " Dallas",
+        " is"
+      ],
+      "prompt": "<bos>Fact: The capital of state containing Dallas is",
+      "node_threshold": null,
+      "schema_version": 1
+    }
+  ]
+}
