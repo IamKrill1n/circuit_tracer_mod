@@ -1,0 +1,9 @@
+dotenv
+networkx
+transformers
+shap
+google-genai
+pytest
+plotly
+streamlit
+entmax

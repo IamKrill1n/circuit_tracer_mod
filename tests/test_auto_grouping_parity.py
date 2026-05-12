@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+import numpy as np
+import torch
+
+from summarization.auto_grouping import (
+    eigengap_analysis,
+    find_best_k,
+    score_k,
+)
+from summarization.cluster import (
+    compute_similarity,
+    mapping_dict_to_supernodes,
+    supernodes_to_mapping,
+)
+from summarization.cluster_scoring import score_clusters, score_summarization_graph
+from summarization.prune import PruneGraph
+from summarization.supernode_graph import SummarizationGraph
+from summarization.utils import _node_from_json_dict
+
+
+def _build_test_graph() -> PruneGraph:
+    node_specs: list[tuple[str, dict]] = [
+        ("E_0_0", {"feature_type": "embedding", "is_target_logit": False, "layer": "E"}),
+        ("1_0_0", {"feature_type": "sae_feature", "is_target_logit": False, "layer": "1"}),
+        ("1_1_0", {"feature_type": "sae_feature", "is_target_logit": False, "layer": "1"}),
+        ("2_0_0", {"feature_type": "sae_feature", "is_target_logit": False, "layer": "2"}),
+        ("2_1_0", {"feature_type": "sae_feature", "is_target_logit": False, "layer": "2"}),
+        ("27_0_0", {"feature_type": "logit", "is_target_logit": True, "layer": "27"}),
+    ]
+    nodes = [_node_from_json_dict({"node_id": nid, **spec}) for nid, spec in node_specs]
+
+    pruned_adj = torch.tensor(
+        [
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.4, 0.0, 0.1, 0.0, 0.0, 0.0],
+            [0.3, 0.2, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.7, 0.6, 0.0, 0.2, 0.0],
+            [0.0, 0.6, 0.7, 0.3, 0.0, 0.0],
+            [0.0, 0.1, 0.2, 0.8, 0.9, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+
+    edge_relevance = pruned_adj.clone() * 0.8
+    edge_influence = pruned_adj.clone() * 1.2
+    node_relevance = torch.tensor([0.0, 0.4, 0.45, 0.7, 0.75, 0.0], dtype=torch.float32)
+    node_influence = torch.tensor([0.0, 0.3, 0.35, 0.8, 0.85, 0.0], dtype=torch.float32)
+    return PruneGraph(
+        nodes=nodes,
+        pruned_adj=pruned_adj,
+        metadata={},
+        node_influence=node_influence,
+        node_relevance=node_relevance,
+        edge_influence=edge_influence,
+        edge_relevance=edge_relevance,
+    )
+
+
+def test_eigengap_analysis_outputs_expected_keys() -> None:
+    prune_graph = _build_test_graph()
+    similarity = compute_similarity(
+        prune_graph,
+        mean_method="arith",
+
+    )
+    result = eigengap_analysis(similarity, prune_graph, max_k=5)
+    assert {"eigengap_k", "eigenvalues", "gaps", "search_range"} <= set(result.keys())
+    assert result["search_range"][0] <= result["search_range"][1]
+
+
+def test_score_k_returns_base_metrics_only() -> None:
+    prune_graph = _build_test_graph()
+    similarity = compute_similarity(
+        prune_graph,
+        mean_method="arith",
+
+    )
+    supernodes = [["1_0_0", "1_1_0"], ["2_0_0", "2_1_0"], ["E_0_0"], ["27_0_0"]]
+    mapping = supernodes_to_mapping(prune_graph, supernodes)
+    score = score_k(
+        mapping,
+        prune_graph,
+        similarity,
+        enforce_dag=False,
+    )
+    assert "F_phi" not in score
+    assert "sigma_phi" not in score
+    assert "sil_raw" in score
+    assert "sil_norm" in score
+    assert "dag_score" in score
+    assert score["score_arith"] >= 0.0
+
+
+def test_score_summarization_graph_matches_score_clusters() -> None:
+    prune_graph = _build_test_graph()
+    similarity = compute_similarity(
+        prune_graph,
+        mean_method="arith",
+
+    )
+    supernodes = [["1_0_0", "1_1_0"], ["2_0_0", "2_1_0"], ["E_0_0"], ["27_0_0"]]
+    mapping = supernodes_to_mapping(prune_graph, supernodes)
+    rows = mapping_dict_to_supernodes(prune_graph, mapping)
+    sng = SummarizationGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
+    a = score_clusters(rows, prune_graph, similarity, enforce_dag=False)
+    b = score_summarization_graph(sng, prune_graph, similarity)
+    assert a.keys() == b.keys()
+    for key in a:
+        if key == "dbcv" and (np.isnan(a[key]) and np.isnan(b[key])):
+            continue
+        assert abs(float(a[key]) - float(b[key])) < 1e-9
+
+
+def test_find_best_k_returns_scored_results() -> None:
+    prune_graph = _build_test_graph()
+    similarity = compute_similarity(
+        prune_graph,
+        mean_method="arith",
+
+    )
+    best_k, results = find_best_k(
+        prune_graph,
+        similarity=similarity,
+        max_layer_span=4,
+        k_min_override=2,
+        k_max_override=3,
+        max_sn=None,
+        enforce_dag=False,
+    )
+    assert best_k in results
+    assert all("score_arith" in v for v in results.values())
+    assert all("final_supernodes" in v for v in results.values())

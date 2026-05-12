@@ -1,0 +1,281 @@
+\documentclass[11pt]{article}
+
+% ACL format — change "review" to "final" for camera-ready
+\usepackage[review]{acl}
+
+% Standard ACL packages
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+
+% Math
+\usepackage{amsmath,amssymb}
+\usepackage{amsthm}
+
+% Tables and figures
+\usepackage{booktabs}
+\usepackage{graphicx}
+
+% Algorithms
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+% Lists
+\usepackage{enumitem}
+
+% Cross-references (must load after acl, which loads hyperref)
+\usepackage{cleveref}
+
+\graphicspath{{evaluation/}}
+
+\newcommand{\cV}{\mathcal{V}}
+\newcommand{\cE}{\mathcal{E}}
+\newcommand{\cG}{\mathcal{G}}
+\newcommand{\bA}{\mathbf{A}}
+\newcommand{\R}{\mathbb{R}}
+
+\newtheorem{definition}{Definition}
+\newtheorem{proposition}{Proposition}
+
+\title{Automated Summarization of Attribution Graphs\\for Circuit Tracing Pipelines}
+\author{Anonymous Authors}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Mechanistic interpretability seeks to understand large language models by identifying the causal pathways responsible for their behavior. Circuit tracing methods produce \emph{attribution graphs} encoding directed influence among model components—features, attention heads, and token positions—but these graphs routinely contain thousands of nodes and millions of edges, making manual inspection impractical. We propose \textbf{ASG} (Automated Summarization of attribution Graphs), a two-phase pipeline that (i) prunes the attribution graph by retaining nodes and edges that jointly score highly under both influence and relevance criteria, and (ii) clusters the retained feature nodes into semantically coherent \emph{supernodes} while enforcing a DAG-integrity constraint. We formalize the problem, describe the algorithm in detail, and evaluate it on synthetic multihop reasoning prompts. Preliminary results indicate that ASG substantially reduces graph size while preserving the bulk of attribution mass and producing structurally sound supernode graphs.
+\end{abstract}
+
+\section{Introduction}
+
+The internal workings of large language models remain poorly understood. Mechanistic interpretability has emerged as a key approach for improving the transparency, reliability, and controllability of modern LLMs. Circuit tracing methods aim to identify the causal pathways underlying specific model behaviors by computing attribution among components such as attention heads, MLP neurons, residual streams, and token positions.
+
+Sparse autoencoders (SAEs) have become a central tool for decomposing model activations into smaller, more interpretable units called \emph{features}, partially mitigating the polysemanticity of raw neurons \cite{elhage2022toy}. Variants such as transcoders and cross-layer transcoders connect these features across layers and enable the construction of full attribution graphs \cite{circuit-tracer}. However, the resulting graphs are often extremely complex, containing thousands of nodes and millions of edges, and their interpretation still requires substantial manual effort.
+
+We introduce \textbf{ASG}, a method for automatically summarizing attribution graphs into compact, human-readable supernode graphs. The core idea is a two-phase pipeline: first, extract a key subgraph containing the most influential and relevant nodes and edges; second, aggregate functionally similar nodes into \emph{supernodes} to produce a compact summary. ASG targets a practical bottleneck in mechanistic interpretability research—the translation from raw attribution graphs to interpretable circuit diagrams—by replacing ad-hoc threshold selection and manual editing with a principled, reproducible algorithm.
+
+\section{Related Work}
+
+\subsection{Interpretability for Transformers}
+A broad range of methods have been proposed to make transformer behavior more transparent. Saliency-based approaches \cite{simonyan2013deep,sundararajan2017axiomatic} highlight input tokens that most affect the output, but do not trace computation through internal layers. Attention visualization \cite{clark2019does} provides layer-wise snapshots but conflates correlation with causation. Probing classifiers \cite{belinkov2022probing} assess what information is encoded in representations without explaining how it is used. Causal intervention methods—activation patching \cite{meng2022locating} and path patching \cite{goldowsky2023localizing}—provide stronger causal evidence but scale poorly to full-graph analysis.
+
+\subsection{Mechanistic Interpretability and Circuit Tracing}
+Mechanistic interpretability seeks algorithmic explanations of model behavior \cite{olah2020zoom}. Superposition and polysemanticity in MLP neurons motivated sparse dictionary learning methods \cite{bricken2023monosemanticity,cunningham2023sparse}, and sparse autoencoders have since become the standard decomposition tool. Circuit tracing work has demonstrated useful findings on tasks such as indirect object identification \cite{wang2022interpretability} and greater-than comparison \cite{hanna2023does}, but these studies still rely on hand-curated subgraphs. The circuit-tracer framework \cite{circuit-tracer} automates attribution computation using cross-layer transcoders, producing full attribution graphs over features \cite{arxiv:2410.13032}. Our work addresses the downstream summarization step: converting these large graphs into interpretable supernode structures.
+
+\section{Problem Formulation}
+
+\subsection{Subgraph Extraction}
+Let $\cG=(\cV,\cE)$ be a directed acyclic attribution graph, where the vertex set $\cV$ contains embedding nodes, feature nodes, and logit nodes, and the edge set $\cE$ represents linear causal relationships between them. We extract a subgraph
+\[
+\cG'=(\cV',\cE'), \qquad \cV'\subseteq \cV,\; \cE'\subseteq \cE,
+\]
+where $\cV' = \cV'_{\mathrm{emb}} \cup \cV'_{\mathrm{feat}} \cup \cV'_{\mathrm{logit}}$ partitions nodes into embedding, feature, and logit nodes.
+
+We write $N = |\cV|$, $N' = |\cV'|$, $N_{\mathrm{feat}} = |\cV'_{\mathrm{feat}}|$, and $\bA \in \R^{N \times N}$ for the adjacency matrix of $\cG$.
+
+\subsection{Supernode Abstraction}
+\label{sec:sn-def}
+
+\begin{definition}[Supernode Mapping]
+  A \emph{supernode mapping} is a surjection $\varphi: \cV' \to \{S_1, \ldots, S_K\}$ that assigns each node to one of $K$ supernodes, subject to:
+  \begin{enumerate}[label=(\roman*)]
+    \item $\varphi$ fixes embedding and logit nodes: each $v \in \cV'_{\mathrm{emb}} \cup \cV'_{\mathrm{logit}}$ forms its own singleton supernode.
+    \item Each feature supernode $S_k$ has bounded layer span: $\max_{i \in S_k} \mathrm{layer}(i) - \min_{i \in S_k} \mathrm{layer}(i) \le \Delta$ for a fixed parameter $\Delta \ge 0$.
+    \item The induced supernode graph $\cG^{\mathrm{SN}}$ is acyclic: supernode layer ranges neither interleave nor contain one another (see \Cref{def:dag-constraint}).
+  \end{enumerate}
+\end{definition}
+
+\begin{definition}[DAG Constraint]
+\label{def:dag-constraint}
+  Let the layer ranges of $S_k$ and $S_l$ be $[L^-_k, L^+_k]$ and $[L^-_l, L^+_l]$, respectively. We call the pair \emph{compatible} if the two ranges are disjoint or strictly ordered, and \emph{incompatible} if they interleave,
+  \[
+    L^-_k < L^-_l < L^+_k < L^+_l \quad \text{or} \quad L^-_l < L^-_k < L^+_l < L^+_k,
+  \]
+  or if one range strictly contains the other.
+\end{definition}
+
+\begin{proposition}[Containment Implies Cycle]
+\label{prop:containment-cycle}
+  Suppose $S_k$ strictly contains $S_l$, i.e., $L^-_k < L^-_l \leq L^+_l < L^+_k$. If $S_k$ contains nodes both below and above the layer range of $S_l$, and the corresponding cross-supernode edges are nonzero, then the induced supernode graph contains the directed 2-cycle $S_k \to S_l \to S_k$.
+\end{proposition}
+
+\begin{proof}
+  Choose $i,i' \in S_k$ and $j \in S_l$ such that
+  \[
+    \mathrm{layer}(i) < L^-_l \le \mathrm{layer}(j) \le L^+_l < \mathrm{layer}(i').
+  \]
+  The edge $i \to j$ contributes to $A'^{\mathrm{SN}}_{kl}$, while $j \to i'$ contributes to $A^{\mathrm{SN}}_{lk}$. If both contributions are nonzero, the supernode graph contains the cycle $S_k \to S_l \to S_k$.
+\end{proof}
+
+Since $\cG'$ is dense, we assume $|A'_{ij}| > 0$ for all $i,j$ with $\mathrm{layer}(i) < \mathrm{layer}(j)$.
+
+\subsection{Desiderata}
+\label{sec:desiderata}
+
+\textbf{(D1) Concept coherence.} Nodes in the same supernode should play similar structural roles in the circuit.
+
+\textbf{(D2) DAG integrity.} The induced supernode graph must remain acyclic; every pair of supernode layer ranges must be compatible per \Cref{def:dag-constraint}.
+
+\section{ASG: Automated Summarization of Attribution Graphs}
+
+\paragraph{Step 1: Subgraph Extraction.}
+For each attribution graph $\cG$, ASG constructs a candidate subgraph $\cG'$ by retaining nodes and edges that score highly under a \emph{combined} criterion that fuses two complementary signals: \textbf{influence}---the indirect effect of an internal node on the target logits \cite{circuit-tracer,arxiv:2410.13032}---and \textbf{relevance}---the indirect dependence of an internal node on the input tokens. Influence is propagated backward from logits through input-normalized edges; relevance is propagated forward from embeddings through output-normalized edges.
+
+\paragraph{Influence and relevance scores.}
+Let $A'_{ij}$ denote the edge weight from node $i$ to node $j$ in $\cG'$. We define input- and output-normalized matrices
+\[
+A^{\mathrm{in}}_{ij} \,=\, \frac{|A'_{ij}|}{\sum_{k}|A'_{kj}|}, \qquad
+A^{\mathrm{out}}_{ij} \,=\, \frac{|A'_{ij}|}{\sum_{k}|A'_{ik}|},
+\]
+so that each column of $A^{\mathrm{in}}$ sums to 1 (each target node's incoming mass sums to 1) and each row of $A^{\mathrm{out}}$ sums to 1 (each source node's outgoing mass sums to 1). Let $\ell\in\R^n$ be the logit-weight vector and $\tau\in\R^n$ the token-weight vector (set to normalized SHAP values \cite{shap}). Node scores are computed via the Neumann series, which converges because $\cG'$ is a DAG:
+\[
+\mathrm{Inf}_u = \bigl(\ell^\top (I-(A^{\mathrm{in}})^{\top})^{-1}\bigr)_u, \qquad
+\mathrm{Rel}_u = \bigl(\tau^\top (I-A^{\mathrm{out}})^{-1}\bigr)_u.
+\]
+Edge scores decompose node scores by edge fraction:
+\[
+\mathrm{Inf}_{uv} = \mathrm{Inf}_v\,A^{\mathrm{in}}_{uv}, \qquad
+\mathrm{Rel}_{uv} = \mathrm{Rel}_u\,A^{\mathrm{out}}_{uv},
+\]
+where $uv$ denotes the edge from source $u$ to target $v$, so $A^{\mathrm{in}}_{uv}$ is the fraction of $v$'s input mass from $u$, and $A^{\mathrm{out}}_{uv}$ is the fraction of $u$'s output mass to $v$.
+
+\paragraph{Combined score.}
+Because influence and relevance live on different scales and are heavily zero-inflated, we normalize each to $[0,1]$ via the rank-percentile transform
+\[
+\mathrm{rank}(s)_u \;=\; \frac{|\{v : s_v < s_u\}|}{N - 1},
+\]
+and combine them as the weighted geometric mean
+\[
+C_u \;=\; \bigl(\widehat{\mathrm{Inf}}_u + \varepsilon\bigr)^{\alpha}\,\bigl(\widehat{\mathrm{Rel}}_u + \varepsilon\bigr)^{1-\alpha}, \quad \alpha\in[0,1].
+\]
+The geometric form penalizes nodes weak on either axis, encoding the desideratum that a retained node must be \emph{both} reachable from input tokens and influential on the output. Arithmetic and harmonic means are also supported.
+
+\paragraph{Cumulative-mass thresholding.}
+Given a combined score vector $C$, we sort entries in descending order and keep the smallest prefix whose cumulative mass exceeds a threshold $\eta\in[0,1]$:
+\[
+M_\eta(C) \;=\; \Bigl\{u : C_u \ge C_{(t)}\Bigr\}, \qquad
+t = \min\Bigl\{k : \tfrac{\sum_{j\le k} C_{(j)}}{\sum_j C_{(j)}} \ge \eta\Bigr\},
+\]
+where $C_{(j)}$ denotes the $j$-th largest score. This is the same cumulative-mass rule used by prior circuit tracing work \cite{circuit-tracer}, applied here to the combined ranking rather than to a single metric.
+
+We apply this rule at the node level with threshold $\eta_V$ to obtain a node mask, recompute edge-level combined scores $C_{uv}$ on the node-pruned graph, then apply it again at the edge level with threshold $\eta_E$. A final cleanup step iteratively removes dangling interior nodes (no surviving incoming or outgoing edges). The full procedure is given in \Cref{alg:prune}.
+
+\paragraph{Step 2: Supernode Clustering.}
+After pruning, the graph typically still contains groups of features with similar mechanistic roles—a consequence of feature splitting \cite{split} and the structure of the underlying feature manifold. We cluster these into supernodes to produce a compact summary.
+
+We define two similarity matrices based on shared neighborhood structure weighted by attribution scores:
+\[
+S_{\mathrm{out}} = \operatorname{ReLU}\!\left(\operatorname{CosNorm}(A\,\operatorname{diag}(\mathrm{Inf})\,A^{\top})\right),
+\]
+\[
+S_{\mathrm{in}} = \operatorname{ReLU}\!\left(\operatorname{CosNorm}(A^{\top}\operatorname{diag}(\mathrm{Rel})\,A)\right),
+\]
+where $A \in \R^{N_\mathrm{feat} \times N_\mathrm{feat}}$ is the source-to-target adjacency (rows index source nodes, columns index target nodes), $\mathrm{Inf}, \mathrm{Rel} \in \R^n$ are the node influence and relevance vectors, and $\operatorname{CosNorm}$ applies cosine normalization. $S_\mathrm{out}$ measures shared downstream targets weighted by their influence; $S_\mathrm{in}$ measures shared upstream sources weighted by their relevance. We combine them as
+\[
+S = F_{\mathrm{mean}}\bigl(S_{\mathrm{out}}, S_{\mathrm{in}}\bigr),
+\]
+where $F_{\mathrm{mean}}$ denotes arithmetic, harmonic, or geometric mean (a hyperparameter).
+
+To penalize pairings whose merged layer span would threaten DAG integrity, we apply a layer-span decay:
+\[
+P_{ij} = e^{-\lambda \Delta_{ij}},
+\]
+where $\lambda > 0$ and $\Delta_{ij}$ is the layer difference between nodes $i$ and $j$. The final affinity matrix is
+\[
+\tilde{S}_{ij} = S_{ij} \cdot P_{ij} \in [0,1]^{N_{\mathrm{feat}} \times N_{\mathrm{feat}}}.
+\]
+
+Since $\tilde{S}$ is symmetric and non-negative, we apply spectral clustering with $\tilde{S}$ as the affinity matrix, embedding feature nodes via the graph Laplacian eigenvectors and partitioning with K-means to obtain $K$ supernodes.
+
+\section{Experiments}
+
+We evaluate ASG on a synthetic dataset of multihop reasoning prompts designed to require information integration across multiple input tokens.
+
+\subsection{Pruning Evaluation}
+
+We assess pruning quality by measuring the fraction of joint influence--relevance mass on feature nodes preserved after pruning:
+\[
+  \mathrm{GraphScore}(\cG') \;=\; \frac{\sum_{v \in \cV'_{\mathrm{feat}}} \mathrm{Inf}_v\,\mathrm{Rel}_v}{\sum_{v \in \cV_{\mathrm{feat}}} \mathrm{Inf}_v\,\mathrm{Rel}_v}.
+\]
+A score of 1 indicates no loss of attribution mass; lower values correspond to sparser subgraphs.
+
+We perform a grid sweep over node thresholds $(\eta_V^I, \eta_V^R)$ from 0.0 to 1.0 in steps of 0.1 and report mean GraphScore. We additionally compare three non-negative normalizations for SHAP-based token weights—\texttt{softmax}, \texttt{relu\_l1}, and \texttt{entmax15}—to assess sensitivity to the choice of $\tau$.
+
+\subsection{Supernode Clustering Evaluation}
+
+To contextualize clustering quality, we compare ASG against three baselines representing naive or standard approaches to feature grouping.
+
+\paragraph{Baselines.}
+\begin{itemize}
+  \item \textbf{Random (null baseline).} Features are assigned uniformly at random to $K$ supernodes, providing a lower bound on functional cohesion and causal-sequence preservation.
+  \item \textbf{By-layer (structural baseline).} All features within the same transformer layer form a single supernode. This trivially satisfies DAG integrity but sacrifices functional granularity by grouping unrelated features.
+  \item \textbf{Louvain (graph-theoretic baseline).} Louvain modularity maximization applied to the undirected feature adjacency matrix. Identifies cohesive communities but is blind to causal ordering, often introducing large structural cycles.
+\end{itemize}
+
+\paragraph{Scoring metrics.}
+\begin{itemize}
+  \item \textbf{Silhouette score.} Computed on the precomputed weighted cosine-similarity matrix. High values indicate that features in the same supernode have similar mechanistic roles. We report the normalized score
+  \[
+    S_{\mathrm{norm}} = \frac{S_{\mathrm{raw}} + 1}{2} \in [0,1].
+  \]
+  \item \textbf{Independence score.} Measures the fraction of each supernode's total edge weight that exits rather than remaining internal. Let $W_{\mathrm{in}}(c)$ and $W_{\mathrm{out}}(c)$ denote the internal and external edge weight of supernode $c$:
+  \[
+    S_{\mathrm{ind}} = \frac{1}{|\mathcal{C}|} \sum_{c \in \mathcal{C}} \frac{W_{\mathrm{out}}(c)}{W_{\mathrm{in}}(c) + W_{\mathrm{out}}(c)}.
+  \]
+  Values near 1 indicate supernodes act as distinct causal steps; low values indicate collapsed sequential dependencies.
+\end{itemize}
+
+\paragraph{Experimental settings.}
+We fix the supernode count at $K = \lfloor n/2 \rfloor$ and $K = \lfloor n/3 \rfloor$ for the random, Louvain, and ASG methods, where $n$ is the number of feature nodes. The by-layer baseline is fixed at $K = L$ layers. For ASG, we perform a grid search over similarity mode (edge-based vs.\ node-based), mean operator (arithmetic, harmonic, geometric), and decay rate $\lambda \in \{0.0, 0.1, \ldots, 1.0\}$.
+
+\subsection{Steering Case Study}
+
+To validate that supernodes capture causally meaningful units, we perform targeted ablations: we zero out activations of individual supernodes and measure the resulting change in the target logit. A supernode encoding a key intermediate computation should cause predictable output degradation when ablated. We report ablation effects for the top-5 supernodes ranked by total outgoing edge weight and compare them to ablations of random feature sets of equivalent size.
+
+\subsection{Flow Analysis}
+
+We use flow-based faithfulness metrics \cite{circuit-tracer} to compare attribution graphs produced by cross-layer transcoders (CLT) versus patch-level transcoders (PLT). The supernode abstraction enables a fair circuit-level comparison: both backends produce attribution graphs that ASG summarizes into comparable supernode structures, and differences in flow distribution directly reflect architectural choices in the tracing backend.
+
+\section{Limitations and Future Work}
+
+ASG inherits limitations from the underlying attribution backend: attribution quality depends on transcoder fidelity and may be biased toward high-magnitude edges that are not causally primary. The cumulative-mass thresholds require some domain knowledge to tune. The DAG constraint is enforced via a soft layer-span penalty rather than a hard combinatorial guarantee, which may permit mild violations on very dense graphs.
+
+Future work includes adaptive threshold selection based on graph statistics, task-conditioned scoring that weights tokens by task-specific importance, stronger causal validation via interventional experiments, and evaluation across model families beyond Gemma.
+
+\section{Conclusion}
+
+We present ASG, an automated pipeline for summarizing attribution graphs in circuit tracing workflows. By combining joint influence--relevance pruning with DAG-constrained supernode clustering, ASG produces compact summaries that preserve attribution mass while grouping features into semantically coherent units. This addresses a practical bottleneck in mechanistic interpretability: the gap between raw attribution graphs and human-interpretable circuit diagrams. We provide a formal problem formulation, a detailed algorithm, and an experimental protocol. We hope ASG will serve as a standardized, reproducible foundation for attribution graph analysis.
+
+\bibliography{citation}
+
+\appendix
+
+\section{Pruning Algorithm}
+\label{sec:appendix-prune}
+
+\begin{algorithm}[H]
+\caption{Prune attribution graph (combined score)}
+\label{alg:prune}
+\begin{algorithmic}[1]
+\Require Graph $\cG$, \texttt{token\_weights} $\tau$, \texttt{logit\_weights} $\ell$, thresholds $(\eta_V,\eta_E)$, mixing $\alpha$
+\Ensure $(\texttt{node\_mask},\texttt{edge\_mask})$
+\State Compute $\mathrm{Inf}_u = (\ell^\top (I-(A^{\mathrm{in}})^\top)^{-1})_u$ for all $u$
+\State Compute $\mathrm{Rel}_u = (\tau^\top (I-A^{\mathrm{out}})^{-1})_u$ for all $u$
+\State $\widehat{\mathrm{Inf}} \gets \mathrm{rank}(\mathrm{Inf})$;\quad $\widehat{\mathrm{Rel}} \gets \mathrm{rank}(\mathrm{Rel})$
+\State $C^V_u \gets (\widehat{\mathrm{Inf}}_u+\varepsilon)^{\alpha}(\widehat{\mathrm{Rel}}_u+\varepsilon)^{1-\alpha}$
+\State $\texttt{node\_mask} \gets M_{\eta_V}(C^V)$;\quad force-keep all embedding and logit nodes
+\State Zero out rows/columns of $A'$ not in \texttt{node\_mask}
+\State Compute $\mathrm{Inf}_{uv} = \mathrm{Inf}_v A^{\mathrm{in}}_{uv}$ and $\mathrm{Rel}_{uv} = \mathrm{Rel}_u A^{\mathrm{out}}_{uv}$ on pruned graph
+\State $\widehat{\mathrm{Inf}}_{uv} \gets \mathrm{rank}(\mathrm{Inf}_{uv})$;\quad $\widehat{\mathrm{Rel}}_{uv} \gets \mathrm{rank}(\mathrm{Rel}_{uv})$
+\State $C^E_{uv} \gets (\widehat{\mathrm{Inf}}_{uv}+\varepsilon)^{\alpha}(\widehat{\mathrm{Rel}}_{uv}+\varepsilon)^{1-\alpha}$
+\State $\texttt{edge\_mask} \gets M_{\eta_E}(C^E)$
+\State \textbf{repeat} remove interior nodes with no surviving in- or out-edges \textbf{until} fixed point
+\State \Return $(\texttt{node\_mask},\texttt{edge\_mask})$
+\end{algorithmic}
+\end{algorithm}
+
+\end{document}
