@@ -18,19 +18,6 @@ def _middle_indices(prune_graph: PruneGraph) -> list[int]:
     return [i for i, n in enumerate(prune_graph.nodes) if not node_is_fixed(n)]
 
 
-def _layer_range_from_members(members: list[str]) -> tuple[int, int] | None:
-    layers: list[int] = []
-    for m in members:
-        if "_" not in m:
-            continue
-        head = m.split("_")[0]
-        if head.isdigit():
-            layers.append(int(head))
-    if not layers:
-        return None
-    return min(layers), max(layers)
-
-
 def _silhouette_over_middle(
     similarity: np.ndarray,
     prune_graph: PruneGraph,
@@ -132,45 +119,40 @@ def _dag_interleave_edge_fraction(
     sn_names: list[str],
     rows: list[Supernode],
 ) -> float:
-    """
-    DAG-style score from middle-supernode edge directions.
-
-    Scores 1.0 when all directed middle-supernode edge mass flows forward in layer
-    order, and decreases as backward flow increases.
-    """
+    """Fraction of middle-supernode edge mass that flows backward in layer order. Lower is better."""
+    # sn_adj[target, source] — same convention as pruned_adj.
+    # Layer floor = supernode.layer_min, which uses Node.layer (correct for error nodes,
+    # whose node_id prefix "0_..." would be misleading if parsed directly).
     row_by_name = {row.name: row for row in rows}
     layer_floor: dict[str, int] = {}
     for name in sn_names:
         row = row_by_name.get(name)
         if row is None or row.type != "features":
             continue
-        span = _layer_range_from_members(row.member_node_ids())
-        if span is None:
-            continue
-        layer_floor[name] = int(span[0])
+        layer_floor[name] = int(row.layer_min)
 
     total_middle_mass = 0.0
     backward_mass = 0.0
-    for i, src in enumerate(sn_names):
-        src_layer = layer_floor.get(src)
-        if src_layer is None:
+    for tgt_idx, tgt_name in enumerate(sn_names):
+        tgt_layer = layer_floor.get(tgt_name)
+        if tgt_layer is None:
             continue
-        for j, dst in enumerate(sn_names):
-            if i == j:
+        for src_idx, src_name in enumerate(sn_names):
+            if tgt_idx == src_idx:
                 continue
-            dst_layer = layer_floor.get(dst)
-            if dst_layer is None:
+            src_layer = layer_floor.get(src_name)
+            if src_layer is None:
                 continue
-            w = float(abs(sn_adj[i, j]))
+            w = float(abs(sn_adj[tgt_idx, src_idx]))
             if w <= 0.0:
                 continue
             total_middle_mass += w
-            if dst_layer < src_layer:
+            if tgt_layer < src_layer:  # source at higher layer than target → backward
                 backward_mass += w
 
     if total_middle_mass <= 0.0:
-        return 1.0
-    return float(1.0 - (backward_mass / total_middle_mass))
+        return 0.0
+    return float(backward_mass / total_middle_mass)
 
 
 def _cv_cluster_sizes(rows: list[Supernode]) -> float:
@@ -233,7 +215,7 @@ def _cluster_metrics_from_parts(
             "sil_raw": 0.0,
             "sil_norm": 0.0,
             "internal_independence": 0.0,
-            "dag_score": 1.0,
+            "dag_score": 0.0,
             "cv_cluster_sizes": 0.0,
             "opposing_sign_frac": 0.0,
             "n_middle": 0,
