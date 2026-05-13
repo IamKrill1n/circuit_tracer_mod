@@ -43,7 +43,7 @@ def first_token_id(tokenizer, word: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("prompt_file", type=Path)
+    parser.add_argument("--prompt_file", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("graphs"))
     parser.add_argument("--model", default=MODEL_NAME)
     parser.add_argument("--transcoder", default=TRANSCODER_NAME)

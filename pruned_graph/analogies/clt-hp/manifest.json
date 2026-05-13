@@ -1,0 +1,34 @@
+{
+  "graphs_root": "graphs",
+  "output_root": "pruned_graph/analogies",
+  "shap_values_json": "demos/shap_values_analogies.json",
+  "source_sets": [
+    "clt-hp"
+  ],
+  "masker_keep_prefix": 4,
+  "eval_normalizations": [
+    "softmax"
+  ],
+  "sweep_node_start": 0.01,
+  "sweep_node_end": 0.01,
+  "sweep_node_step": 0.1,
+  "node_thresholds": [
+    0.01
+  ],
+  "edge_threshold": 0.95,
+  "combine_method": "geometric",
+  "score_normalization": "rank",
+  "alpha": 0.5,
+  "logit_weights": "target",
+  "keep_all_tokens_and_logits": false,
+  "filter_act_density": true,
+  "act_density_lb": 2e-05,
+  "act_density_ub": 0.1,
+  "limit": null,
+  "total_grid_cells_attempted": 55,
+  "successful_runs": 55,
+  "n_result_rows": 55,
+  "results_json": "pruned_graph/analogies/clt-hp/results.json",
+  "summary_csv": "pruned_graph/analogies/clt-hp/summary.csv",
+  "failures": []
+}

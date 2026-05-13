@@ -3,15 +3,15 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import re
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, Literal, Sequence, cast
 
 import networkx as nx
 import numpy as np
 import torch
-from sklearn.cluster import SpectralClustering
+from sklearn.cluster import KMeans, SpectralClustering
 
 from summarization.cluster_scoring import score_k
 from summarization.cluster import (
@@ -22,7 +22,9 @@ from summarization.cluster import (
     supernodes_to_mapping,
 )
 from summarization.prune import PruneGraph, load_prune_graph
-from summarization.utils import layer_index_from_node, node_is_fixed
+from summarization.utils import node_is_fixed
+
+logger = logging.getLogger(__name__)
 
 METHOD_GRID: list[dict[str, str | float]] = [
     {
@@ -235,7 +237,22 @@ def _adjacency_affinity(prune_graph: PruneGraph) -> np.ndarray:
     return affinity
 
 
-def _random_middle_labels(n: int, target_k: int, random_state: int) -> np.ndarray:
+def _node_features_bidir(prune_graph: PruneGraph, mid_idx: list[int]) -> np.ndarray:
+    # pruned_adj[target, source] — concat(pruned_adj[i,:], pruned_adj[:,i]) per middle index i
+    adj = prune_graph.pruned_adj.clone().float().detach().cpu().numpy()
+    n_tot = adj.shape[1]
+    if not mid_idx:
+        return np.zeros((0, 2 * n_tot), dtype=np.float64)
+    idx = np.array(mid_idx, dtype=np.intp)
+    incoming = adj[idx, :]
+    outgoing = adj[:, idx].T
+    return np.concatenate([incoming, outgoing], axis=1)
+
+
+def _kmeans_middle_labels(
+    features: np.ndarray, target_k: int, random_state: int, n_init: int
+) -> np.ndarray:
+    n = features.shape[0]
     if n == 0:
         return np.array([], dtype=np.int64)
     k = max(1, min(target_k, n))
@@ -243,26 +260,27 @@ def _random_middle_labels(n: int, target_k: int, random_state: int) -> np.ndarra
         return np.zeros(n, dtype=np.int64)
     if k == n:
         return np.arange(n, dtype=np.int64)
-    rng = np.random.default_rng(seed=random_state)
-    labels = np.arange(n, dtype=np.int64) % k
-    rng.shuffle(labels)
-    return labels
+    return KMeans(n_clusters=k, random_state=random_state, n_init=n_init).fit_predict(features).astype(np.int64)
 
 
-def _layer_cluster_labels(prune_graph: PruneGraph, middle_ids: list[str]) -> np.ndarray:
-    if not middle_ids:
+def _spectral_rbf_middle_labels(
+    features: np.ndarray, target_k: int, random_state: int, n_init: int
+) -> np.ndarray:
+    n = features.shape[0]
+    if n == 0:
         return np.array([], dtype=np.int64)
-    node_by_id = {node.node_id: node for node in prune_graph.nodes}
-    grouped: dict[int, list[int]] = defaultdict(list)
-    for idx, node_id in enumerate(middle_ids):
-        node = node_by_id.get(node_id)
-        layer = layer_index_from_node(node) if node is not None else 0
-        grouped[int(layer)].append(idx)
-    labels = np.zeros(len(middle_ids), dtype=np.int64)
-    for label, layer in enumerate(sorted(grouped)):
-        for idx in grouped[layer]:
-            labels[idx] = label
-    return labels
+    k = max(1, min(target_k, n))
+    if k == 1:
+        return np.zeros(n, dtype=np.int64)
+    if k == n:
+        return np.arange(n, dtype=np.int64)
+    return SpectralClustering(
+        n_clusters=k,
+        affinity="rbf",
+        assign_labels="kmeans",
+        random_state=random_state,
+        n_init=n_init,  # type: ignore[arg-type]
+    ).fit_predict(features).astype(np.int64)
 
 
 def _louvain_middle_labels(adjacency_mid: np.ndarray, random_state: int) -> np.ndarray:
@@ -355,6 +373,7 @@ def _evaluate_ours_fixed_k(
     random_state: int,
     n_init: int,
     eval_similarity: np.ndarray,
+    enforce_dag: bool,
 ) -> dict[str, Any]:
     mean_method = cast(Literal["geo", "harm", "arith"], method_config["mean_method"])
     decay_rate = float(cast(float, method_config["decay_rate"]))
@@ -371,7 +390,7 @@ def _evaluate_ours_fixed_k(
         max_layer_span=max_layer_span,
         mean_method=mean_method,
         decay_rate=decay_rate,
-        enforce_dag=True,
+        enforce_dag=enforce_dag,
         random_state=random_state,
         n_init=n_init,
     )
@@ -380,7 +399,7 @@ def _evaluate_ours_fixed_k(
         final_supernodes,
         prune_graph,
         eval_similarity,
-        enforce_dag=True,
+        enforce_dag=enforce_dag,
     )
 
     method_slug = f"ours-{method_config['mean_method']}-decay-{decay_rate:.1f}"
@@ -440,6 +459,7 @@ def _evaluate_ours_agglomerative_fixed_k(
     num_nodes: int,
     max_layer_span: int,
     eval_similarity: np.ndarray,
+    enforce_dag: bool,
 ) -> dict[str, Any]:
     mean_method = cast(Literal["geo", "harm", "arith"], method_config["mean_method"])
     decay_rate = float(cast(float, method_config["decay_rate"]))
@@ -455,7 +475,7 @@ def _evaluate_ours_agglomerative_fixed_k(
         final_supernodes,
         prune_graph,
         eval_similarity,
-        enforce_dag=True,
+        enforce_dag=enforce_dag,
     )
 
     method_slug = f"ours-agglomerative-{method_config['mean_method']}-decay-{decay_rate:.1f}"
@@ -578,6 +598,7 @@ def evaluate_prune_graph(
     max_layer_span: int,
     random_state: int,
     n_init: int,
+    enforce_dag: bool,
 ) -> list[dict[str, Any]]:
     prune_graph = load_prune_graph(str(graph_path), map_location=map_location)
     graph_name, dataset = _graph_identity(graph_path, input_paths)
@@ -588,7 +609,16 @@ def evaluate_prune_graph(
 
     num_nodes = len(_middle_indices(prune_graph))
     k_schedule = _fixed_k_schedule(num_nodes)
+    n_ours_grid = len(METHOD_GRID) * len(k_schedule)
+    logger.info(
+        "  %s | dataset=%s n_middle=%d k_schedule=%s",
+        graph_name,
+        dataset,
+        num_nodes,
+        [(sel, k) for sel, k in k_schedule],
+    )
 
+    logger.info("  ours spectral: %d runs (method grid × k schedule)", n_ours_grid)
     for method_config in METHOD_GRID:
         for k_selection, target_k in k_schedule:
             rows.append(
@@ -606,9 +636,11 @@ def evaluate_prune_graph(
                     random_state=random_state,
                     n_init=n_init,
                     eval_similarity=eval_similarity,
+                    enforce_dag=enforce_dag,
                 )
             )
 
+    logger.info("  ours agglomerative: %d runs", n_ours_grid)
     for method_config in METHOD_GRID:
         for k_selection, target_k in k_schedule:
             rows.append(
@@ -624,45 +656,22 @@ def evaluate_prune_graph(
                     num_nodes=num_nodes,
                     max_layer_span=max_layer_span,
                     eval_similarity=eval_similarity,
+                    enforce_dag=enforce_dag,
                 )
             )
 
+    logger.info(
+        "  baselines: louvain + spectral-rbf + kmeans (%d k each)",
+        len(k_schedule),
+    )
     mid_idx = _middle_indices(prune_graph)
     middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
-    adjacency_affinity = _adjacency_affinity(prune_graph)
-    adjacency_mid = adjacency_affinity[np.ix_(mid_idx, mid_idx)]
+    adjacency_mid = _adjacency_affinity(prune_graph)[np.ix_(mid_idx, mid_idx)]
+    features_bidir = _node_features_bidir(prune_graph, mid_idx)
 
-    def random_clusterer(target_k: int) -> list[list[str]]:
-        if len(middle_ids) == 0:
-            return labels_to_supernodes(prune_graph, [], np.array([], dtype=np.int64))
-        labels = _random_middle_labels(
-            len(middle_ids),
-            target_k=target_k,
-            random_state=random_state + target_k,
-        )
-        return labels_to_supernodes(prune_graph, middle_ids, labels)
-
-    def louvain_clusterer(target_k: int) -> list[list[str]]:
-        del target_k
-        if len(middle_ids) == 0:
-            return labels_to_supernodes(prune_graph, [], np.array([], dtype=np.int64))
-        labels = _louvain_middle_labels(adjacency_mid, random_state=random_state)
-        n_clusters = int(labels.max()) + 1 if labels.size else 0
-        if n_clusters >= len(middle_ids):
-            labels = np.arange(len(middle_ids), dtype=np.int64)
-        elif n_clusters <= 1 and len(middle_ids) > 1:
-            labels = SpectralClustering(
-                n_clusters=min(max(2, len(middle_ids) // 2), len(middle_ids)),
-                affinity="precomputed",
-                assign_labels="kmeans",
-                random_state=random_state,
-                n_init=n_init,  # type: ignore[arg-type]
-            ).fit_predict(adjacency_mid)
-        return labels_to_supernodes(prune_graph, middle_ids, labels)
-
-    by_layer_labels = _layer_cluster_labels(prune_graph, middle_ids)
-    by_layer_clusters = labels_to_supernodes(prune_graph, middle_ids, by_layer_labels)
-    by_layer_k = int(by_layer_labels.max()) + 1 if by_layer_labels.size else 0
+    louvain_labels = _louvain_middle_labels(adjacency_mid, random_state=random_state)
+    louvain_clusters = labels_to_supernodes(prune_graph, middle_ids, louvain_labels)
+    louvain_k = int(louvain_labels.max()) + 1 if louvain_labels.size else 0
     rows.append(
         _evaluate_baseline_fixed_k(
             prune_graph=prune_graph,
@@ -670,13 +679,13 @@ def evaluate_prune_graph(
             graph_name=graph_name,
             dataset=dataset,
             output_dir=output_dir,
-            method="baseline-by-layer",
+            method="baseline-louvain",
             eval_similarity=eval_similarity,
-            clusterer=lambda _target_k: by_layer_clusters,
-            target_k=by_layer_k,
-            k_selection="by_layer",
+            clusterer=lambda _k: louvain_clusters,
+            target_k=louvain_k,
+            k_selection="louvain_natural",
             num_nodes=num_nodes,
-            enforce_dag=True,
+            enforce_dag=enforce_dag,
         )
     )
 
@@ -688,13 +697,17 @@ def evaluate_prune_graph(
                 graph_name=graph_name,
                 dataset=dataset,
                 output_dir=output_dir,
-                method="baseline-random",
+                method="baseline-spectral-rbf",
                 eval_similarity=eval_similarity,
-                clusterer=random_clusterer,
+                clusterer=lambda k=target_k: labels_to_supernodes(
+                    prune_graph,
+                    middle_ids,
+                    _spectral_rbf_middle_labels(features_bidir, k, random_state, n_init),
+                ),
                 target_k=target_k,
                 k_selection=k_selection,
                 num_nodes=num_nodes,
-                enforce_dag=True,
+                enforce_dag=enforce_dag,
             )
         )
         rows.append(
@@ -704,13 +717,17 @@ def evaluate_prune_graph(
                 graph_name=graph_name,
                 dataset=dataset,
                 output_dir=output_dir,
-                method="baseline-louvain-adjacency",
+                method="baseline-kmeans",
                 eval_similarity=eval_similarity,
-                clusterer=louvain_clusterer,
+                clusterer=lambda k=target_k: labels_to_supernodes(
+                    prune_graph,
+                    middle_ids,
+                    _kmeans_middle_labels(features_bidir, k, random_state, n_init),
+                ),
                 target_k=target_k,
                 k_selection=k_selection,
                 num_nodes=num_nodes,
-                enforce_dag=True,
+                enforce_dag=enforce_dag,
             )
         )
     return rows
@@ -722,8 +739,19 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
         args.input_path,
         node_threshold=args.node_threshold,
     )
+    logger.info(
+        "Discovered %d prune graph(s); writing under %s",
+        len(graph_paths),
+        output_dir,
+    )
+    if args.node_threshold is not None:
+        logger.info("Node-threshold filter: %g", args.node_threshold)
+
     summary_rows: list[dict[str, Any]] = []
-    for graph_path in graph_paths:
+    n_graphs = len(graph_paths)
+    for i, graph_path in enumerate(graph_paths, start=1):
+        logger.info("Graph %d/%d: %s", i, n_graphs, graph_path)
+        before = len(summary_rows)
         summary_rows.extend(
             evaluate_prune_graph(
                 graph_path=graph_path,
@@ -733,9 +761,18 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 max_layer_span=args.max_layer_span,
                 random_state=args.random_state,
                 n_init=args.n_init,
+                enforce_dag=args.enforce_dag,
             )
         )
+        logger.info(
+            "Graph %d/%d finished: +%d rows (total %d)",
+            i,
+            n_graphs,
+            len(summary_rows) - before,
+            len(summary_rows),
+        )
 
+    logger.info("Writing summary.csv, results.json, manifest.json")
     summary_path = output_dir / "summary.csv"
     results_path = output_dir / "results.json"
     manifest_path = output_dir / "manifest.json"
@@ -750,14 +787,14 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             "output_dir": str(output_dir),
             "method_grid": METHOD_GRID,
             "baselines": [
-                "baseline-random",
-                "baseline-by-layer",
-                "baseline-louvain-adjacency",
+                "baseline-louvain",
+                "baseline-spectral-rbf",
+                "baseline-kmeans",
             ],
             "cluster_k_policy": (
-                "Middle-node count n = |non-fixed nodes|. Run each method at "
-                "k = round(n/2) and k = round(n/3), clamped to [1, n], except "
-                "baseline-by-layer which uses one cluster per layer."
+                "Middle-node count n = |non-fixed nodes|. Ours and feature baselines (kmeans, "
+                "spectral-rbf) run at k = round(n/2) and k = round(n/3), clamped to [1, n]. "
+                "Louvain runs once at its natural number of communities."
             ),
             "summary_csv": str(summary_path),
             "results_json": str(results_path),
@@ -766,13 +803,14 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             "config": {
                 "node_threshold": args.node_threshold,
                 "max_layer_span": args.max_layer_span,
-                "enforce_dag": True,
+                "enforce_dag": args.enforce_dag,
                 "map_location": args.map_location,
                 "random_state": args.random_state,
                 "n_init": args.n_init,
             },
         },
     )
+    logger.info("Done: %d graphs, %d runs total", len(graph_paths), len(summary_rows))
     return {
         "output_dir": str(output_dir),
         "summary_csv": str(summary_path),
@@ -817,27 +855,41 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--max-layer-span", type=int, default=4)
-    parser.add_argument("--enforce-dag", action="store_true")
+    parser.add_argument(
+        "--enforce-dag",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Apply DAG constraints in our spectral clustering and in score_k. "
+            "Default on (matches prior hardcoded eval). Use --no-enforce-dag to disable."
+        ),
+    )
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--n-init", type=int, default=20)
     return parser
 
 
 def main() -> None:
+    if not logging.root.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(message)s",
+            datefmt="%H:%M:%S",
+        )
     parser = build_parser()
     args = parser.parse_args()
     if not args.input_path:
         args.input_path = _default_input_paths()
+    logger.info(
+        "=== Clustering evaluation (ours grid + louvain / spectral-rbf / kmeans) ==="
+    )
     result = run_evaluation(args)
-    print("\n=== Clustering Evaluation (fixed k = n/2 and n/3) ===")
-    print(f"output_dir: {result['output_dir']}")
-    print(f"summary_csv: {result['summary_csv']}")
-    print(f"results_json: {result['results_json']}")
-    print(f"manifest_json: {result['manifest_json']}")
-    print(f"n_graphs: {result['n_graphs']}")
-    print(f"n_runs: {result['n_runs']}")
-    if args.node_threshold is not None:
-        print(f"node_threshold filter: {args.node_threshold:g}")
+    logger.info("output_dir: %s", result["output_dir"])
+    logger.info("summary_csv: %s", result["summary_csv"])
+    logger.info("results_json: %s", result["results_json"])
+    logger.info("manifest_json: %s", result["manifest_json"])
+    logger.info("n_graphs: %s", result["n_graphs"])
+    logger.info("n_runs: %s", result["n_runs"])
 
 
 if __name__ == "__main__":

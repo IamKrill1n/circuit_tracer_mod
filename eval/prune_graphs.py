@@ -16,9 +16,10 @@ from typing import Any
 
 import torch
 
+from summarization.attr_graph import AttrGraph
 from summarization.prune import (
     LogitWeightMode,
-    prune_graph_pipeline,
+    prune_attr_graph,
     save_prune_graph,
 )
 from summarization.token_attribution import (
@@ -26,7 +27,7 @@ from summarization.token_attribution import (
     _normalize_scores,
     _special_token_mask,
 )
-from summarization.utils import _build_index_sets, get_data_from_json
+from summarization.utils import _build_index_sets
 
 DEFAULT_SOURCE_SETS = ("clt-hp",)
 DEFAULT_SHAP_EVAL_NORMALIZATIONS: tuple[NormalizeMethod, ...] = (
@@ -41,7 +42,9 @@ def _discover_graph_files(graphs_root: Path, source_sets: tuple[str, ...]) -> di
     discovered: dict[str, list[Path]] = {}
     for source_set in source_sets:
         src_dir = graphs_root / source_set
-        files = sorted(src_dir.glob("*.json"))
+        if not src_dir.is_dir():
+            src_dir = graphs_root
+        files = sorted(src_dir.glob("*.pt"))
         discovered[source_set] = files
     return discovered
 
@@ -220,7 +223,10 @@ def run_prune_sweep(args: argparse.Namespace) -> None:
         for graph_path in graph_paths:
             stem = graph_path.stem
             try:
-                _adj, nodes, metadata = get_data_from_json(str(graph_path))
+                attr_graph = AttrGraph.from_graph(str(graph_path))
+                attr_graph.metadata.setdefault("info", {})["neuronpedia_source_set"] = source_set
+                nodes = attr_graph.nodes
+                metadata = attr_graph.metadata
                 node_ids = [n.node_id for n in nodes]
                 idx = _build_index_sets(nodes)
                 emb_idx = idx["embedding"]
@@ -251,8 +257,8 @@ def run_prune_sweep(args: argparse.Namespace) -> None:
                     for node_thr in node_thresholds:
                         total_runs += 1
                         try:
-                            prune_graph = prune_graph_pipeline(
-                                json_path=str(graph_path),
+                            prune_graph = prune_attr_graph(
+                                attr_graph,
                                 logit_weights=args.logit_weights,
                                 token_weights=token_weights,
                                 node_threshold=node_thr,

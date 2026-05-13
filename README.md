@@ -15,8 +15,7 @@ To rigorously assess the quality, interpretability, and structural soundness of 
 
 To contextualize the performance of our method, we compare it against three baselines representing naive or standard approaches to feature grouping:
 
-*   **Random Assignment (Null Baseline):** Individual features are randomly assigned to $K$ supernodes. This establishes the absolute lower bound for functional cohesion and causal sequence preservation.
-*   **By-Layer / Layer-Collapse (Structural Baseline):** All features within a single transformer layer are grouped into a single supernode. Because information strictly flows forward through layers, this baseline naturally forms a perfect Directed Acyclic Graph (DAG) and ensures high causal independence. However, it represents an extreme loss of functional granularity, as it lumps orthogonal mathematical and semantic features together.
+
 *   **Standard Louvain Community Detection (Graph-Theoretic Baseline):** We apply the Louvain modularity optimization algorithm directly to the un-directed raw feature-to-feature adjacency matrix. While Louvain is a standard for maximizing community cohesion, it is agnostic to the sequential forward-pass of a transformer. It tends to cluster heavily connected sequential nodes together, thereby violating causal independence and generating massive structural cycles.
 
 ### 2. Scoring Metrics
@@ -41,4 +40,4 @@ To ensure a fair comparison across algorithms, we strictly control the resolutio
     *   **Decay Rate ($\gamma$):** We sweep the temporal decay parameter governing layer-span distance penalties from $0.0$ to $1.0$ with a step size of $0.1$ ($\gamma \in \{0.0, 0.1, 0.2, \dots, 1.0\}$). This allows us to quantify the exact trade-off between localized DAG enforcement (high decay) and global conceptual grouping (low decay).
 
 ### 4. Ablation study
-We experiment with steering with our summarization graph on multihop reasoning dataset. (to be implemented)
+Suggestions:
