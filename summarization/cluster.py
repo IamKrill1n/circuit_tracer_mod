@@ -78,6 +78,7 @@ def compute_similarity(
     normalize_weights: bool = False,
     decay_rate: float | None = None,
     max_layer_span: int | None = None,
+    epsilon: float = 1e-12,
 ) -> torch.Tensor:
     """
     Compute node similarity from weighted shared out/in structure.
@@ -123,6 +124,8 @@ def compute_similarity(
             
         s = s * penalty
 
+    s = s.clamp(epsilon, 1.0)
+    
     return s
 
 
@@ -291,7 +294,7 @@ def cluster_graph_spectral(
     mean_method: Literal["geo", "harm", "arith"] = "arith",
     normalize_weights: bool = False,
     decay_rate: float | None = 1.0,
-    enforce_dag: bool = True,
+    enforce_dag: bool = False,
     random_state: int = 42,
     n_init: int = 20,
 ) -> list[list[str]]:
