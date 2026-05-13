@@ -350,7 +350,7 @@ def prune_attr_graph(
     kept_indices = node_mask.nonzero(as_tuple=True)[0]
 
     if filter_act_density:
-        model_id = metadata.get("scan", "")
+        model_id = metadata.get("model_name") or metadata.get("scan", "")
         info = metadata.get("info", {})
         source_set = info.get("neuronpedia_source_set") or (
             info.get("source_urls", [""])[0].split("/")[-1] if info.get("source_urls") else ""

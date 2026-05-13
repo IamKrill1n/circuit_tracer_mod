@@ -196,6 +196,7 @@ class AttrGraph:
 
         metadata: dict[str, Any] = {
             "scan": scan_meta,
+            "model_name": graph.cfg.model_name,  # Neuronpedia modelId (base LM, not SAE scan ID)
             "prompt": graph.input_string,
             "prompt_tokens": prompt_tokens,
             "info": {},

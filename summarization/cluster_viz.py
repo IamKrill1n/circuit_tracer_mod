@@ -119,7 +119,9 @@ def supernode_graph_figure(
 
     `sng` may be a `SummarizationGraph` instance or the legacy dict.
     """
-    if isinstance(sng, SummarizationGraph):
+    # Duck-typing rather than isinstance so this survives Streamlit hot-reload,
+    # which re-imports SummarizationGraph and breaks isinstance on session-state objects.
+    if hasattr(sng, "sn_names") and hasattr(sng, "sn_adj"):
         sn_names = sng.sn_names
         sn_adj = np.asarray(sng.sn_adj, dtype=np.float64)
         mapping = final_supernodes if final_supernodes is not None else sng.to_mapping()
