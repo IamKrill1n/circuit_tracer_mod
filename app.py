@@ -5,6 +5,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 from api import save_subgraph
@@ -17,12 +18,54 @@ from summarization.cluster_viz import supernode_graph_figure
 from summarization.prune import load_prune_graph, prune_graph_pipeline
 from summarization.supernode_graph import SummarizationGraph
 
+
+@st.cache_resource(show_spinner=False)
+def _get_model_cached(model_name: str, transcoder_set: str, dtype_str: str):
+    import torch  # lazy: avoid loading heavy deps until interventions are requested
+    from circuit_tracer import ReplacementModel
+
+    dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
+    return ReplacementModel.from_pretrained(
+        model_name, transcoder_set, lazy_encoder=True, dtype=dtype_map[dtype_str]
+    )
+
+
+def _top_k_predictions(logits, tokenizer, k: int = 10) -> pd.DataFrame:
+    """Top-k next-token probabilities from a logits tensor of shape [1,seq,vocab] or [seq,vocab]."""
+    import torch
+    last = logits.squeeze(0)[-1] if logits.ndim == 3 else logits[-1]
+    probs = torch.softmax(last.float(), dim=-1)
+    top_probs, top_idx = probs.topk(k)
+    return pd.DataFrame({
+        "token": [repr(tokenizer.decode([int(i)])) for i in top_idx],
+        "prob": [float(p) for p in top_probs],
+    })
+
+
+def _build_interventions(supernodes, activations, multiplier: float) -> list[tuple]:
+    """Build (layer, pos, feature_idx, value) tuples for all CLT nodes across given supernodes.
+
+    value = multiplier * current_activation (so multiplier=0 zero-ablates, 1 is a no-op).
+    """
+    out = []
+    for sn in supernodes:
+        for n in sn.features:
+            if n.feature_type != "cross layer transcoder":
+                continue
+            parts = n.node_id.split("_")
+            layer, feat = int(parts[0]), int(parts[1])
+            pos = n.ctx_idx
+            value = multiplier * float(activations[layer, pos, feat].item())
+            out.append((layer, pos, feat, value))
+    return out
+
 REPO = Path(__file__).parent
 
 JSON_DIR = REPO / "demos/temp_graph_files/clt-hp"
 PT_DIRS = {
     "entmax": REPO / "eval_outputs/prune/subgraph/clt-hp/entmax/node_0.01",
     "softmax": REPO / "eval_outputs/prune/subgraph/clt-hp/softmax/node_0.01",
+    "analogies": REPO / "pruned_graph/analogies/clt-hp/softmax/node_0.01",
 }
 
 
@@ -216,6 +259,71 @@ if "sng" in st.session_state:
 
     with st.expander("Supernode mapping (JSON)"):
         st.json(supernode_map)
+
+    # ── Intervention demo ────────────────────────────────────────────────────
+    st.divider()
+    with st.expander("Intervention demo"):
+        default_prompt = prune_graph.metadata.get("prompt", "")
+        prompt_str = st.text_input("Prompt", value=default_prompt, key="iv_prompt")
+
+        feature_sns = [s for s in sng.supernodes if s.type not in ("emb", "logit")]
+        sn_lookup = {s.name: s for s in feature_sns}
+        selected_names = st.multiselect(
+            "Supernodes to intervene on",
+            list(sn_lookup.keys()),
+            key="iv_selected_sns",
+        )
+        multiplier = st.slider(
+            "Activation multiplier  (0 = ablate, 1 = no change, >1 = amplify, <0 = negate)",
+            min_value=-5.0, max_value=10.0, value=0.0, step=0.5,
+            key="iv_mult",
+        )
+        top_k = st.slider("Top-k tokens to show", 5, 20, 10, key="iv_topk")
+
+        iv_col1, iv_col2, iv_col3 = st.columns(3)
+        iv_model_name = iv_col1.text_input("model_name", value="google/gemma-2-2b", key="iv_model_name")
+        iv_transcoder = iv_col2.text_input("transcoder_set", value="mntss/clt-gemma-2-2b-2.5M", key="iv_transcoder")
+        iv_dtype = iv_col3.selectbox("dtype", ["bfloat16", "float16", "float32"], key="iv_dtype")
+
+        if st.button("Run intervention", type="primary"):
+            if not prompt_str:
+                st.error("Provide a prompt.")
+            elif not selected_names:
+                st.error("Select at least one supernode.")
+            else:
+                try:
+                    import torch
+                    with st.spinner("Loading model (cached after first run)…"):
+                        model = _get_model_cached(iv_model_name, iv_transcoder, iv_dtype)
+                    with st.spinner("Running intervention…"):
+                        with torch.inference_mode():
+                            orig_logits, activations = model.get_activations(prompt_str)
+                            interventions = _build_interventions(
+                                [sn_lookup[n] for n in selected_names],
+                                activations,
+                                multiplier,
+                            )
+                            new_logits, _ = model.feature_intervention(prompt_str, interventions)
+
+                    st.caption(
+                        f"Intervened on **{len(interventions)}** CLT features across "
+                        f"{len(selected_names)} supernode(s) with multiplier `{multiplier}`."
+                    )
+                    c_a, c_b = st.columns(2)
+                    with c_a:
+                        st.markdown("**Original predictions**")
+                        st.dataframe(
+                            _top_k_predictions(orig_logits, model.tokenizer, top_k),
+                            use_container_width=True, hide_index=True,
+                        )
+                    with c_b:
+                        st.markdown("**After intervention**")
+                        st.dataframe(
+                            _top_k_predictions(new_logits, model.tokenizer, top_k),
+                            use_container_width=True, hide_index=True,
+                        )
+                except Exception as exc:
+                    st.error(f"Intervention failed: {exc}")
 
     # ── Upload to Neuronpedia ─────────────────────────────────────────────────
     st.divider()
