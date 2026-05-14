@@ -63,8 +63,10 @@ REPO = Path(__file__).parent
 
 JSON_DIR = REPO / "demos/temp_graph_files/clt-hp"
 PT_DIRS = {
-    "entmax": REPO / "eval_outputs/prune/subgraph/clt-hp/entmax/node_0.01",
-    "softmax": REPO / "eval_outputs/prune/subgraph/clt-hp/softmax/node_0.01",
+    "multihop_entmax1": REPO / "eval_outputs/prune/subgraph/clt-hp/entmax/node_0.01",
+    "multihop_entmax2": REPO / "eval_outputs/prune/subgraph/clt-hp/entmax/node_0.02",
+    "multihop_softmax1": REPO / "eval_outputs/prune/subgraph/clt-hp/softmax/node_0.01",
+    "multihop_softmax2": REPO / "eval_outputs/prune/subgraph/clt-hp/softmax/node_0.02",
     "analogies": REPO / "pruned_graph/analogies/clt-hp/softmax/node_0.01",
 }
 

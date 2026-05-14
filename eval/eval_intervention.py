@@ -5,7 +5,8 @@ For each supernode produced by spectral and agglomerative clustering:
   Exp D: ablate each node individually -> measure intra-cluster cosine similarity
          of logit-delta vectors (vs. inter-cluster baseline)
 
-All methods are compared against a random-clustering baseline (same cluster sizes).
+All methods are compared against the same baselines used in eval_cluster.py:
+modularity (K-matched), spectral-rbf, and kmeans, all at our spectral's auto-k.
 """
 from __future__ import annotations
 
@@ -22,12 +23,21 @@ import torch.nn.functional as F
 from scipy.stats import spearmanr
 
 from circuit_tracer import ReplacementModel
+from eval.eval_cluster import (
+    _adjacency_affinity,
+    _kmeans_middle_labels,
+    _middle_indices,
+    _modularity_middle_labels,
+    _node_features_bidir,
+    _spectral_rbf_middle_labels,
+)
 from summarization.auto_grouping import find_best_k, find_best_k_for_clusterer
 from summarization.cluster import (
     cluster_graph_agglomerative,
     cluster_graph_spectral,
     clusters_to_supernodes,
     compute_similarity,
+    labels_to_supernodes,
 )
 from summarization.prune import PruneGraph, load_prune_graph
 from summarization.supernode_graph import Supernode, SummarizationGraph
@@ -97,58 +107,65 @@ def _inter_cosine(sn_deltas: dict[str, torch.Tensor], n_samples: int = 1000) -> 
     return F.cosine_similarity(a, b).mean().item()
 
 
-def _make_random_baseline(sng: SummarizationGraph, seed: int = 42) -> SummarizationGraph:
-    """Randomly permute node assignment across feature supernodes, preserving cluster sizes."""
-    rng = np.random.default_rng(seed)
-    fixed_sns = [sn for sn in sng.supernodes if sn.type in ("emb", "logit")]
-    feature_sns = [sn for sn in sng.supernodes if sn.type not in ("emb", "logit")]
-    all_nodes = [n for sn in feature_sns for n in sn.features]
-    sizes = [len(sn.features) for sn in feature_sns]
-    shuffled = [all_nodes[i] for i in rng.permutation(len(all_nodes))]
-    new_sns = []
-    idx = 0
-    for sn, size in zip(feature_sns, sizes):
-        nodes = shuffled[idx : idx + size]
-        layers = [int(n.layer) for n in nodes if n.layer.isdigit()]
-        new_sns.append(
-            Supernode(
-                name=sn.name,
-                features=nodes,
-                type=sn.type,
-                layer_min=min(layers) if layers else 0,
-                layer_max=max(layers) if layers else 0,
-            )
-        )
-        idx += size
-    return SummarizationGraph(supernodes=fixed_sns + new_sns, pruned_adj=sng.pruned_adj)
+def _sng_from_clusters(
+    prune_graph: PruneGraph, clusters: list[list[str]]
+) -> SummarizationGraph:
+    return SummarizationGraph(
+        supernodes=clusters_to_supernodes(prune_graph, clusters),
+        pruned_adj=prune_graph.pruned_adj,
+    )
 
 
-def _build_sngs(prune_graph: PruneGraph) -> dict[str, SummarizationGraph]:
+def _build_sngs(
+    prune_graph: PruneGraph,
+    random_state: int = 42,
+    n_init: int = 20,
+) -> dict[str, SummarizationGraph]:
     sim = compute_similarity(prune_graph)
 
     best_k_s, _ = find_best_k(prune_graph, similarity=sim)
-    spectral_sng = SummarizationGraph(
-        supernodes=clusters_to_supernodes(
-            prune_graph, cluster_graph_spectral(prune_graph, target_k=best_k_s)
-        ),
-        pruned_adj=prune_graph.pruned_adj,
+    spectral_sng = _sng_from_clusters(
+        prune_graph, cluster_graph_spectral(prune_graph, target_k=best_k_s)
     )
 
     agg_clusterer = partial(cluster_graph_agglomerative, prune_graph)
     best_k_a, _ = find_best_k_for_clusterer(
         prune_graph=prune_graph, similarity=sim, clusterer=agg_clusterer
     )
-    agg_sng = SummarizationGraph(
-        supernodes=clusters_to_supernodes(
-            prune_graph, cluster_graph_agglomerative(prune_graph, target_k=best_k_a)
-        ),
-        pruned_adj=prune_graph.pruned_adj,
+    agg_sng = _sng_from_clusters(
+        prune_graph, cluster_graph_agglomerative(prune_graph, target_k=best_k_a)
+    )
+
+    # Baselines (match eval_cluster.py). All three baselines run at K = best_k_s
+    # (our spectral's auto-k) so the per-method comparison is at the same supernode count.
+    mid_idx = _middle_indices(prune_graph)
+    middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
+    adjacency_mid = _adjacency_affinity(prune_graph)[np.ix_(mid_idx, mid_idx)]
+    features_bidir = _node_features_bidir(prune_graph, mid_idx)
+
+    modularity_labels = _modularity_middle_labels(adjacency_mid, best_k_s)
+    modularity_sng = _sng_from_clusters(
+        prune_graph, labels_to_supernodes(prune_graph, middle_ids, modularity_labels)
+    )
+
+    spectral_rbf_labels = _spectral_rbf_middle_labels(
+        features_bidir, best_k_s, random_state, n_init
+    )
+    spectral_rbf_sng = _sng_from_clusters(
+        prune_graph, labels_to_supernodes(prune_graph, middle_ids, spectral_rbf_labels)
+    )
+
+    kmeans_labels = _kmeans_middle_labels(features_bidir, best_k_s, random_state, n_init)
+    kmeans_sng = _sng_from_clusters(
+        prune_graph, labels_to_supernodes(prune_graph, middle_ids, kmeans_labels)
     )
 
     return {
         "spectral": spectral_sng,
         "agglomerative": agg_sng,
-        "random": _make_random_baseline(spectral_sng),
+        "baseline-modularity": modularity_sng,
+        "baseline-spectral-rbf": spectral_rbf_sng,
+        "baseline-kmeans": kmeans_sng,
     }
 
 
@@ -300,7 +317,7 @@ def main() -> None:
     )
     parser.add_argument("--prune-graphs-dir", required=True, type=Path)
     parser.add_argument("--model-name", default="google/gemma-2-2b")
-    parser.add_argument("--transcoder-set", default="gemma")
+    parser.add_argument("--transcoder-set", default="mntss/clt-gemma-2-2b-2.5M")
     parser.add_argument("--dtype", default="bfloat16", choices=list(DTYPE_MAP))
     parser.add_argument("--device", default=None)
     parser.add_argument("--output-dir", required=True, type=Path)

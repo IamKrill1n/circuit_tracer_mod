@@ -147,6 +147,22 @@ class SummarizationGraph:
                     continue
                 block = self.pruned_adj[np.ix_(u_idx, v_idx)].detach().cpu().numpy()
                 sn_adj[i, j] = float(block.sum())
+
+        # Dominant-direction tie-breaker: for each pair {i, j}, keep only the direction
+        # with larger absolute mass; zero both on ties (matches _supernode_edges convention).
+        # sn_adj[i, j] = mass flowing j -> i  (target=i, source=j)
+        n = len(self.supernodes)
+        for i in range(n):
+            for j in range(i + 1, n):
+                ij = abs(sn_adj[i, j])  # flow j -> i
+                ji = abs(sn_adj[j, i])  # flow i -> j
+                if ij > ji:
+                    sn_adj[j, i] = 0.0
+                elif ji > ij:
+                    sn_adj[i, j] = 0.0
+                else:  # tie or both zero
+                    sn_adj[i, j] = 0.0
+                    sn_adj[j, i] = 0.0
         return sn_adj
 
     def node_by_name(self) -> dict[str, Supernode]:

@@ -33,7 +33,6 @@ DEFAULT_SOURCE_SETS = ("clt-hp",)
 DEFAULT_SHAP_EVAL_NORMALIZATIONS: tuple[NormalizeMethod, ...] = (
     "softmax",
     "entmax",
-    "entmax15",
 )
 DEFAULT_SHAP_VALUES_JSON = Path("demos") / "shap_values.json"
 

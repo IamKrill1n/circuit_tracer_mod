@@ -13,16 +13,22 @@ import numpy as np
 import torch
 from sklearn.cluster import KMeans, SpectralClustering
 
-from summarization.cluster_scoring import score_k
+from summarization.cluster_scoring import (
+    _cv_cluster_sizes,
+    _dag_interleave_edge_fraction,
+    _internal_independence_score,
+    _opposing_sign_fraction,
+)
 from summarization.cluster import (
     cluster_graph_spectral,
     cluster_graph_agglomerative,
-    compute_similarity,
     labels_to_supernodes,
+    mapping_dict_to_supernodes,
     supernodes_to_mapping,
 )
 from summarization.prune import PruneGraph, load_prune_graph
-from summarization.utils import node_is_fixed
+from summarization.supernode_graph import SummarizationGraph
+from summarization.utils import node_is_fixed, node_is_logit
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +54,14 @@ SUMMARY_COLUMNS = [
     "best_k",
     "auto_k_candidates",
     "n_supernodes",
-    "score_geo",
-    "sil_raw",
-    "sil_norm",
+    "back_edge_fraction",
     "internal_independence",
-    "dag_score",
     "cv_cluster_sizes",
+    "size_entropy",
     "opposing_sign_frac",
+    "out_dir_cosine_intra",
+    "out_dir_cosine_inter",
+    "out_dir_cosine_gap",
     "n_middle",
     "result_path",
     "supernode_map_path",
@@ -83,6 +90,129 @@ def _to_jsonable(obj: Any) -> Any:
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(_to_jsonable(payload), indent=2), encoding="utf-8")
+
+
+def _size_entropy_norm(rows: list) -> float:
+    # H(size_dist) / log K, 1 = uniform sizes, 0 = degenerate. Features-type only.
+    sizes = np.array(
+        [len(r.member_node_ids()) for r in rows if r.type == "features"],
+        dtype=np.float64,
+    )
+    k = len(sizes)
+    if k < 2 or sizes.sum() == 0:
+        return 1.0
+    p = sizes / sizes.sum()
+    h = -np.sum(p * np.log(p + 1e-12))
+    return float(h / np.log(k))
+
+
+def _output_direction_cosine(
+    rows: list,
+    prune_graph: PruneGraph,
+    n_inter_samples: int = 1000,
+    seed: int = 42,
+) -> tuple[float, float]:
+    """Mean intra-cluster vs cross-cluster cosine of feature output vectors.
+
+    Output vector for feature f = pruned_adj[logit_indices, f] (signed contribution to each
+    logit node). This uses only the output-to-logit slice of the adjacency, so it is
+    independent of the bidirectional edge profile that drives clustering.
+    """
+    nodes = prune_graph.nodes
+    logit_indices = [i for i, n in enumerate(nodes) if node_is_logit(n)]
+    if not logit_indices:
+        return 0.0, 0.0
+
+    out_vecs = (
+        prune_graph.pruned_adj[logit_indices, :]
+        .detach()
+        .cpu()
+        .numpy()
+        .astype(np.float64)
+        .T
+    )  # [n_nodes, n_logit] — row f is feature f's output vector to each logit
+    norms = np.linalg.norm(out_vecs, axis=1, keepdims=True)
+    safe = np.where(norms > 1e-12, norms, 1.0)
+    normed = out_vecs / safe
+    has_output = (norms.squeeze(-1) > 1e-12)
+
+    id_to_idx = {nid: i for i, nid in enumerate(prune_graph.node_ids)}
+    intra_cosines: list[float] = []
+    cluster_indices: list[list[int]] = []
+    for row in rows:
+        if row.type != "features":
+            continue
+        indices = [
+            id_to_idx[nid]
+            for nid in row.member_node_ids()
+            if nid in id_to_idx and has_output[id_to_idx[nid]]
+        ]
+        cluster_indices.append(indices)
+        if len(indices) < 2:
+            continue
+        sub = normed[indices]
+        sim = sub @ sub.T
+        mask = np.triu(np.ones_like(sim, dtype=bool), k=1)
+        intra_cosines.extend(sim[mask].tolist())
+
+    intra_mean = float(np.mean(intra_cosines)) if intra_cosines else 0.0
+
+    valid = [c for c in cluster_indices if c]
+    if len(valid) < 2:
+        return intra_mean, 0.0
+    rng = np.random.default_rng(seed)
+    inter_cosines: list[float] = []
+    for _ in range(n_inter_samples):
+        i, j = rng.choice(len(valid), size=2, replace=False)
+        a = valid[i][int(rng.integers(len(valid[i])))]
+        b = valid[j][int(rng.integers(len(valid[j])))]
+        inter_cosines.append(float(normed[a] @ normed[b]))
+    inter_mean = float(np.mean(inter_cosines)) if inter_cosines else 0.0
+    return intra_mean, inter_mean
+
+
+def _score_independent(
+    final_supernodes: dict[str, list[str]],
+    prune_graph: PruneGraph,
+) -> dict[str, Any]:
+    """Compute similarity-free supernode metrics: back-edge fraction, internal independence,
+    cluster-size CV, size entropy, opposing-sign fraction, output-direction cosine."""
+    rows = mapping_dict_to_supernodes(prune_graph, final_supernodes)
+    n_middle = sum(1 for r in rows if r.type == "features")
+    if n_middle == 0:
+        return {
+            "back_edge_fraction": 0.0,
+            "internal_independence": 0.0,
+            "cv_cluster_sizes": 0.0,
+            "size_entropy": 1.0,
+            "opposing_sign_frac": 0.0,
+            "out_dir_cosine_intra": 0.0,
+            "out_dir_cosine_inter": 0.0,
+            "out_dir_cosine_gap": 0.0,
+            "n_middle": 0,
+        }
+
+    sng = SummarizationGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
+    sn_adj = np.asarray(sng.sn_adj, dtype=np.float64)
+    id_to_idx = {nid: i for i, nid in enumerate(prune_graph.node_ids)}
+    intra_cos, inter_cos = _output_direction_cosine(rows, prune_graph)
+    return {
+        "back_edge_fraction": float(
+            _dag_interleave_edge_fraction(sn_adj, list(sng.sn_names), rows)
+        ),
+        "internal_independence": float(
+            _internal_independence_score(rows, prune_graph.pruned_adj, id_to_idx)
+        ),
+        "cv_cluster_sizes": float(_cv_cluster_sizes(rows)),
+        "size_entropy": _size_entropy_norm(rows),
+        "opposing_sign_frac": float(
+            _opposing_sign_fraction(rows, prune_graph.pruned_adj, prune_graph.nodes)
+        ),
+        "out_dir_cosine_intra": float(intra_cos),
+        "out_dir_cosine_inter": float(inter_cos),
+        "out_dir_cosine_gap": float(intra_cos - inter_cos),
+        "n_middle": int(n_middle),
+    }
 
 
 def _safe_slug(text: str) -> str:
@@ -283,17 +413,21 @@ def _spectral_rbf_middle_labels(
     ).fit_predict(features).astype(np.int64)
 
 
-def _louvain_middle_labels(adjacency_mid: np.ndarray, random_state: int) -> np.ndarray:
+def _modularity_middle_labels(
+    adjacency_mid: np.ndarray, target_k: int
+) -> np.ndarray:
+    """K-matched modularity baseline via networkx.greedy_modularity_communities(best_n=K)."""
     n = adjacency_mid.shape[0]
     if n == 0:
         return np.array([], dtype=np.int64)
-    if n == 1:
-        return np.zeros(1, dtype=np.int64)
+    k = max(1, min(target_k, n))
+    if k == 1:
+        return np.zeros(n, dtype=np.int64)
+    if k == n:
+        return np.arange(n, dtype=np.int64)
     graph = nx.from_numpy_array(adjacency_mid)
-    communities = nx.algorithms.community.louvain_communities(
-        graph,
-        weight="weight",
-        seed=random_state,
+    communities = nx.community.greedy_modularity_communities(
+        graph, weight="weight", best_n=k
     )
     labels = np.zeros(n, dtype=np.int64)
     for label, community in enumerate(communities):
@@ -334,13 +468,14 @@ def _flatten_metrics(
         "best_k": best_k,
         "auto_k_candidates": auto_k_candidates,
         "n_supernodes": len(final_supernodes),
-        "score_geo": base_score.get("score_geo"),
-        "sil_raw": base_score.get("sil_raw"),
-        "sil_norm": base_score.get("sil_norm"),
+        "back_edge_fraction": base_score.get("back_edge_fraction"),
         "internal_independence": base_score.get("internal_independence"),
-        "dag_score": base_score.get("dag_score"),
         "cv_cluster_sizes": base_score.get("cv_cluster_sizes"),
+        "size_entropy": base_score.get("size_entropy"),
         "opposing_sign_frac": base_score.get("opposing_sign_frac"),
+        "out_dir_cosine_intra": base_score.get("out_dir_cosine_intra"),
+        "out_dir_cosine_inter": base_score.get("out_dir_cosine_inter"),
+        "out_dir_cosine_gap": base_score.get("out_dir_cosine_gap"),
         "n_middle": base_score.get("n_middle"),
         "result_path": str(result_path),
         "supernode_map_path": str(supernode_map_path),
@@ -372,18 +507,10 @@ def _evaluate_ours_fixed_k(
     max_layer_span: int,
     random_state: int,
     n_init: int,
-    eval_similarity: np.ndarray,
     enforce_dag: bool,
 ) -> dict[str, Any]:
     mean_method = cast(Literal["geo", "harm", "arith"], method_config["mean_method"])
     decay_rate = float(cast(float, method_config["decay_rate"]))
-    # method-specific similarity used only for clustering, not for scoring
-    similarity = compute_similarity(
-        prune_graph,
-        mean_method=mean_method,
-        decay_rate=decay_rate,
-        max_layer_span=max_layer_span,
-    )
     clusters = cluster_graph_spectral(
         prune_graph,
         target_k=target_k,
@@ -395,12 +522,7 @@ def _evaluate_ours_fixed_k(
         n_init=n_init,
     )
     final_supernodes = supernodes_to_mapping(prune_graph, clusters)
-    base_score = score_k(
-        final_supernodes,
-        prune_graph,
-        eval_similarity,
-        enforce_dag=enforce_dag,
-    )
+    base_score = _score_independent(final_supernodes, prune_graph)
 
     method_slug = f"ours-{method_config['mean_method']}-decay-{decay_rate:.1f}"
     run_dir = output_dir / "runs" / graph_name / method_slug / k_selection
@@ -458,7 +580,6 @@ def _evaluate_ours_agglomerative_fixed_k(
     k_selection: str,
     num_nodes: int,
     max_layer_span: int,
-    eval_similarity: np.ndarray,
     enforce_dag: bool,
 ) -> dict[str, Any]:
     mean_method = cast(Literal["geo", "harm", "arith"], method_config["mean_method"])
@@ -471,12 +592,7 @@ def _evaluate_ours_agglomerative_fixed_k(
         decay_rate=decay_rate,
     )
     final_supernodes = supernodes_to_mapping(prune_graph, clusters)
-    base_score = score_k(
-        final_supernodes,
-        prune_graph,
-        eval_similarity,
-        enforce_dag=enforce_dag,
-    )
+    base_score = _score_independent(final_supernodes, prune_graph)
 
     method_slug = f"ours-agglomerative-{method_config['mean_method']}-decay-{decay_rate:.1f}"
     run_dir = output_dir / "runs" / graph_name / method_slug / k_selection
@@ -530,7 +646,6 @@ def _evaluate_baseline_fixed_k(
     dataset: str,
     output_dir: Path,
     method: str,
-    eval_similarity: np.ndarray,
     clusterer: Callable[[int], list[list[str]]],
     target_k: int,
     k_selection: str,
@@ -539,12 +654,7 @@ def _evaluate_baseline_fixed_k(
 ) -> dict[str, Any]:
     clusters = clusterer(target_k)
     final_supernodes = supernodes_to_mapping(prune_graph, clusters)
-    base_score = score_k(
-        final_supernodes,
-        prune_graph,
-        eval_similarity,
-        enforce_dag=enforce_dag,
-    )
+    base_score = _score_independent(final_supernodes, prune_graph)
 
     run_dir = output_dir / "runs" / graph_name / method / k_selection
     supernode_map_path = run_dir / "supernode_map.json"
@@ -604,9 +714,6 @@ def evaluate_prune_graph(
     graph_name, dataset = _graph_identity(graph_path, input_paths)
     rows: list[dict[str, Any]] = []
 
-    # fixed evaluation similarity space shared by all methods (default arith, no decay)
-    eval_similarity = compute_similarity(prune_graph).detach().cpu().numpy()
-
     num_nodes = len(_middle_indices(prune_graph))
     k_schedule = _fixed_k_schedule(num_nodes)
     n_ours_grid = len(METHOD_GRID) * len(k_schedule)
@@ -635,7 +742,6 @@ def evaluate_prune_graph(
                     max_layer_span=max_layer_span,
                     random_state=random_state,
                     n_init=n_init,
-                    eval_similarity=eval_similarity,
                     enforce_dag=enforce_dag,
                 )
             )
@@ -655,39 +761,18 @@ def evaluate_prune_graph(
                     k_selection=k_selection,
                     num_nodes=num_nodes,
                     max_layer_span=max_layer_span,
-                    eval_similarity=eval_similarity,
                     enforce_dag=enforce_dag,
                 )
             )
 
     logger.info(
-        "  baselines: louvain + spectral-rbf + kmeans (%d k each)",
+        "  baselines: modularity + spectral-rbf + kmeans (%d k each)",
         len(k_schedule),
     )
     mid_idx = _middle_indices(prune_graph)
     middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
     adjacency_mid = _adjacency_affinity(prune_graph)[np.ix_(mid_idx, mid_idx)]
     features_bidir = _node_features_bidir(prune_graph, mid_idx)
-
-    louvain_labels = _louvain_middle_labels(adjacency_mid, random_state=random_state)
-    louvain_clusters = labels_to_supernodes(prune_graph, middle_ids, louvain_labels)
-    louvain_k = int(louvain_labels.max()) + 1 if louvain_labels.size else 0
-    rows.append(
-        _evaluate_baseline_fixed_k(
-            prune_graph=prune_graph,
-            graph_path=graph_path,
-            graph_name=graph_name,
-            dataset=dataset,
-            output_dir=output_dir,
-            method="baseline-louvain",
-            eval_similarity=eval_similarity,
-            clusterer=lambda _k: louvain_clusters,
-            target_k=louvain_k,
-            k_selection="louvain_natural",
-            num_nodes=num_nodes,
-            enforce_dag=enforce_dag,
-        )
-    )
 
     for k_selection, target_k in k_schedule:
         rows.append(
@@ -697,8 +782,26 @@ def evaluate_prune_graph(
                 graph_name=graph_name,
                 dataset=dataset,
                 output_dir=output_dir,
+                method="baseline-modularity",
+                clusterer=lambda k=target_k: labels_to_supernodes(
+                    prune_graph,
+                    middle_ids,
+                    _modularity_middle_labels(adjacency_mid, k),
+                ),
+                target_k=target_k,
+                k_selection=k_selection,
+                num_nodes=num_nodes,
+                enforce_dag=enforce_dag,
+            )
+        )
+        rows.append(
+            _evaluate_baseline_fixed_k(
+                prune_graph=prune_graph,
+                graph_path=graph_path,
+                graph_name=graph_name,
+                dataset=dataset,
+                output_dir=output_dir,
                 method="baseline-spectral-rbf",
-                eval_similarity=eval_similarity,
                 clusterer=lambda k=target_k: labels_to_supernodes(
                     prune_graph,
                     middle_ids,
@@ -718,7 +821,6 @@ def evaluate_prune_graph(
                 dataset=dataset,
                 output_dir=output_dir,
                 method="baseline-kmeans",
-                eval_similarity=eval_similarity,
                 clusterer=lambda k=target_k: labels_to_supernodes(
                     prune_graph,
                     middle_ids,
@@ -787,14 +889,14 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             "output_dir": str(output_dir),
             "method_grid": METHOD_GRID,
             "baselines": [
-                "baseline-louvain",
+                "baseline-modularity",
                 "baseline-spectral-rbf",
                 "baseline-kmeans",
             ],
             "cluster_k_policy": (
-                "Middle-node count n = |non-fixed nodes|. Ours and feature baselines (kmeans, "
-                "spectral-rbf) run at k = round(n/2) and k = round(n/3), clamped to [1, n]. "
-                "Louvain runs once at its natural number of communities."
+                "Middle-node count n = |non-fixed nodes|. Ours and all baselines run at "
+                "k = round(n/2) and k = round(n/3), clamped to [1, n]. Modularity uses "
+                "networkx.greedy_modularity_communities(best_n=k) for K-matched comparison."
             ),
             "summary_csv": str(summary_path),
             "results_json": str(results_path),
@@ -860,7 +962,7 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Apply DAG constraints in our spectral clustering and in score_k. "
+            "Apply DAG constraints in our spectral clustering. "
             "Default on (matches prior hardcoded eval). Use --no-enforce-dag to disable."
         ),
     )
@@ -881,7 +983,7 @@ def main() -> None:
     if not args.input_path:
         args.input_path = _default_input_paths()
     logger.info(
-        "=== Clustering evaluation (ours grid + louvain / spectral-rbf / kmeans) ==="
+        "=== Clustering evaluation (ours grid + modularity / spectral-rbf / kmeans) ==="
     )
     result = run_evaluation(args)
     logger.info("output_dir: %s", result["output_dir"])

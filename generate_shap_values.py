@@ -104,7 +104,7 @@ def _prompt_tokens(prompt: str, model_name: str) -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prompt_file", type=Path)
+    parser.add_argument("--prompt-file", type=Path)
     parser.add_argument("--output-file", type=Path, default=Path("demos") / "shap_values.json")
     parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")

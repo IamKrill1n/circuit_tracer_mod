@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 import logging
+import networkx as nx
 import numpy as np
 import torch
 from sklearn.cluster import SpectralClustering
@@ -134,84 +135,119 @@ def _layer_span_nodes(cluster: list[str], nodes_by_id: dict[str, Node]) -> int:
     return max(lv) - min(lv)
 
 
-def _split_cluster_by_span(
-    cluster: list[str], nodes_by_id: dict[str, Node], max_layer_span: int
+def _split_cluster_at_median_layer(
+    cluster: list[str], nodes_by_id: dict[str, Node]
 ) -> list[list[str]]:
-    work = [cluster]
-    out: list[list[str]] = []
-    while work:
-        current = work.pop()
-        span = _layer_span_nodes(current, nodes_by_id)
-        if span <= max_layer_span or len(current) <= 1:
-            out.append(current)
+    """Split a cluster at its median distinct layer. Returns ``[cluster]`` when not splittable (single layer)."""
+    distinct_layers = sorted({_layer_numeric(n, nodes_by_id) for n in cluster})
+    if len(distinct_layers) < 2:
+        return [cluster]
+    cut = distinct_layers[len(distinct_layers) // 2]
+    left = [n for n in cluster if _layer_numeric(n, nodes_by_id) < cut]
+    right = [n for n in cluster if _layer_numeric(n, nodes_by_id) >= cut]
+    if not left or not right:
+        return [cluster]
+    return [left, right]
+
+
+def _supernode_edges(
+    clusters: list[list[str]],
+    pruned_adj: torch.Tensor,
+    id_to_idx: dict[str, int],
+) -> list[tuple[int, int]]:
+    """Directed edges (source_cluster -> target_cluster) at the supernode level,
+    using net weighted edge mass with a stronger-direction tie-breaker.
+
+    For each cluster pair {i, j}, sums pruned edges in each direction and keeps
+    only the direction with larger absolute mass; ties (incl. both-zero) emit
+    no edge. This eliminates 2-cycles by construction; remaining SCCs of length
+    >= 3 are handled by the caller.
+
+    pruned_adj[target, source] is the project convention.
+    """
+    n = len(clusters)
+    cluster_idx_lists: list[list[int]] = [
+        [id_to_idx[nid] for nid in members if nid in id_to_idx] for members in clusters
+    ]
+
+    adj = pruned_adj.detach().cpu().numpy()
+    # M[i, j] = net mass flowing j -> i  (target=i, source=j; matches pruned_adj convention)
+    M = np.zeros((n, n), dtype=np.float64)
+    for i, u_idx in enumerate(cluster_idx_lists):
+        if not u_idx:
             continue
-        current_sorted = sorted(current, key=lambda n: _layer_numeric(n, nodes_by_id))
-        lo = _layer_numeric(current_sorted[0], nodes_by_id)
-        hi = _layer_numeric(current_sorted[-1], nodes_by_id)
-        cut = (lo + hi) // 2
-        left = [n for n in current_sorted if _layer_numeric(n, nodes_by_id) <= cut]
-        right = [n for n in current_sorted if _layer_numeric(n, nodes_by_id) > cut]
-        if not left or not right:
-            half = max(1, len(current_sorted) // 2)
-            left, right = current_sorted[:half], current_sorted[half:]
-        work.extend([left, right])
-    return out
+        for j, v_idx in enumerate(cluster_idx_lists):
+            if i == j or not v_idx:
+                continue
+            M[i, j] = float(adj[np.ix_(u_idx, v_idx)].sum())
+
+    edges: list[tuple[int, int]] = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            ij = abs(M[i, j])  # j -> i
+            ji = abs(M[j, i])  # i -> j
+            if ij > ji:
+                edges.append((j, i))
+            elif ji > ij:
+                edges.append((i, j))
+            # equal (or both zero): no edge
+    return edges
 
 
-def _split_cluster_by_boundary(
-    cluster: list[str], boundary_layer: int, nodes_by_id: dict[str, Node]
+def _resolve_cycles_only(
+    clusters: list[list[str]],
+    pruned_adj: torch.Tensor,
+    nodes_by_id: dict[str, Node],
+    id_to_idx: dict[str, int],
+    max_iter: int = 50,
 ) -> list[list[str]]:
-    left = [n for n in cluster if _layer_numeric(n, nodes_by_id) < boundary_layer]
-    right = [n for n in cluster if _layer_numeric(n, nodes_by_id) >= boundary_layer]
-    out: list[list[str]] = []
-    if left:
-        out.append(left)
-    if right:
-        out.append(right)
-    return out
+    """Split clusters that participate in a supernode-level cycle, until the cluster digraph is acyclic.
 
-
-def _resolve_layer_interleaving(
-    clusters: list[list[str]], nodes_by_id: dict[str, Node]
-) -> list[list[str]]:
+    Each iteration: find non-trivial strongly-connected components; in each one,
+    split the cluster with the widest layer span (tiebreak: largest size) at its
+    median distinct layer. Stops when no cycles remain, when no progress is
+    possible (all SCC members are single-layer), or at ``max_iter``.
     """
-    Split interleaving/containment ranges until no layer-range conflicts remain.
-    """
-    changed = True
-    while changed:
-        changed = False
-        for i in range(len(clusters)):
-            if changed:
-                break
-            a = clusters[i]
-            a_layers = [_layer_numeric(n, nodes_by_id) for n in a]
-            a_lo, a_hi = min(a_layers), max(a_layers)
+    for iteration in range(max_iter):
+        edges = _supernode_edges(clusters, pruned_adj, id_to_idx)
+        graph = nx.DiGraph()
+        graph.add_nodes_from(range(len(clusters)))
+        graph.add_edges_from(edges)
+        nontrivial_sccs = [c for c in nx.strongly_connected_components(graph) if len(c) >= 2]
+        if not nontrivial_sccs:
+            return clusters
 
-            for j in range(i + 1, len(clusters)):
-                b = clusters[j]
-                b_layers = [_layer_numeric(n, nodes_by_id) for n in b]
-                b_lo, b_hi = min(b_layers), max(b_layers)
+        to_split: set[int] = set()
+        for scc in nontrivial_sccs:
+            chosen = max(
+                scc,
+                key=lambda ci: (
+                    _layer_span_nodes(clusters[ci], nodes_by_id),
+                    len(clusters[ci]),
+                ),
+            )
+            to_split.add(chosen)
 
-                # interleaving: a_lo < b_lo < a_hi < b_hi (or symmetric)
-                a_wraps_b_boundary = a_lo < b_lo < a_hi < b_hi
-                b_wraps_a_boundary = b_lo < a_lo < b_hi < a_hi
-                # containment: use <= so shared-boundary cases (a_lo==b_lo or a_hi==b_hi) are caught
-                a_contains_b = a_lo <= b_lo and b_hi <= a_hi and (a_lo, a_hi) != (b_lo, b_hi)
-                b_contains_a = b_lo <= a_lo and a_hi <= b_hi and (a_lo, a_hi) != (b_lo, b_hi)
+        new_clusters: list[list[str]] = []
+        progressed = False
+        for ci, cluster in enumerate(clusters):
+            if ci in to_split:
+                parts = _split_cluster_at_median_layer(cluster, nodes_by_id)
+                if len(parts) > 1:
+                    progressed = True
+                new_clusters.extend(parts)
+            else:
+                new_clusters.append(cluster)
 
-                if a_wraps_b_boundary or a_contains_b:
-                    replacement = _split_cluster_by_boundary(a, b_lo, nodes_by_id)
-                    clusters = clusters[:i] + replacement + clusters[i + 1 :]
-                    changed = True
-                    break
+        if not progressed:
+            logger.warning(
+                "Cycle remains after iter %d but no chosen cluster could be split (single-layer SCC members). Returning as-is.",
+                iteration,
+            )
+            return new_clusters
+        clusters = new_clusters
 
-                if b_wraps_a_boundary or b_contains_a:
-                    replacement = _split_cluster_by_boundary(b, a_lo, nodes_by_id)
-                    clusters = clusters[:j] + replacement + clusters[j + 1 :]
-                    changed = True
-                    break
-
-    clusters.sort(key=lambda c: min(_layer_numeric(n, nodes_by_id) for n in c))
+    logger.warning("Cycle resolution hit max_iter=%d; returning current clusters.", max_iter)
     return clusters
 
 
@@ -365,16 +401,15 @@ def cluster_graph_spectral(
         grouped.setdefault(int(lbl), []).append(nid)
     middle_clusters = list(grouped.values())
 
-    if enforce_dag and max_layer_span is not None:
-        logger.info("Enforcing layer span constraints (max_span=%d)...", max_layer_span)
-        span_safe: list[list[str]] = []
-        for cluster in middle_clusters:
-            span_safe.extend(_split_cluster_by_span(cluster, nodes_by_id, max_layer_span=max_layer_span))
-        middle_clusters = span_safe
-
     if enforce_dag:
-        logger.info("Resolving layer interleaving in %d initial clusters...", len(middle_clusters))
-        middle_clusters = _resolve_layer_interleaving(middle_clusters, nodes_by_id)
+        logger.info("Resolving cycles in %d initial clusters...", len(middle_clusters))
+        id_to_idx = {nid: i for i, nid in enumerate(kept_ids)}
+        middle_clusters = _resolve_cycles_only(
+            middle_clusters,
+            prune_graph.pruned_adj,
+            nodes_by_id,
+            id_to_idx,
+        )
 
     if max_sn is not None and enforce_dag:
         logger.info("Merging to budget of %d supernodes...", max_sn)

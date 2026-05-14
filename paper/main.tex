@@ -31,10 +31,6 @@
 
 \graphicspath{{evaluation/}}
 
-\newcommand{\cV}{\mathcal{V}}
-\newcommand{\cE}{\mathcal{E}}
-\newcommand{\cG}{\mathcal{G}}
-\newcommand{\bA}{\mathbf{A}}
 \newcommand{\R}{\mathbb{R}}
 
 \newtheorem{definition}{Definition}
@@ -69,79 +65,77 @@ Mechanistic interpretability seeks algorithmic explanations of model behavior \c
 \section{Problem Formulation}
 
 \subsection{Subgraph Extraction}
-Let $\cG=(\cV,\cE)$ be a directed acyclic attribution graph, where the vertex set $\cV$ contains embedding nodes, feature nodes, and logit nodes, and the edge set $\cE$ represents linear causal relationships between them. We extract a subgraph
+Let $G=(V,E,W)$ be a directed acyclic attribution graph, where the vertex set $V$ contains embedding nodes, feature nodes, and logit nodes, the edge set $E$ represents linear causal relationships between them, and $W \in \R^{N \times N}$ is the matrix of edge weights. We extract a subgraph
 \[
-\cG'=(\cV',\cE'), \qquad \cV'\subseteq \cV,\; \cE'\subseteq \cE,
+G'=(V',E',W'), \qquad V'\subseteq V,\; E'\subseteq E,
 \]
-where $\cV' = \cV'_{\mathrm{emb}} \cup \cV'_{\mathrm{feat}} \cup \cV'_{\mathrm{logit}}$ partitions nodes into embedding, feature, and logit nodes.
+where $V' = V'_{\mathrm{emb}} \cup V'_{\mathrm{feat}} \cup V'_{\mathrm{logit}}$ partitions nodes into embedding, feature, and logit nodes.
 
-We write $N = |\cV|$, $N' = |\cV'|$, $N_{\mathrm{feat}} = |\cV'_{\mathrm{feat}}|$, and $\bA \in \R^{N \times N}$ for the adjacency matrix of $\cG$.
+We write $N = |V|$, $N' = |V'|$, and $N_{\mathrm{feat}} = |V'_{\mathrm{feat}}|$.
 
 \subsection{Supernode Abstraction}
 \label{sec:sn-def}
 
 \begin{definition}[Supernode Mapping]
-  A \emph{supernode mapping} is a surjection $\varphi: \cV' \to \{S_1, \ldots, S_K\}$ that assigns each node to one of $K$ supernodes, subject to:
+  A \emph{supernode mapping} is a surjection $\varphi: V' \to \{S_1, \ldots, S_K\}$ that assigns each node to one of $K$ supernodes, subject to:
   \begin{enumerate}[label=(\roman*)]
-    \item $\varphi$ fixes embedding and logit nodes: each $v \in \cV'_{\mathrm{emb}} \cup \cV'_{\mathrm{logit}}$ forms its own singleton supernode.
+    \item $\varphi$ fixes embedding and logit nodes: each $v \in V'_{\mathrm{emb}} \cup V'_{\mathrm{logit}}$ forms its own singleton supernode.
     \item Each feature supernode $S_k$ has bounded layer span: $\max_{i \in S_k} \mathrm{layer}(i) - \min_{i \in S_k} \mathrm{layer}(i) \le \Delta$ for a fixed parameter $\Delta \ge 0$.
-    \item The induced supernode graph $\cG^{\mathrm{SN}}$ is acyclic: supernode layer ranges neither interleave nor contain one another (see \Cref{def:dag-constraint}).
   \end{enumerate}
 \end{definition}
 
-\begin{definition}[DAG Constraint]
-\label{def:dag-constraint}
-  Let the layer ranges of $S_k$ and $S_l$ be $[L^-_k, L^+_k]$ and $[L^-_l, L^+_l]$, respectively. We call the pair \emph{compatible} if the two ranges are disjoint or strictly ordered, and \emph{incompatible} if they interleave,
+The induced supernode graph $G^{\mathrm{SN}}$ has vertex set $\{S_1, \ldots, S_K\}$ and edges defined as follows.
+
+\begin{definition}[Supernode Edge]
+\label{def:sn-edge}
+  For supernodes $S_k$ and $S_l$, let
   \[
-    L^-_k < L^-_l < L^+_k < L^+_l \quad \text{or} \quad L^-_l < L^-_k < L^+_l < L^+_k,
+    M(S_k \to S_l) \;=\; \sum_{i \in S_k,\, j \in S_l} W'_{ij}
   \]
-  or if one range strictly contains the other.
+  be the total signed attribution flowing from $S_k$ to $S_l$. The supernode edge weight is
+\[
+\begin{aligned}
+M_\eta(C)
+  &= \Bigl\{u : C_u \ge C_{(t)}\Bigr\}, \\
+t
+  &= \min\Biggl\{k :
+      \frac{\sum_{j\le k} C_{(j)}}{\sum_j C_{(j)}} \ge \eta
+    \Biggr\},
+\end{aligned}
+\]
+  For each pair $\{S_k, S_l\}$, only the direction with strictly greater absolute mass is retained; ties (including both-zero) produce no edge. The edge set of $G^{\mathrm{SN}}$ is $\bigl\{(S_k \to S_l) : W^{\mathrm{SN}}(S_k \to S_l) \neq 0\bigr\}$.
 \end{definition}
-
-\begin{proposition}[Containment Implies Cycle]
-\label{prop:containment-cycle}
-  Suppose $S_k$ strictly contains $S_l$, i.e., $L^-_k < L^-_l \leq L^+_l < L^+_k$. If $S_k$ contains nodes both below and above the layer range of $S_l$, and the corresponding cross-supernode edges are nonzero, then the induced supernode graph contains the directed 2-cycle $S_k \to S_l \to S_k$.
-\end{proposition}
-
-\begin{proof}
-  Choose $i,i' \in S_k$ and $j \in S_l$ such that
-  \[
-    \mathrm{layer}(i) < L^-_l \le \mathrm{layer}(j) \le L^+_l < \mathrm{layer}(i').
-  \]
-  The edge $i \to j$ contributes to $A'^{\mathrm{SN}}_{kl}$, while $j \to i'$ contributes to $A^{\mathrm{SN}}_{lk}$. If both contributions are nonzero, the supernode graph contains the cycle $S_k \to S_l \to S_k$.
-\end{proof}
-
-Since $\cG'$ is dense, we assume $|A'_{ij}| > 0$ for all $i,j$ with $\mathrm{layer}(i) < \mathrm{layer}(j)$.
 
 \subsection{Desiderata}
 \label{sec:desiderata}
 
-\textbf{(D1) Concept coherence.} Nodes in the same supernode should play similar structural roles in the circuit.
-
-\textbf{(D2) DAG integrity.} The induced supernode graph must remain acyclic; every pair of supernode layer ranges must be compatible per \Cref{def:dag-constraint}.
-
+\textbf{(D1) DAG integrity.} The induced supernode graph must remain acyclic.
+\textbf{(D2) Mechanism Preservation.} The supernode graph should preserve the causal flow of the original graph.
+\textbf{(D3) Concept coherence.} Nodes in the same supernode should play similar structural roles in the circuit.
+\textbf{(D4) Cluster balance.} The supernode graph should be balanced, i.e., the number of nodes in each supernode should be roughly equal.
+\textbf{(D5) Minimality.} The supernode graph should be as small as possible.
 \section{ASG: Automated Summarization of Attribution Graphs}
 
 \paragraph{Step 1: Subgraph Extraction.}
-For each attribution graph $\cG$, ASG constructs a candidate subgraph $\cG'$ by retaining nodes and edges that score highly under a \emph{combined} criterion that fuses two complementary signals: \textbf{influence}---the indirect effect of an internal node on the target logits \cite{circuit-tracer,arxiv:2410.13032}---and \textbf{relevance}---the indirect dependence of an internal node on the input tokens. Influence is propagated backward from logits through input-normalized edges; relevance is propagated forward from embeddings through output-normalized edges.
+For each attribution graph $G$, ASG constructs a candidate subgraph $G'$ by retaining nodes and edges that score highly under a \emph{combined} criterion that fuses two complementary signals: \textbf{influence}---the indirect effect of an internal node on the target logits \cite{circuit-tracer,arxiv:2410.13032}---and \textbf{relevance}---the indirect dependence of an internal node on the input tokens. Influence is propagated backward from logits through input-normalized edges; relevance is propagated forward from embeddings through output-normalized edges.
 
 \paragraph{Influence and relevance scores.}
-Let $A'_{ij}$ denote the edge weight from node $i$ to node $j$ in $\cG'$. We define input- and output-normalized matrices
+Let $W_{ij}$ denote the edge weight from node $i$ to node $j$ in $G'$. We define input- and output-normalized matrices
 \[
-A^{\mathrm{in}}_{ij} \,=\, \frac{|A'_{ij}|}{\sum_{k}|A'_{kj}|}, \qquad
-A^{\mathrm{out}}_{ij} \,=\, \frac{|A'_{ij}|}{\sum_{k}|A'_{ik}|},
+W^{\mathrm{in}}_{ij} \,=\, \frac{|W_{ij}|}{\sum_{k}|W_{kj}|}, \qquad
+W^{\mathrm{out}}_{ij} \,=\, \frac{|W_{ij}|}{\sum_{k}|W_{ik}|},
 \]
-so that each column of $A^{\mathrm{in}}$ sums to 1 (each target node's incoming mass sums to 1) and each row of $A^{\mathrm{out}}$ sums to 1 (each source node's outgoing mass sums to 1). Let $\ell\in\R^n$ be the logit-weight vector and $\tau\in\R^n$ the token-weight vector (set to normalized SHAP values \cite{shap}). Node scores are computed via the Neumann series, which converges because $\cG'$ is a DAG:
+so that each column of $W^{\mathrm{in}}$ sums to 1 (each target node's incoming mass sums to 1) and each row of $W^{\mathrm{out}}$ sums to 1 (each source node's outgoing mass sums to 1). Let $\ell\in\R^n$ be the logit-weight vector and $\tau\in\R^n$ the token-weight vector (set to normalized SHAP values \cite{shap}). Node scores are computed via the Neumann series, which converges because $G'$ is a DAG:
 \[
-\mathrm{Inf}_u = \bigl(\ell^\top (I-(A^{\mathrm{in}})^{\top})^{-1}\bigr)_u, \qquad
-\mathrm{Rel}_u = \bigl(\tau^\top (I-A^{\mathrm{out}})^{-1}\bigr)_u.
+\mathrm{Inf}_u = \bigl(\ell^\top (I-(W^{\mathrm{in}})^{\top})^{-1}\bigr)_u, \qquad
+\mathrm{Rel}_u = \bigl(\tau^\top (I-W^{\mathrm{out}})^{-1}\bigr)_u.
 \]
 Edge scores decompose node scores by edge fraction:
 \[
-\mathrm{Inf}_{uv} = \mathrm{Inf}_v\,A^{\mathrm{in}}_{uv}, \qquad
-\mathrm{Rel}_{uv} = \mathrm{Rel}_u\,A^{\mathrm{out}}_{uv},
+\mathrm{Inf}_{uv} = \mathrm{Inf}_v\,W^{\mathrm{in}}_{uv}, \qquad
+\mathrm{Rel}_{uv} = \mathrm{Rel}_u\,W^{\mathrm{out}}_{uv},
 \]
-where $uv$ denotes the edge from source $u$ to target $v$, so $A^{\mathrm{in}}_{uv}$ is the fraction of $v$'s input mass from $u$, and $A^{\mathrm{out}}_{uv}$ is the fraction of $u$'s output mass to $v$.
+where $uv$ denotes the edge from source $u$ to target $v$, so $W^{\mathrm{in}}_{uv}$ is the fraction of $v$'s input mass from $u$, and $W^{\mathrm{out}}_{uv}$ is the fraction of $u$'s output mass to $v$.
 
 \paragraph{Combined score.}
 Because influence and relevance live on different scales and are heavily zero-inflated, we normalize each to $[0,1]$ via the rank-percentile transform
@@ -162,19 +156,20 @@ t = \min\Bigl\{k : \tfrac{\sum_{j\le k} C_{(j)}}{\sum_j C_{(j)}} \ge \eta\Bigr\}
 \]
 where $C_{(j)}$ denotes the $j$-th largest score. This is the same cumulative-mass rule used by prior circuit tracing work \cite{circuit-tracer}, applied here to the combined ranking rather than to a single metric.
 
-We apply this rule at the node level with threshold $\eta_V$ to obtain a node mask, recompute edge-level combined scores $C_{uv}$ on the node-pruned graph, then apply it again at the edge level with threshold $\eta_E$. A final cleanup step iteratively removes dangling interior nodes (no surviving incoming or outgoing edges). The full procedure is given in \Cref{alg:prune}.
+We apply this rule at the node level with threshold $\eta_V$ to obtain a node mask, recompute edge-level combined scores $C_{uv}$ on the node-pruned graph, then apply it again at the edge level with threshold $\eta_E$. A final cleanup step iteratively removes dangling interior nodes (no surviving incoming or outgoing edges). The full procedure is given in \Cref{alg:prune}. We found that a threshold $\eta_V$ of 0.02 is sufficient of selecting important nodes for our clustering step.
 
 \paragraph{Step 2: Supernode Clustering.}
-After pruning, the graph typically still contains groups of features with similar mechanistic roles—a consequence of feature splitting \cite{split} and the structure of the underlying feature manifold. We cluster these into supernodes to produce a compact summary.
+After pruning, the graph typically still contains groups of features with similar mechanistic roles—a consequence of feature splitting \cite{split} and the structure of the underlying feature manifold. 
+We apply a version of \textbf{pattern-based clustering}, or \textbf{citation-based clustering} classified in \cite{clustering-survey} to group features into supernodes to produce a compact summary.
 
 We define two similarity matrices based on shared neighborhood structure weighted by attribution scores:
 \[
-S_{\mathrm{out}} = \operatorname{ReLU}\!\left(\operatorname{CosNorm}(A\,\operatorname{diag}(\mathrm{Inf})\,A^{\top})\right),
+S_{\mathrm{out}} = \operatorname{ReLU}\!\left(\operatorname{CosNorm}(W\,\operatorname{diag}(\mathrm{Inf})\,W^{\top})\right),
 \]
 \[
-S_{\mathrm{in}} = \operatorname{ReLU}\!\left(\operatorname{CosNorm}(A^{\top}\operatorname{diag}(\mathrm{Rel})\,A)\right),
+S_{\mathrm{in}} = \operatorname{ReLU}\!\left(\operatorname{CosNorm}(W^{\top}\operatorname{diag}(\mathrm{Rel})\,W)\right),
 \]
-where $A \in \R^{N_\mathrm{feat} \times N_\mathrm{feat}}$ is the source-to-target adjacency (rows index source nodes, columns index target nodes), $\mathrm{Inf}, \mathrm{Rel} \in \R^n$ are the node influence and relevance vectors, and $\operatorname{CosNorm}$ applies cosine normalization. $S_\mathrm{out}$ measures shared downstream targets weighted by their influence; $S_\mathrm{in}$ measures shared upstream sources weighted by their relevance. We combine them as
+where $W \in \R^{N_\mathrm{feat} \times N_\mathrm{feat}}$ is the source-to-target weight matrix (rows index source nodes, columns index target nodes), $\mathrm{Inf}, \mathrm{Rel} \in \R^n$ are the node influence and relevance vectors, and $\operatorname{CosNorm}$ applies cosine normalization. $S_\mathrm{out}$ measures shared downstream targets weighted by their influence; $S_\mathrm{in}$ measures shared upstream sources weighted by their relevance. We combine them as
 \[
 S = F_{\mathrm{mean}}\bigl(S_{\mathrm{out}}, S_{\mathrm{in}}\bigr),
 \]
@@ -189,56 +184,110 @@ where $\lambda > 0$ and $\Delta_{ij}$ is the layer difference between nodes $i$ 
 \tilde{S}_{ij} = S_{ij} \cdot P_{ij} \in [0,1]^{N_{\mathrm{feat}} \times N_{\mathrm{feat}}}.
 \]
 
-Since $\tilde{S}$ is symmetric and non-negative, we apply spectral clustering with $\tilde{S}$ as the affinity matrix, embedding feature nodes via the graph Laplacian eigenvectors and partitioning with K-means to obtain $K$ supernodes.
+Since $\tilde{S}$ is symmetric and non-negative, we apply spectral clustering with $\tilde{S}$ as the affinity matrix. This embeds feature nodes using the eigenvectors of the graph Laplacian and partitions them with K-means to obtain $K$ supernodes. In practice, we clamp $\tilde{S}$ with a small epsilon to ensure that the graph Laplacian remains connected.
+
+\paragraph{DAG enforcement.}
+After spectral clustering, we enforce DAG integrity (D2) by iteratively resolving cycles in the cluster digraph. Supernode edges are computed via \Cref{def:sn-edge}: for each cluster pair, only the direction with strictly greater absolute inter-cluster mass is retained, eliminating all 2-cycles by construction. We then identify strongly connected components (SCCs) of size $\geq 2$; within each SCC, the cluster with the widest layer span is split at its median layer. This repeats until no SCCs remain.
 
 \section{Experiments}
 
-We evaluate ASG on a synthetic dataset of multihop reasoning prompts designed to require information integration across multiple input tokens.
+We evaluate ASG on two synthetic datasets:
+\begin{itemize}
+  \item \textbf{Multihop reasoning prompts:} factual recall queries that require two steps of reasoning, similar to \cite{circuit-tracer}.
+  \item \textbf{Analogies:} prompts of the format ``The saying goes: A is to B as C is to,'' testing whether the language model can understand the relation between A and B and apply it to C.
+\end{itemize}
 
-\subsection{Pruning Evaluation}
+\subsection{Supernode graph Evaluation}
+\label{sec:cluster-eval}
 
-We assess pruning quality by measuring the fraction of joint influence--relevance mass on feature nodes preserved after pruning:
-\[
-  \mathrm{GraphScore}(\cG') \;=\; \frac{\sum_{v \in \cV'_{\mathrm{feat}}} \mathrm{Inf}_v\,\mathrm{Rel}_v}{\sum_{v \in \cV_{\mathrm{feat}}} \mathrm{Inf}_v\,\mathrm{Rel}_v}.
-\]
-A score of 1 indicates no loss of attribution mass; lower values correspond to sparser subgraphs.
-
-We perform a grid sweep over node thresholds $(\eta_V^I, \eta_V^R)$ from 0.0 to 1.0 in steps of 0.1 and report mean GraphScore. We additionally compare three non-negative normalizations for SHAP-based token weights—\texttt{softmax}, \texttt{relu\_l1}, and \texttt{entmax15}—to assess sensitivity to the choice of $\tau$.
-
-\subsection{Supernode Clustering Evaluation}
-
-To contextualize clustering quality, we compare ASG against three baselines representing naive or standard approaches to feature grouping.
+We evaluate ASG against three $K$-matched baselines on $N{=}55$ pruned attribution graphs from the analogies dataset, with $n$ denoting the number of non-fixed feature nodes in each graph.
 
 \paragraph{Baselines.}
-\begin{itemize}
-  \item \textbf{Random (null baseline).} Features are assigned uniformly at random to $K$ supernodes, providing a lower bound on functional cohesion and causal-sequence preservation.
-  \item \textbf{By-layer (structural baseline).} All features within the same transformer layer form a single supernode. This trivially satisfies DAG integrity but sacrifices functional granularity by grouping unrelated features.
-  \item \textbf{Louvain (graph-theoretic baseline).} Louvain modularity maximization applied to the undirected feature adjacency matrix. Identifies cohesive communities but is blind to causal ordering, often introducing large structural cycles.
+All baselines operate on the same pruned feature set as ASG and are forced to produce the same number of supernodes $K$.
+\begin{itemize}[leftmargin=*,topsep=2pt,itemsep=2pt]
+  \item \textbf{Modularity.} Greedy modularity maximization on the symmetrized weighted adjacency, constrained to $K$ communities via the \texttt{best\_n} parameter of \texttt{networkx.community.greedy\_modularity\_communities} \cite{clauset2004finding}. Captures connectivity-based community structure but is blind to edge direction.
+  \item \textbf{Spectral-RBF.} Spectral clustering with an RBF kernel over per-feature bidirectional adjacency rows (concatenated incoming and outgoing weights). Recovers dense local geometry without using the attribution-weighted similarity defined in Step~2 of ASG.
+  \item \textbf{K-means.} K-means on the same bidirectional adjacency features. Simplest non-trivial partition baseline.
 \end{itemize}
 
 \paragraph{Scoring metrics.}
-\begin{itemize}
-  \item \textbf{Silhouette score.} Computed on the precomputed weighted cosine-similarity matrix. High values indicate that features in the same supernode have similar mechanistic roles. We report the normalized score
-  \[
-    S_{\mathrm{norm}} = \frac{S_{\mathrm{raw}} + 1}{2} \in [0,1].
-  \]
-  \item \textbf{Independence score.} Measures the fraction of each supernode's total edge weight that exits rather than remaining internal. Let $W_{\mathrm{in}}(c)$ and $W_{\mathrm{out}}(c)$ denote the internal and external edge weight of supernode $c$:
-  \[
-    S_{\mathrm{ind}} = \frac{1}{|\mathcal{C}|} \sum_{c \in \mathcal{C}} \frac{W_{\mathrm{out}}(c)}{W_{\mathrm{in}}(c) + W_{\mathrm{out}}(c)}.
-  \]
-  Values near 1 indicate supernodes act as distinct causal steps; low values indicate collapsed sequential dependencies.
+We report six metrics, none of which use the affinity matrix $\tilde{S}$ that drives ASG clustering, grouped by the desiderata of \Cref{sec:desiderata}.
+\begin{itemize}[leftmargin=*,topsep=2pt,itemsep=2pt]
+  \item \textbf{Back-edge fraction} (D1, $\downarrow$): share of supernode-graph edge mass flowing against layer order,
+  $\frac{\sum_{i\to j:\,\mathrm{layer}(j)<\mathrm{layer}(i)} |W^{\mathrm{SN}}_{ij}|}{\sum_{i\to j}|W^{\mathrm{SN}}_{ij}|}$, with $W^{\mathrm{SN}}$ from \Cref{def:sn-edge}.
+  \item \textbf{Internal independence} (D2/D3, $\uparrow$): per-node external-mass ratio averaged over $V'$,
+  $\tfrac{1}{|V'|}\sum_u \tfrac{|W^{\mathrm{ext}}_u|}{|W^{\mathrm{ext}}_u|+|W^{\mathrm{int}}_u|}$,
+  where internal/external is taken with respect to $u$'s supernode.
+  \item \textbf{Cluster-size CV} (D4, $\downarrow$): coefficient of variation of supernode sizes.
+  \item \textbf{Size entropy} (D4, $\uparrow$): normalized entropy $H(p)/\log K \in [0,1]$ of the size distribution; 1 = uniform.
+  \item \textbf{Opposing-sign fraction} (D3, $\downarrow$): fraction of intra-supernode pairs whose net signed contributions to logit nodes have opposite signs.
+  \item \textbf{Output-direction cosine gap} (D3, $\uparrow$): mean intra-supernode pairwise cosine of feature output vectors minus the cross-supernode baseline, where a feature's output vector is its column of $W'$ restricted to logit-node rows. Uses only the output-to-logit slice of the adjacency, so it is independent of the bidirectional edge profile that drives clustering.
 \end{itemize}
 
 \paragraph{Experimental settings.}
-We fix the supernode count at $K = \lfloor n/2 \rfloor$ and $K = \lfloor n/3 \rfloor$ for the random, Louvain, and ASG methods, where $n$ is the number of feature nodes. The by-layer baseline is fixed at $K = L$ layers. For ASG, we perform a grid search over similarity mode (edge-based vs.\ node-based), mean operator (arithmetic, harmonic, geometric), and decay rate $\lambda \in \{0.0, 0.1, \ldots, 1.0\}$.
+All methods are run at $K \in \{\lfloor n/2 \rfloor, \lfloor n/3 \rfloor\}$. For ASG we additionally sweep $F_{\mathrm{mean}} \in \{\mathrm{arith},\mathrm{harm},\mathrm{geo}\}$ and $\lambda \in \{0.0,0.1,\dots,1.0\}$; reported ASG numbers are averaged over $\lambda$ and shown separately for each mean operator to expose its effect on the partition.
+
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{llccccc}
+\toprule
+\textbf{Method} & $K$ & \textbf{back-edge}\,$\downarrow$ & \textbf{indep.}\,$\uparrow$ & \textbf{size-H}\,$\uparrow$ & \textbf{opp-sign}\,$\downarrow$ & \textbf{out-dir gap}\,$\uparrow$ \\
+\midrule
+ASG-arith    & $n/2$ & \textbf{0.015} & \textbf{0.980} & 0.928          & 0.104          & 0.735          \\
+ASG-harm     & $n/2$ & 0.031          & 0.975          & 0.918          & \textbf{0.008} & \textbf{0.970} \\
+ASG-geo      & $n/2$ & 0.030          & 0.975          & 0.920          & 0.011          & 0.962          \\
+Modularity   & $n/2$ & 0.132          & 0.941          & \textbf{0.989} & 0.400          & $-0.036$       \\
+Spectral-RBF & $n/2$ & 0.138          & 0.958          & 0.841          & 0.252          & 0.430          \\
+K-means      & $n/2$ & 0.111          & 0.969          & 0.895          & 0.235          & 0.436          \\
+\midrule
+ASG-arith    & $n/3$ & \textbf{0.039} & \textbf{0.946} & 0.898          & 0.172          & 0.756          \\
+ASG-harm     & $n/3$ & 0.064          & 0.941          & 0.906          & \textbf{0.085} & \textbf{0.987} \\
+ASG-geo      & $n/3$ & 0.063          & 0.942          & 0.908          & 0.086          & 0.982          \\
+Modularity   & $n/3$ & 0.194          & 0.906          & \textbf{0.978} & 0.373          & 0.048          \\
+Spectral-RBF & $n/3$ & 0.232          & 0.922          & 0.793          & 0.325          & 0.203          \\
+K-means      & $n/3$ & 0.140          & 0.931          & 0.827          & 0.277          & 0.360          \\
+\bottomrule
+\end{tabular}
+\caption{Clustering metrics on the analogies dataset ($N{=}55$ pruned graphs). ASG rows show the spectral variant averaged over $\lambda \in \{0.0, 0.1, \dots, 1.0\}$ at each choice of mean operator. Bold marks the best entry per (metric, $K$) cell.}
+\label{tab:cluster-metrics}
+\end{table*}
+
+\paragraph{Results.}
+\Cref{tab:cluster-metrics} summarizes performance. The three ASG variants together dominate all causal-coherence metrics: at every $K$, ASG-arith records 3--7$\times$ fewer back-edges than the best baseline (D1) and ranks first on internal independence, while ASG-harm and ASG-geo essentially eliminate opposing-sign pairs (0.008--0.086 vs.\ 0.235--0.400 for baselines) and push intra-supernode output directions into near-unit alignment (cosine gap 0.96--0.99 vs.\ $-0.04$ to 0.44, D3). The mean operator has a clear interpretation: arithmetic preserves more in/out structural signal and so wins the structural metrics (back-edge, independence), while the harmonic and geometric means sharpen the similarity by penalizing pairs weak on either side, producing tighter directionally-consistent clusters but slightly more back-edges. Modularity wins size entropy (D4) by virtue of its balance-favoring objective, but loses every causal-coherence metric---a direct consequence of being undirected. Internal independence saturates above 0.90 across all methods and is not discriminative on this dataset; we retain it for completeness but caution against treating it as a primary signal. A full per-$\lambda$ ablation is deferred to the ablation section.
 
 \subsection{Steering Case Study}
+\label{sec:steering}
 
-To validate that supernodes capture causally meaningful units, we perform targeted ablations: we zero out activations of individual supernodes and measure the resulting change in the target logit. A supernode encoding a key intermediate computation should cause predictable output degradation when ablated. We report ablation effects for the top-5 supernodes ranked by total outgoing edge weight and compare them to ablations of random feature sets of equivalent size.
+The metrics of \Cref{sec:cluster-eval} are graph-theoretic: they evaluate the supernode partition through the lens of the (already-computed) attribution graph. To verify that the partition is also \emph{causally} meaningful, we perform two ablation experiments via the cross-layer transcoder substrate. For each feature, we ablate its post-encoder activation by clamping it to zero at its original $(\text{layer}, \text{position})$ index and propagate the modified state through the rest of the model.
+
+\paragraph{Setup.}
+For a given prompt and pruned graph $G'$, let $G^{\mathrm{SN}}$ be a supernode graph produced by one of five methods: ASG-spectral, ASG-agglomerative, modularity, spectral-RBF, or K-means (\Cref{sec:cluster-eval}). ASG-spectral selects its supernode count $K^\star$ automatically via the eigengap heuristic on $\tilde{S}$; all three baselines (and ASG-agglomerative, via the same auto-$K$ procedure) are forced to the same $K^\star$ so cross-method differences reflect the partition rather than its granularity. Let $z^0$ denote the original CLT activations on the prompt and $\ell^0 \in \R^{|\mathcal{V}|}$ the resulting last-position logit vector.
+
+\paragraph{Exp~B: Causal edge knockout.}
+For each feature-type supernode $S$, we replay the prompt with all CLT activations belonging to $S$ clamped to zero, yielding modified activations $z^{S}$. For every directed supernode edge $(S_A\!\to\!S_B)$ with weight $W^{\mathrm{SN}}(S_A\!\to\!S_B) > 0$, we record the downstream activation-drop ratio
+\[
+  r_{A \to B} \;=\; \frac{\bar z^{\,S_A}(S_B)}{\bar z^{\,0}(S_B) + \varepsilon},
+\]
+where $\bar z^{\,(\cdot)}(S_B)$ is the mean post-ablation activation across the CLT features in $S_B$ at their respective $(\text{layer}, \text{position})$ indices. We summarize each supernode graph by the Spearman rank correlation
+\[
+  \rho_{\text{edge}} \;=\; \mathrm{Spearman}\!\bigl(W^{\mathrm{SN}}(S_A\!\to\!S_B),\; 1 - r_{A \to B}\bigr)
+\]
+over all positive-weight edges. A causally faithful supernode graph should yield $\rho_{\text{edge}} > 0$: heavier supernode edges should imply larger downstream activation drops when their source is ablated. Crucially, $\rho_{\text{edge}}$ probes whether the \emph{supernode edges themselves}---defined by \Cref{def:sn-edge} as aggregated attribution mass---predict actual causal effects under intervention, which is the strongest test of mechanism preservation (D2) we can construct from the partition alone.
+
+\paragraph{Exp~D: Per-feature logit-$\Delta$ coherence.}
+For each feature $f$ inside a feature supernode $S$, we ablate $f$ in isolation and record the last-position logit perturbation $\Delta_f = \ell^{\,f} - \ell^{\,0} \in \R^{|\mathcal{V}|}$. Within $S$, we compute the mean pairwise cosine of these perturbation vectors,
+\[
+  \kappa_{\text{intra}}(S) \;=\; \frac{2}{|S|\,(|S|{-}1)} \sum_{\{f, g\}\subseteq S,\, f\neq g} \cos\bigl(\Delta_f, \Delta_g\bigr),
+\]
+and average $\kappa_{\text{intra}}(S)$ across feature supernodes. For the cross-supernode baseline $\kappa_{\text{inter}}$, we sample $M{=}1000$ random pairs of features drawn from \emph{different} supernodes and average their pairwise cosines. We report the gap $\kappa_{\text{intra}} - \kappa_{\text{inter}}$.
+
+A high gap indicates that features grouped by the method push the logit distribution in genuinely similar causal directions, providing an interventional counterpart to the output-direction cosine of \Cref{sec:cluster-eval}: the latter measures alignment of \emph{attributed} output contributions (linear, from $W'$), while $\kappa_{\text{intra}} - \kappa_{\text{inter}}$ measures alignment of \emph{realized} logit effects under non-linear forward replay.
+
+\paragraph{Compared methods and reporting.}
+All five methods are evaluated on the same prompts with identical CLT-ablation interventions, so differences in $\rho_{\text{edge}}$ and $\kappa_{\text{intra}} - \kappa_{\text{inter}}$ are attributable to the partition. We report each metric averaged over graphs in the evaluation set.
 
 \subsection{Flow Analysis}
-
-We use flow-based faithfulness metrics \cite{circuit-tracer} to compare attribution graphs produced by cross-layer transcoders (CLT) versus patch-level transcoders (PLT). The supernode abstraction enables a fair circuit-level comparison: both backends produce attribution graphs that ASG summarizes into comparable supernode structures, and differences in flow distribution directly reflect architectural choices in the tracing backend.
 
 \section{Limitations and Future Work}
 
@@ -261,15 +310,15 @@ We present ASG, an automated pipeline for summarizing attribution graphs in circ
 \caption{Prune attribution graph (combined score)}
 \label{alg:prune}
 \begin{algorithmic}[1]
-\Require Graph $\cG$, \texttt{token\_weights} $\tau$, \texttt{logit\_weights} $\ell$, thresholds $(\eta_V,\eta_E)$, mixing $\alpha$
+\Require Graph $G$, \texttt{token\_weights} $\tau$, \texttt{logit\_weights} $\ell$, thresholds $(\eta_V,\eta_E)$, mixing $\alpha$
 \Ensure $(\texttt{node\_mask},\texttt{edge\_mask})$
-\State Compute $\mathrm{Inf}_u = (\ell^\top (I-(A^{\mathrm{in}})^\top)^{-1})_u$ for all $u$
-\State Compute $\mathrm{Rel}_u = (\tau^\top (I-A^{\mathrm{out}})^{-1})_u$ for all $u$
+\State Compute $\mathrm{Inf}_u = (\ell^\top (I-(W^{\mathrm{in}})^\top)^{-1})_u$ for all $u$
+\State Compute $\mathrm{Rel}_u = (\tau^\top (I-W^{\mathrm{out}})^{-1})_u$ for all $u$
 \State $\widehat{\mathrm{Inf}} \gets \mathrm{rank}(\mathrm{Inf})$;\quad $\widehat{\mathrm{Rel}} \gets \mathrm{rank}(\mathrm{Rel})$
 \State $C^V_u \gets (\widehat{\mathrm{Inf}}_u+\varepsilon)^{\alpha}(\widehat{\mathrm{Rel}}_u+\varepsilon)^{1-\alpha}$
 \State $\texttt{node\_mask} \gets M_{\eta_V}(C^V)$;\quad force-keep all embedding and logit nodes
-\State Zero out rows/columns of $A'$ not in \texttt{node\_mask}
-\State Compute $\mathrm{Inf}_{uv} = \mathrm{Inf}_v A^{\mathrm{in}}_{uv}$ and $\mathrm{Rel}_{uv} = \mathrm{Rel}_u A^{\mathrm{out}}_{uv}$ on pruned graph
+\State Zero out rows/columns of $W'$ not in \texttt{node\_mask}
+\State Compute $\mathrm{Inf}_{uv} = \mathrm{Inf}_v W^{\mathrm{in}}_{uv}$ and $\mathrm{Rel}_{uv} = \mathrm{Rel}_u W^{\mathrm{out}}_{uv}$ on pruned graph
 \State $\widehat{\mathrm{Inf}}_{uv} \gets \mathrm{rank}(\mathrm{Inf}_{uv})$;\quad $\widehat{\mathrm{Rel}}_{uv} \gets \mathrm{rank}(\mathrm{Rel}_{uv})$
 \State $C^E_{uv} \gets (\widehat{\mathrm{Inf}}_{uv}+\varepsilon)^{\alpha}(\widehat{\mathrm{Rel}}_{uv}+\varepsilon)^{1-\alpha}$
 \State $\texttt{edge\_mask} \gets M_{\eta_E}(C^E)$

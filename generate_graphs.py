@@ -43,11 +43,13 @@ def first_token_id(tokenizer, word: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prompt_file", type=Path)
+    parser.add_argument("--prompt-file", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("graphs"))
     parser.add_argument("--model", default=MODEL_NAME)
     parser.add_argument("--transcoder", default=TRANSCODER_NAME)
     parser.add_argument("--backend", default="transformerlens")
+    parser.add_argument("--max-n-logits", type=int, default=15)
+    parser.add_argument("--desired-logit-prob", type=float, default=0.99)
     args = parser.parse_args()
 
     model = ReplacementModel.from_pretrained(
@@ -89,12 +91,12 @@ def main() -> None:
         graph = attribute(
             prompt=prefix,
             model=model,
-            max_n_logits=1,
-            desired_logit_prob=0.99,
+            max_n_logits=args.max_n_logits,
+            desired_logit_prob=args.desired_logit_prob,
             batch_size=256,
             max_feature_nodes=8192,
             offload="cpu",
-            verbose=True,
+            verbose=False,
         )
 
         out = args.output_dir / f"{idx:03d}.pt"

@@ -1,0 +1,35 @@
+{
+  "graphs_root": "multihop_graphs",
+  "output_root": "eval_outputs/prune/subgraph",
+  "shap_values_json": "demos/shap_values_multihop.json",
+  "source_sets": [
+    "clt-hp"
+  ],
+  "masker_keep_prefix": 3,
+  "eval_normalizations": [
+    "softmax",
+    "entmax"
+  ],
+  "sweep_node_start": 0.02,
+  "sweep_node_end": 0.02,
+  "sweep_node_step": 0.1,
+  "node_thresholds": [
+    0.02
+  ],
+  "edge_threshold": 1.0,
+  "combine_method": "geometric",
+  "score_normalization": "rank",
+  "alpha": 0.5,
+  "logit_weights": "target",
+  "keep_all_tokens_and_logits": false,
+  "filter_act_density": true,
+  "act_density_lb": 2e-05,
+  "act_density_ub": 0.1,
+  "limit": null,
+  "total_grid_cells_attempted": 22,
+  "successful_runs": 22,
+  "n_result_rows": 22,
+  "results_json": "eval_outputs/prune/subgraph/clt-hp/results.json",
+  "summary_csv": "eval_outputs/prune/subgraph/clt-hp/summary.csv",
+  "failures": []
+}

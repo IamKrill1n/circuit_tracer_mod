@@ -187,3 +187,5 @@ runs/
 # agent
 .claude/
 .cursor/
+# Large model artifacts
+*.pt
