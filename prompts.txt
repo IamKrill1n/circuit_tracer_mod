@@ -1,25 +1,36 @@
 Fact: The capital of the country where the Amazon rainforest is primarily located is Brasília
 Fact: The language spoken in the country whose capital is Tokyo is Japanese
 Fact: The continent where the Nile River flows is called Africa
-Fact: The inventor of the telephone used in modern communication is Alexander
-Fact: The capital of the state where Silicon Valley is located is Sacramento
 Fact: The animal that produces the material used to make silk is the silkworm
 Fact: The capital of the country where the Great Pyramid of Giza is located is Cairo
-Fact: The capital of the US state containing Dallas is the city of Austin
-Fact: The capital of the country north of the United States is the city of Ottawa
-Fact: The currency used in the country containing the Eiffel Tower is the euro
 Fact: The continent containing the Nile River is the continent Africa
-Fact: The capital of the country containing Mount Everest is the city of Kathmandu
-Fact: The largest ocean on Earth is the ocean Pacific
 Fact: The country whose flag contains a maple leaf is the country Canada
-Fact: The capital of the country containing the Colosseum is the city of Rome
 Fact: The capital of the country hosting Oktoberfest is the city of Berlin
-Fact: The author of the play featuring Hamlet is named William
-Fact: The capital of the country containing the Taj Mahal is the city of Delhi
-Fact: The country where kangaroos are native is the country Australia
-Fact: The capital of the country containing the Statue of Liberty is the city of Washington
 Fact: The hardest natural material on Earth is the material diamond
 Fact: The capital of the country containing the Great Wall is the city of Beijing
-Fact: The capital of the country containing the pyramids of Giza is the city of Cairo
 Fact: The country containing the Alps mountain range is the country Switzerland
-Fact: The capital of the country containing the Louvre Museum is the city of Paris
+Fact: The process plants use to convert sunlight into energy is called photosynthesis
+Fact: The organ responsible for pumping blood through the human body is the heart
+Fact: The instrument used to measure temperature is the thermometer
+Fact: The device used to observe very small organisms is the microscope
+Fact: The branch of mathematics dealing with shapes and angles is called geometry
+Fact: The animal known for building dams in rivers is the beaver
+Fact: The animal that produces wool used in clothing is the sheep
+Fact: The liquid metal commonly found in thermometers is the element mercury
+Fact: The planet known for its prominent rings is the planet Saturn
+Fact: The musical instrument with black and white keys is the piano
+Fact: The board game involving kings, queens, and bishops is called chess
+Fact: The device used to capture photographs is the camera
+Fact: The fictional detective living at Baker Street is named Sherlock
+Fact: The sea creature with eight arms is the octopus
+Fact: The animal famous for changing its color to blend in is the chameleon
+Fact: The instrument used by sailors to determine direction is the compass
+Fact: The substance essential for human survival that covers most of Earth is water
+Fact: The tree known for producing acorns is the oak
+Fact: The animal symbol commonly associated with wisdom is the owl
+Fact: The scientist who proposed natural selection is named Charles
+Fact: The author of the novel featuring the character Dracula is named Bram
+Fact: The machine used to wash clothes automatically is the washingmachine
+Fact: The fastest land animal on Earth is the cheetah
+Fact: The famous ship that struck an iceberg in 1912 was the Titanic
+Fact: The largest organ in the human body is the skin

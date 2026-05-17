@@ -183,9 +183,10 @@ demos/temp_graph_files/
 demos/graph_files/
 nohup.out
 runs/
-
+*.pt
 # agent
 .claude/
 .cursor/
-# Large model artifacts
-*.pt
+# datasets
+make_bats_dataset.py
+

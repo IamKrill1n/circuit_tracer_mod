@@ -8,9 +8,10 @@ from scipy.linalg import eigvalsh
 from summarization.cluster import (
     cluster_graph_spectral,
     clusters_to_supernodes,
-    compute_similarity,
+    compute_phi_vectors,
 )
 from summarization.cluster_scoring import (
+    _cosine_similarity,
     _middle_indices,
     score_clusters,
 )
@@ -53,6 +54,16 @@ def eigengap_analysis(
     return {"eigengap_k": k_hat, "eigenvalues": evals, "gaps": gaps, "search_range": (k_min, k_max)}
 
 
+def _phi_similarity(prune_graph: PruneGraph) -> np.ndarray:
+    """Cosine similarity of the influence/relevance-weighted phi vectors over all nodes.
+
+    This is the shared method-neutral similarity used by auto-k for both eigengap
+    and silhouette scoring.
+    """
+    phi = compute_phi_vectors(prune_graph).detach().cpu().numpy()
+    return _cosine_similarity(phi, nonnegative=True)
+
+
 def find_best_k(
     prune_graph: PruneGraph,
     similarity: Any | None = None,
@@ -68,23 +79,22 @@ def find_best_k(
     n_init: int = 20,
 ) -> tuple[int, dict[int, dict[str, Any]]]:
     """
-    Auto-select k for `cluster_graph_spectral` and return sweep metrics.
+    Auto-select k for `cluster_graph_spectral` via composite-score sweep on phi-similarity.
+
+    The eigengap range and silhouette are computed against sim_phi (the cosine of the
+    influence/relevance-weighted feature vectors), so every method picks k on the same
+    method-neutral yardstick.
 
     Returns `(best_k, results)` where each results[k] includes `final_supernodes`.
     """
-    sim = similarity
-    if sim is None:
-        sim = compute_similarity(
-            prune_graph,
-            mean_method=mean_method,
-            decay_rate=decay_rate,
-        )
-    s_np = np.asarray(sim.detach().cpu().numpy() if hasattr(sim, "detach") else sim)
+    del similarity  # legacy arg; we always use sim_phi for scoring/eigengap now
+    del weights  # legacy weight kwargs
+    sim_phi = _phi_similarity(prune_graph)
     n_middle = len(_middle_indices(prune_graph))
     if n_middle < 3:
         return 2, {}
 
-    eg = eigengap_analysis(s_np, prune_graph, max_k=min(20, n_middle - 1))
+    eg = eigengap_analysis(sim_phi, prune_graph, max_k=min(20, n_middle - 1))
     k_min = k_min_override if k_min_override is not None else int(eg["search_range"][0])
     k_max = k_max_override if k_max_override is not None else int(eg["search_range"][1])
     k_min = max(2, k_min)
@@ -92,7 +102,6 @@ def find_best_k(
     if k_min > k_max:
         k_min = k_max
 
-    del weights  # legacy weight kwargs are no longer used by score_k
     results: dict[int, dict[str, Any]] = {}
     for k in range(k_min, k_max + 1):
         supernodes = cluster_graph_spectral(
@@ -101,6 +110,7 @@ def find_best_k(
             max_layer_span=max_layer_span,
             max_sn=max_sn,
             mean_method=mean_method,
+            decay_rate=decay_rate,
             enforce_dag=enforce_dag,
             random_state=random_state,
             n_init=n_init,
@@ -109,7 +119,7 @@ def find_best_k(
         sc = score_clusters(
             rows,
             prune_graph,
-            s_np,
+            sim_phi,
             enforce_dag=enforce_dag,
         )
         sc["final_supernodes"] = {s.name: s.member_node_ids() for s in rows}
@@ -117,14 +127,14 @@ def find_best_k(
 
     if not results:
         return int(eg["eigengap_k"]), {}
-    best_k = max(results, key=lambda x: float(results[x]["score_arith"]))
+    best_k = max(results, key=lambda x: float(results[x]["composite_score"]))
     return best_k, results
 
 
 def find_best_k_for_clusterer(
     *,
     prune_graph: PruneGraph,
-    similarity: Any,
+    similarity: Any | None = None,
     clusterer: Any,
     k_min_override: int | None = None,
     k_max_override: int | None = None,
@@ -132,11 +142,11 @@ def find_best_k_for_clusterer(
     enforce_dag: bool = False,
 ) -> tuple[int, dict[int, dict[str, Any]]]:
     """
-    Auto-select k for an arbitrary clusterer using the same scoring objective
-    as `find_best_k`.
+    Auto-select k for an arbitrary clusterer via composite-score sweep on phi-similarity.
     """
-    del weights  # legacy weight kwargs are no longer used by score_k
-    s_np = np.asarray(similarity.detach().cpu().numpy() if hasattr(similarity, "detach") else similarity)
+    del similarity  # legacy arg; phi-similarity is computed internally
+    del weights
+    sim_phi = _phi_similarity(prune_graph)
     n_middle = len(_middle_indices(prune_graph))
     if n_middle < 3:
         fallback_k = max(0, n_middle)
@@ -145,13 +155,13 @@ def find_best_k_for_clusterer(
         result = score_clusters(
             rows,
             prune_graph,
-            s_np,
+            sim_phi,
             enforce_dag=enforce_dag,
         )
         result["final_supernodes"] = {s.name: s.member_node_ids() for s in rows}
         return fallback_k, {fallback_k: result}
 
-    eigengap = eigengap_analysis(s_np, prune_graph, max_k=min(20, n_middle - 1))
+    eigengap = eigengap_analysis(sim_phi, prune_graph, max_k=min(20, n_middle - 1))
     k_min = k_min_override if k_min_override is not None else int(eigengap["search_range"][0])
     k_max = k_max_override if k_max_override is not None else int(eigengap["search_range"][1])
     k_min = max(2, min(k_min, n_middle))
@@ -164,11 +174,11 @@ def find_best_k_for_clusterer(
         result = score_clusters(
             rows,
             prune_graph,
-            s_np,
+            sim_phi,
             enforce_dag=enforce_dag,
         )
         result["final_supernodes"] = {s.name: s.member_node_ids() for s in rows}
         results[target_k] = result
 
-    best_k = max(results, key=lambda k: float(results[k]["score_arith"]))
+    best_k = max(results, key=lambda k: float(results[k]["composite_score"]))
     return best_k, results

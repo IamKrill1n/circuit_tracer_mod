@@ -15,7 +15,7 @@ from pathlib import Path
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-LOWER, UPPER = 0.05, 0.30
+LOWER, UPPER = 0.2, 1
 DEFAULT_MODEL = "google/gemma-2-2b"
 
 

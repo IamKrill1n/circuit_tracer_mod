@@ -1,27 +1,30 @@
 """
-Validate prompts and generate attribution graphs for those that pass.
+Generate attribution graphs for each prompt in a prompt file.
 
 Each line in the prompt file: "<prefix> <target_word>"
-Keeps prompts where model top-1 == target and confidence is in (LOWER, UPPER).
-For each kept prompt, runs attribute() and saves the graph to <output_dir>/<idx>.pt.
+For each prompt, runs attribute() on the prefix and saves the graph to <output_dir>/<idx>.pt.
+If --hf-repo is given, each .pt is uploaded to `graphs/<idx>.pt` in that dataset repo.
 
 Usage:
   conda run -n circuit python generate_graphs.py prompts.txt
   conda run -n circuit python generate_graphs.py prompts.txt --output-dir graphs/run1
+  conda run -n circuit python generate_graphs.py prompts.txt --hf-repo user/dataset-name
 """
 
 import argparse
+import os
 from pathlib import Path
 
 from circuit_tracer.utils.create_graph_files import create_graph_files
 import torch
+from huggingface_hub import HfApi
 
 from circuit_tracer import ReplacementModel, attribute
 from circuit_tracer.utils.demo_utils import cleanup_cuda
+from config import HUGGINGFACE_API_KEY
 
 MODEL_NAME = "google/gemma-2-2b"
 TRANSCODER_NAME = "mntss/clt-gemma-2-2b-2.5M"
-LOWER, UPPER = 0.2, 1
 
 
 def load_prompts(path: Path) -> list[tuple[str, str]]:
@@ -35,12 +38,6 @@ def load_prompts(path: Path) -> list[tuple[str, str]]:
     return pairs
 
 
-def first_token_id(tokenizer, word: str) -> int:
-    # Encode with a leading space so the token matches mid-sentence usage.
-    ids = tokenizer.encode(" " + word, add_special_tokens=False)
-    return ids[0]
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--prompt-file", type=Path)
@@ -50,43 +47,23 @@ def main() -> None:
     parser.add_argument("--backend", default="transformerlens")
     parser.add_argument("--max-n-logits", type=int, default=15)
     parser.add_argument("--desired-logit-prob", type=float, default=0.99)
+    parser.add_argument("--hf-repo", default=None, help="HF dataset repo id; if set, uploads each .pt to graphs/<idx>.pt")
     args = parser.parse_args()
+
+    api = None
+    if args.hf_repo:
+        api = HfApi(token=HUGGINGFACE_API_KEY or None)
+        api.create_repo(args.hf_repo, repo_type="dataset", exist_ok=True)
 
     model = ReplacementModel.from_pretrained(
         args.model, args.transcoder, dtype=torch.bfloat16, lazy_encoder=True, backend=args.backend
     )
-    tokenizer = model.tokenizer
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     pairs = load_prompts(args.prompt_file)
-    kept = 0
 
     for idx, (prefix, target) in enumerate(pairs):
-        target_tid = first_token_id(tokenizer, target)
-        input_ids = model.ensure_tokenized(prefix)
-
-        with torch.no_grad():
-            logits, _ = model.get_activations(input_ids)
-
-        # logits: [batch, seq, vocab] or [seq, vocab] — take last token
-        last_logits = logits.reshape(-1, logits.shape[-1])[-1]
-        probs = last_logits.softmax(-1)
-        top1_id = int(last_logits.argmax())
-        p = probs[target_tid].item()
-
-        top1_matches = top1_id == target_tid
-        in_range = LOWER < p < UPPER
-
-        if not (top1_matches and in_range):
-            reasons = []
-            if not top1_matches:
-                reasons.append(f"top1={tokenizer.decode([top1_id]).strip()!r}")
-            if not in_range:
-                reasons.append(f"p={p:.3f}")
-            print(f"[DROP] {prefix!r} → {target!r}  [{'; '.join(reasons)}]")
-            continue
-
-        print(f"[KEEP] {prefix!r} → {target!r}  [p={p:.3f}]")
+        print(f"[{idx}] {prefix!r} → {target!r}")
 
         graph = attribute(
             prompt=prefix,
@@ -102,10 +79,19 @@ def main() -> None:
         out = args.output_dir / f"{idx:03d}.pt"
         graph.to_pt(out)
         print(f"  saved → {out}")
-        kept += 1
+
+        if api is not None:
+            api.upload_file(
+                path_or_fileobj=str(out),
+                path_in_repo=f"graphs/{idx:03d}.pt",
+                repo_id=args.hf_repo,
+                repo_type="dataset",
+            )
+            print(f"  pushed → {args.hf_repo}:graphs/{idx:03d}.pt")
+
         cleanup_cuda()
 
-    print(f"\n{kept}/{len(pairs)} graphs generated → {args.output_dir}")
+    print(f"\n{len(pairs)} graphs generated → {args.output_dir}")
 
 
 if __name__ == "__main__":

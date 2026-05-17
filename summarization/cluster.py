@@ -73,6 +73,28 @@ def _prepare_node_weights(
             values = torch.ones_like(values)
     return values
 
+def compute_phi_vectors(
+    prune_graph: PruneGraph,
+    normalize_weights: bool = False,
+) -> torch.Tensor:
+    """Per-feature [v_out; v_in] vectors used by `compute_similarity` (no layer decay).
+
+    Shape [N, 2N]. The two blocks are:
+      v_out[i, k] = pruned_adj[k, i] * sqrt(Inf_k)   (i's outgoing edges, weighted by target influence)
+      v_in[i, k]  = pruned_adj[i, k] * sqrt(Rel_k)   (i's incoming edges, weighted by source relevance)
+    """
+    adj = prune_graph.pruned_adj.float()  # [target, source] convention
+    n_nodes = adj.shape[0]
+    device = adj.device
+    inf = _prepare_node_weights(prune_graph.node_influence, n_nodes, device, normalize=normalize_weights)
+    rel = _prepare_node_weights(prune_graph.node_relevance, n_nodes, device, normalize=normalize_weights)
+    sqrt_inf = inf.clamp(min=0.0).sqrt()
+    sqrt_rel = rel.clamp(min=0.0).sqrt()
+    v_out = adj.T * sqrt_inf.unsqueeze(0)  # row i = pruned_adj[:, i] (outgoing from i), scaled by sqrt(Inf)
+    v_in = adj * sqrt_rel.unsqueeze(0)  # row i = pruned_adj[i, :] (incoming to i), scaled by sqrt(Rel)
+    return torch.cat([v_out, v_in], dim=1)
+
+
 def compute_similarity(
     prune_graph: PruneGraph,
     mean_method: Literal["geo", "harm", "arith"] = "arith",

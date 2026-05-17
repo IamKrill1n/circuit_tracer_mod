@@ -197,15 +197,22 @@ def run_prune_sweep(args: argparse.Namespace) -> None:
         eff_keep_prefix = None
 
     normalizations: tuple[NormalizeMethod, ...] = tuple(args.eval_normalizations)  # type: ignore[assignment]
-    node_thresholds = _node_threshold_sweep(
-        float(args.sweep_node_start),
-        float(args.sweep_node_end),
-        float(args.sweep_node_step),
-    )
+    if args.node_thresholds:
+        node_thresholds = [float(t) for t in args.node_thresholds]
+    else:
+        node_thresholds = _node_threshold_sweep(
+            float(args.sweep_node_start),
+            float(args.sweep_node_end),
+            float(args.sweep_node_step),
+        )
     edge_threshold = float(args.edge_threshold)
     combine_method = str(args.combine_method)
     score_normalization = str(args.normalization)
-    alpha = float(args.alpha)
+    alphas: list[float] = (
+        [float(a) for a in args.alpha_sweep]
+        if args.alpha_sweep
+        else [float(args.alpha)]
+    )
 
     discovered = _discover_graph_files(graphs_root, source_sets)
     rows_out: list[dict[str, Any]] = []
@@ -223,6 +230,8 @@ def run_prune_sweep(args: argparse.Namespace) -> None:
             stem = graph_path.stem
             try:
                 attr_graph = AttrGraph.from_graph(str(graph_path))
+                if args.device != "cpu":
+                    attr_graph.adj = attr_graph.adj.to(args.device)
                 attr_graph.metadata.setdefault("info", {})["neuronpedia_source_set"] = source_set
                 nodes = attr_graph.nodes
                 metadata = attr_graph.metadata
@@ -253,61 +262,62 @@ def run_prune_sweep(args: argparse.Namespace) -> None:
                     norm_dir = output_root / source_set / norm_method
                     norm_dir.mkdir(parents=True, exist_ok=True)
 
-                    for node_thr in node_thresholds:
-                        total_runs += 1
-                        try:
-                            prune_graph = prune_attr_graph(
-                                attr_graph,
-                                logit_weights=args.logit_weights,
-                                token_weights=token_weights,
-                                node_threshold=node_thr,
-                                edge_threshold=edge_threshold,
-                                combine_method=combine_method,  # type: ignore[arg-type]
-                                normalization=score_normalization,  # type: ignore[arg-type]
-                                alpha=alpha,
-                                keep_all_tokens_and_logits=args.keep_all_tokens_and_logits,
-                                filter_act_density=args.filter_act_density,
-                                act_density_lb=args.act_density_lb,
-                                act_density_ub=args.act_density_ub,
-                            )
-                            thr_dir = norm_dir / f"node_{node_thr:.2f}"
-                            thr_dir.mkdir(parents=True, exist_ok=True)
-                            prune_graph_path = thr_dir / f"{stem}_prune_graph.pt"
-                            save_prune_graph(prune_graph, str(prune_graph_path))
+                    for alpha in alphas:
+                        for node_thr in node_thresholds:
+                            total_runs += 1
+                            try:
+                                prune_graph = prune_attr_graph(
+                                    attr_graph,
+                                    logit_weights=args.logit_weights,
+                                    token_weights=token_weights,
+                                    node_threshold=node_thr,
+                                    edge_threshold=edge_threshold,
+                                    combine_method=combine_method,  # type: ignore[arg-type]
+                                    normalization=score_normalization,  # type: ignore[arg-type]
+                                    alpha=alpha,
+                                    keep_all_tokens_and_logits=args.keep_all_tokens_and_logits,
+                                    filter_act_density=args.filter_act_density,
+                                    act_density_lb=args.act_density_lb,
+                                    act_density_ub=args.act_density_ub,
+                                )
+                                thr_dir = norm_dir / f"alpha_{alpha:.2f}" / f"node_{node_thr:.2f}"
+                                thr_dir.mkdir(parents=True, exist_ok=True)
+                                prune_graph_path = thr_dir / f"{stem}_prune_graph.pt"
+                                save_prune_graph(prune_graph, str(prune_graph_path))
 
-                            rec = {
-                                "source_set": source_set,
-                                "graph_file": graph_path.name,
-                                "graph_stem": stem,
-                                "graph_path": str(graph_path),
-                                "shap_json": str(shap_path),
-                                "shap_row_index": row.get("index"),
-                                "masker_keep_prefix": eff_keep_prefix,
-                                "normalize_method": norm_method,
-                                "node_threshold": node_thr,
-                                "edge_threshold": edge_threshold,
-                                "combine_method": combine_method,
-                                "score_normalization": score_normalization,
-                                "alpha": alpha,
-                                "logit_weights": args.logit_weights,
-                                "keep_all_tokens_and_logits": bool(args.keep_all_tokens_and_logits),
-                                "filter_act_density": bool(args.filter_act_density),
-                                "act_density_lb": float(args.act_density_lb),
-                                "act_density_ub": float(args.act_density_ub),
-                                "token_weights": [float(w) for w in token_weights],
-                                "num_nodes": prune_graph.num_nodes,
-                                "num_edges": prune_graph.num_edges,
-                                "prune_graph_path": str(prune_graph_path),
-                            }
-                            rows_out.append(rec)
-                            ok_runs += 1
-                        except Exception as inner_exc:
-                            msg = (
-                                f"{source_set}/{graph_path.name} "
-                                f"norm={norm_method} node={node_thr}: {inner_exc}"
-                            )
-                            failures.append(msg)
-                            print(f"[failed] {msg}")
+                                rec = {
+                                    "source_set": source_set,
+                                    "graph_file": graph_path.name,
+                                    "graph_stem": stem,
+                                    "graph_path": str(graph_path),
+                                    "shap_json": str(shap_path),
+                                    "shap_row_index": row.get("index"),
+                                    "masker_keep_prefix": eff_keep_prefix,
+                                    "normalize_method": norm_method,
+                                    "node_threshold": node_thr,
+                                    "edge_threshold": edge_threshold,
+                                    "combine_method": combine_method,
+                                    "score_normalization": score_normalization,
+                                    "alpha": alpha,
+                                    "logit_weights": args.logit_weights,
+                                    "keep_all_tokens_and_logits": bool(args.keep_all_tokens_and_logits),
+                                    "filter_act_density": bool(args.filter_act_density),
+                                    "act_density_lb": float(args.act_density_lb),
+                                    "act_density_ub": float(args.act_density_ub),
+                                    "token_weights": [float(w) for w in token_weights],
+                                    "num_nodes": prune_graph.num_nodes,
+                                    "num_edges": prune_graph.num_edges,
+                                    "prune_graph_path": str(prune_graph_path),
+                                }
+                                rows_out.append(rec)
+                                ok_runs += 1
+                            except Exception as inner_exc:
+                                msg = (
+                                    f"{source_set}/{graph_path.name} "
+                                    f"norm={norm_method} alpha={alpha} node={node_thr}: {inner_exc}"
+                                )
+                                failures.append(msg)
+                                print(f"[failed] {msg}")
             except Exception as exc:
                 msg = f"{source_set}/{graph_path.name}: {exc}"
                 failures.append(msg)
@@ -347,7 +357,7 @@ def run_prune_sweep(args: argparse.Namespace) -> None:
         "edge_threshold": edge_threshold,
         "combine_method": combine_method,
         "score_normalization": score_normalization,
-        "alpha": alpha,
+        "alphas": alphas,
         "logit_weights": args.logit_weights,
         "keep_all_tokens_and_logits": bool(args.keep_all_tokens_and_logits),
         "filter_act_density": bool(args.filter_act_density),
@@ -406,6 +416,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sweep-node-start", type=float, default=0.0)
     parser.add_argument("--sweep-node-end", type=float, default=1.0)
     parser.add_argument("--sweep-node-step", type=float, default=0.1)
+    parser.add_argument(
+        "--node-thresholds",
+        nargs="+",
+        type=float,
+        default=None,
+        help="Explicit list of node_threshold values; overrides the linear sweep.",
+    )
     parser.add_argument("--entmax-alpha", type=float, default=1.25)
     parser.add_argument("--logit-weights", type=_parse_logit_weights, default="target")
     parser.add_argument("--edge-threshold", type=float, default=0.95)
@@ -420,11 +437,23 @@ def build_parser() -> argparse.ArgumentParser:
         default="rank",
     )
     parser.add_argument("--alpha", type=float, default=0.5)
+    parser.add_argument(
+        "--alpha-sweep",
+        nargs="+",
+        type=float,
+        default=None,
+        help="If set, sweep alpha across these values (overrides --alpha).",
+    )
     parser.add_argument("--keep-all-tokens-and-logits", action="store_true")
     parser.add_argument("--filter-act-density", action="store_true")
     parser.add_argument("--act-density-lb", type=float, default=2e-5)
     parser.add_argument("--act-density-ub", type=float, default=0.1)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Device for prune tensor math (e.g. 'cpu', 'cuda', 'cuda:0').",
+    )
     return parser
 
 

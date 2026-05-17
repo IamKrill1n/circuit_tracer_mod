@@ -13,15 +13,21 @@ import numpy as np
 import torch
 from sklearn.cluster import KMeans, SpectralClustering
 
+from summarization.auto_grouping import find_best_k_for_clusterer
 from summarization.cluster_scoring import (
+    _cosine_similarity,
     _cv_cluster_sizes,
     _dag_interleave_edge_fraction,
     _internal_independence_score,
     _opposing_sign_fraction,
+    _silhouette_over_middle,
+    _size_entropy_norm,
+    compute_ppr_vectors,
 )
 from summarization.cluster import (
     cluster_graph_spectral,
     cluster_graph_agglomerative,
+    compute_phi_vectors,
     labels_to_supernodes,
     mapping_dict_to_supernodes,
     supernodes_to_mapping,
@@ -46,7 +52,6 @@ SUMMARY_COLUMNS = [
     "dataset",
     "graph_path",
     "num_nodes",
-    "k_selection",
     "method",
     "method_family",
     "mean_method",
@@ -54,10 +59,15 @@ SUMMARY_COLUMNS = [
     "best_k",
     "auto_k_candidates",
     "n_supernodes",
+    "composite_score",
+    "silhouette_phi_raw",
+    "silhouette_phi_norm",
+    "silhouette_ppr_raw",
+    "silhouette_ppr_norm",
     "back_edge_fraction",
     "internal_independence",
-    "cv_cluster_sizes",
     "size_entropy",
+    "cv_cluster_sizes",
     "opposing_sign_frac",
     "out_dir_cosine_intra",
     "out_dir_cosine_inter",
@@ -90,20 +100,6 @@ def _to_jsonable(obj: Any) -> Any:
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(_to_jsonable(payload), indent=2), encoding="utf-8")
-
-
-def _size_entropy_norm(rows: list) -> float:
-    # H(size_dist) / log K, 1 = uniform sizes, 0 = degenerate. Features-type only.
-    sizes = np.array(
-        [len(r.member_node_ids()) for r in rows if r.type == "features"],
-        dtype=np.float64,
-    )
-    k = len(sizes)
-    if k < 2 or sizes.sum() == 0:
-        return 1.0
-    p = sizes / sizes.sum()
-    h = -np.sum(p * np.log(p + 1e-12))
-    return float(h / np.log(k))
 
 
 def _output_direction_cosine(
@@ -174,13 +170,24 @@ def _output_direction_cosine(
 def _score_independent(
     final_supernodes: dict[str, list[str]],
     prune_graph: PruneGraph,
+    sim_phi: np.ndarray,
+    sim_ppr: np.ndarray,
 ) -> dict[str, Any]:
-    """Compute similarity-free supernode metrics: back-edge fraction, internal independence,
-    cluster-size CV, size entropy, opposing-sign fraction, output-direction cosine."""
+    """Per-partition metrics: silhouette on phi and PPR (primary cohesion signals),
+    plus partition-only metrics (back-edge, independence, size_entropy, etc.).
+
+    ``out_dir_cosine_*`` and ``opposing_sign_frac`` are kept as descriptive columns
+    but are late-layer-biased — they project onto the logit slice of pruned_adj.
+    """
     rows = mapping_dict_to_supernodes(prune_graph, final_supernodes)
     n_middle = sum(1 for r in rows if r.type == "features")
     if n_middle == 0:
         return {
+            "silhouette_phi_raw": 0.0,
+            "silhouette_phi_norm": 0.5,
+            "silhouette_ppr_raw": 0.0,
+            "silhouette_ppr_norm": 0.5,
+            "composite_score": 0.0,
             "back_edge_fraction": 0.0,
             "internal_independence": 0.0,
             "cv_cluster_sizes": 0.0,
@@ -196,15 +203,22 @@ def _score_independent(
     sn_adj = np.asarray(sng.sn_adj, dtype=np.float64)
     id_to_idx = {nid: i for i, nid in enumerate(prune_graph.node_ids)}
     intra_cos, inter_cos = _output_direction_cosine(rows, prune_graph)
+    sil_phi_raw, sil_phi_norm = _silhouette_over_middle(sim_phi, prune_graph, rows)
+    sil_ppr_raw, sil_ppr_norm = _silhouette_over_middle(sim_ppr, prune_graph, rows)
+    back_edge = float(_dag_interleave_edge_fraction(sn_adj, list(sng.sn_names), rows))
+    independence = float(_internal_independence_score(rows, prune_graph.pruned_adj, id_to_idx))
+    size_ent = float(_size_entropy_norm(rows))
+    composite = (sil_phi_norm + (1.0 - back_edge) + independence + size_ent) / 4.0
     return {
-        "back_edge_fraction": float(
-            _dag_interleave_edge_fraction(sn_adj, list(sng.sn_names), rows)
-        ),
-        "internal_independence": float(
-            _internal_independence_score(rows, prune_graph.pruned_adj, id_to_idx)
-        ),
+        "silhouette_phi_raw": float(sil_phi_raw),
+        "silhouette_phi_norm": float(sil_phi_norm),
+        "silhouette_ppr_raw": float(sil_ppr_raw),
+        "silhouette_ppr_norm": float(sil_ppr_norm),
+        "composite_score": float(composite),
+        "back_edge_fraction": back_edge,
+        "internal_independence": independence,
         "cv_cluster_sizes": float(_cv_cluster_sizes(rows)),
-        "size_entropy": _size_entropy_norm(rows),
+        "size_entropy": size_ent,
         "opposing_sign_frac": float(
             _opposing_sign_fraction(rows, prune_graph.pruned_adj, prune_graph.nodes)
         ),
@@ -328,34 +342,6 @@ def _middle_indices(prune_graph: PruneGraph) -> list[int]:
     return [i for i, n in enumerate(prune_graph.nodes) if not node_is_fixed(n)]
 
 
-def _fixed_k_from_num_nodes(n_middle: int, divisor: int) -> int:
-    """Integer k from floor(num_nodes / divisor), clamped to [1, n_middle]."""
-    if n_middle <= 0:
-        return 1
-    return max(1, min(n_middle // divisor, n_middle))
-
-
-def _fixed_k_schedule(n_middle: int) -> list[tuple[str, int]]:
-    """Two policies: k ≈ n/2 and k ≈ n/3 (middle-node count)."""
-    return [
-        ("n_over_2", _fixed_k_from_num_nodes(n_middle, 2)),
-        ("n_over_3", _fixed_k_from_num_nodes(n_middle, 3)),
-    ]
-
-
-def _cosine_similarity(features: np.ndarray, nonnegative: bool = False) -> np.ndarray:
-    safe = np.asarray(features, dtype=np.float64)
-    if safe.size == 0:
-        return np.zeros((0, 0), dtype=np.float64)
-    norms = np.linalg.norm(safe, axis=1, keepdims=True)
-    norms = np.where(norms > 1e-12, norms, 1.0)
-    normalized = safe / norms
-    similarity = np.nan_to_num(normalized @ normalized.T, nan=0.0, posinf=0.0, neginf=0.0)
-    if nonnegative:
-        similarity = np.clip((similarity + 1.0) / 2.0, 0.0, 1.0)
-    return similarity
-
-
 def _adjacency_affinity(prune_graph: PruneGraph) -> np.ndarray:
     adj_sender = prune_graph.pruned_adj.clone().float().T.detach().cpu().numpy()
     affinity = np.abs(adj_sender)
@@ -442,7 +428,6 @@ def _flatten_metrics(
     dataset: str,
     graph_path: Path,
     num_nodes: int,
-    k_selection: str,
     method: str,
     method_family: str,
     mean_method: str | None,
@@ -455,12 +440,11 @@ def _flatten_metrics(
     supernode_map_path: Path,
     auto_k_sweep_path: Path | None,
 ) -> dict[str, Any]:
-    row = {
+    return {
         "graph_name": graph_name,
         "dataset": dataset,
         "graph_path": str(graph_path),
         "num_nodes": num_nodes,
-        "k_selection": k_selection,
         "method": method,
         "method_family": method_family,
         "mean_method": mean_method,
@@ -468,10 +452,15 @@ def _flatten_metrics(
         "best_k": best_k,
         "auto_k_candidates": auto_k_candidates,
         "n_supernodes": len(final_supernodes),
+        "composite_score": base_score.get("composite_score"),
+        "silhouette_phi_raw": base_score.get("silhouette_phi_raw"),
+        "silhouette_phi_norm": base_score.get("silhouette_phi_norm"),
+        "silhouette_ppr_raw": base_score.get("silhouette_ppr_raw"),
+        "silhouette_ppr_norm": base_score.get("silhouette_ppr_norm"),
         "back_edge_fraction": base_score.get("back_edge_fraction"),
         "internal_independence": base_score.get("internal_independence"),
-        "cv_cluster_sizes": base_score.get("cv_cluster_sizes"),
         "size_entropy": base_score.get("size_entropy"),
+        "cv_cluster_sizes": base_score.get("cv_cluster_sizes"),
         "opposing_sign_frac": base_score.get("opposing_sign_frac"),
         "out_dir_cosine_intra": base_score.get("out_dir_cosine_intra"),
         "out_dir_cosine_inter": base_score.get("out_dir_cosine_inter"),
@@ -481,7 +470,6 @@ def _flatten_metrics(
         "supernode_map_path": str(supernode_map_path),
         "auto_k_sweep_path": str(auto_k_sweep_path) if auto_k_sweep_path else "",
     }
-    return row
 
 
 def _write_summary_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -493,152 +481,7 @@ def _write_summary_csv(path: Path, rows: list[dict[str, Any]]) -> None:
             writer.writerow({column: row.get(column, "") for column in SUMMARY_COLUMNS})
 
 
-def _evaluate_ours_fixed_k(
-    *,
-    prune_graph: PruneGraph,
-    graph_path: Path,
-    graph_name: str,
-    dataset: str,
-    output_dir: Path,
-    method_config: dict[str, str | float],
-    target_k: int,
-    k_selection: str,
-    num_nodes: int,
-    max_layer_span: int,
-    random_state: int,
-    n_init: int,
-    enforce_dag: bool,
-) -> dict[str, Any]:
-    mean_method = cast(Literal["geo", "harm", "arith"], method_config["mean_method"])
-    decay_rate = float(cast(float, method_config["decay_rate"]))
-    clusters = cluster_graph_spectral(
-        prune_graph,
-        target_k=target_k,
-        max_layer_span=max_layer_span,
-        mean_method=mean_method,
-        decay_rate=decay_rate,
-        enforce_dag=enforce_dag,
-        random_state=random_state,
-        n_init=n_init,
-    )
-    final_supernodes = supernodes_to_mapping(prune_graph, clusters)
-    base_score = _score_independent(final_supernodes, prune_graph)
-
-    method_slug = f"ours-{method_config['mean_method']}-decay-{decay_rate:.1f}"
-    run_dir = output_dir / "runs" / graph_name / method_slug / k_selection
-    supernode_map_path = run_dir / "supernode_map.json"
-    auto_k_sweep_path = run_dir / "fixed_k_metrics.json"
-    result_path = run_dir / "result.json"
-
-    _write_json(supernode_map_path, final_supernodes)
-    _write_json(
-        auto_k_sweep_path,
-        {
-            "k_selection": k_selection,
-            "target_k": target_k,
-            "num_nodes": num_nodes,
-            "metrics": {key: value for key, value in base_score.items()},
-        },
-    )
-
-    summary_row = _flatten_metrics(
-        graph_name=graph_name,
-        dataset=dataset,
-        graph_path=graph_path,
-        num_nodes=num_nodes,
-        k_selection=k_selection,
-        method=method_slug,
-        method_family="ours",
-        mean_method=str(method_config["mean_method"]),
-        decay_rate=decay_rate,
-        best_k=target_k,
-        auto_k_candidates=0,
-        final_supernodes=final_supernodes,
-        base_score=base_score,
-        result_path=result_path,
-        supernode_map_path=supernode_map_path,
-        auto_k_sweep_path=auto_k_sweep_path,
-    )
-    result_payload = {
-        **summary_row,
-        "final_supernodes": final_supernodes,
-        "score_details": base_score.get("details", {}),
-    }
-    _write_json(result_path, result_payload)
-    return result_payload
-
-
-def _evaluate_ours_agglomerative_fixed_k(
-    *,
-    prune_graph: PruneGraph,
-    graph_path: Path,
-    graph_name: str,
-    dataset: str,
-    output_dir: Path,
-    method_config: dict[str, str | float],
-    target_k: int,
-    k_selection: str,
-    num_nodes: int,
-    max_layer_span: int,
-    enforce_dag: bool,
-) -> dict[str, Any]:
-    mean_method = cast(Literal["geo", "harm", "arith"], method_config["mean_method"])
-    decay_rate = float(cast(float, method_config["decay_rate"]))
-    clusters = cluster_graph_agglomerative(
-        prune_graph,
-        target_k=target_k,
-        max_layer_span=max_layer_span,
-        mean_method=mean_method,
-        decay_rate=decay_rate,
-    )
-    final_supernodes = supernodes_to_mapping(prune_graph, clusters)
-    base_score = _score_independent(final_supernodes, prune_graph)
-
-    method_slug = f"ours-agglomerative-{method_config['mean_method']}-decay-{decay_rate:.1f}"
-    run_dir = output_dir / "runs" / graph_name / method_slug / k_selection
-    supernode_map_path = run_dir / "supernode_map.json"
-    auto_k_sweep_path = run_dir / "fixed_k_metrics.json"
-    result_path = run_dir / "result.json"
-
-    _write_json(supernode_map_path, final_supernodes)
-    _write_json(
-        auto_k_sweep_path,
-        {
-            "k_selection": k_selection,
-            "target_k": target_k,
-            "num_nodes": num_nodes,
-            "metrics": {key: value for key, value in base_score.items()},
-        },
-    )
-
-    summary_row = _flatten_metrics(
-        graph_name=graph_name,
-        dataset=dataset,
-        graph_path=graph_path,
-        num_nodes=num_nodes,
-        k_selection=k_selection,
-        method=method_slug,
-        method_family="ours-agglomerative",
-        mean_method=str(method_config["mean_method"]),
-        decay_rate=decay_rate,
-        best_k=target_k,
-        auto_k_candidates=0,
-        final_supernodes=final_supernodes,
-        base_score=base_score,
-        result_path=result_path,
-        supernode_map_path=supernode_map_path,
-        auto_k_sweep_path=auto_k_sweep_path,
-    )
-    result_payload = {
-        **summary_row,
-        "final_supernodes": final_supernodes,
-        "score_details": base_score.get("details", {}),
-    }
-    _write_json(result_path, result_payload)
-    return result_payload
-
-
-def _evaluate_baseline_fixed_k(
+def _evaluate_method_auto_k(
     *,
     prune_graph: PruneGraph,
     graph_path: Path,
@@ -646,29 +489,45 @@ def _evaluate_baseline_fixed_k(
     dataset: str,
     output_dir: Path,
     method: str,
+    method_family: str,
+    mean_method: str | None,
+    decay_rate: float | None,
     clusterer: Callable[[int], list[list[str]]],
-    target_k: int,
-    k_selection: str,
+    sim_phi: np.ndarray,
+    sim_ppr: np.ndarray,
     num_nodes: int,
     enforce_dag: bool,
 ) -> dict[str, Any]:
-    clusters = clusterer(target_k)
-    final_supernodes = supernodes_to_mapping(prune_graph, clusters)
-    base_score = _score_independent(final_supernodes, prune_graph)
+    """Pick best_k via the composite-score sweep, then evaluate at best_k."""
+    best_k, sweep = find_best_k_for_clusterer(
+        prune_graph=prune_graph,
+        clusterer=clusterer,
+        enforce_dag=enforce_dag,
+    )
+    final_supernodes = sweep[best_k]["final_supernodes"]
+    base_score = _score_independent(
+        final_supernodes,
+        prune_graph,
+        sim_phi=sim_phi,
+        sim_ppr=sim_ppr,
+    )
 
-    run_dir = output_dir / "runs" / graph_name / method / k_selection
+    run_dir = output_dir / "runs" / graph_name / method
     supernode_map_path = run_dir / "supernode_map.json"
-    auto_k_sweep_path = run_dir / "fixed_k_metrics.json"
+    auto_k_sweep_path = run_dir / "auto_k_sweep.json"
     result_path = run_dir / "result.json"
 
     _write_json(supernode_map_path, final_supernodes)
     _write_json(
         auto_k_sweep_path,
         {
-            "k_selection": k_selection,
-            "target_k": target_k,
+            "best_k": int(best_k),
             "num_nodes": num_nodes,
-            "metrics": {key: value for key, value in base_score.items()},
+            "candidates": sorted(int(k) for k in sweep.keys()),
+            "metrics_by_k": {
+                str(k): {kk: vv for kk, vv in v.items() if kk != "final_supernodes"}
+                for k, v in sweep.items()
+            },
         },
     )
 
@@ -677,24 +536,19 @@ def _evaluate_baseline_fixed_k(
         dataset=dataset,
         graph_path=graph_path,
         num_nodes=num_nodes,
-        k_selection=k_selection,
         method=method,
-        method_family="baseline",
-        mean_method=None,
-        decay_rate=None,
-        best_k=target_k,
-        auto_k_candidates=0,
+        method_family=method_family,
+        mean_method=mean_method,
+        decay_rate=decay_rate,
+        best_k=int(best_k),
+        auto_k_candidates=len(sweep),
         final_supernodes=final_supernodes,
         base_score=base_score,
         result_path=result_path,
         supernode_map_path=supernode_map_path,
         auto_k_sweep_path=auto_k_sweep_path,
     )
-    result_payload = {
-        **summary_row,
-        "final_supernodes": final_supernodes,
-        "score_details": base_score.get("details", {}),
-    }
+    result_payload = {**summary_row, "final_supernodes": final_supernodes}
     _write_json(result_path, result_payload)
     return result_payload
 
@@ -715,119 +569,139 @@ def evaluate_prune_graph(
     rows: list[dict[str, Any]] = []
 
     num_nodes = len(_middle_indices(prune_graph))
-    k_schedule = _fixed_k_schedule(num_nodes)
-    n_ours_grid = len(METHOD_GRID) * len(k_schedule)
+    mid_idx = _middle_indices(prune_graph)
+    middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
+
+    # Shared method-neutral similarities used by silhouette metrics + auto-k
+    phi = compute_phi_vectors(prune_graph).detach().cpu().numpy()
+    sim_phi = _cosine_similarity(phi, nonnegative=True)
+    ppr = compute_ppr_vectors(prune_graph)
+    sim_ppr = _cosine_similarity(ppr, nonnegative=True)
+
+    # Baseline feature spaces
+    adjacency_mid = _adjacency_affinity(prune_graph)[np.ix_(mid_idx, mid_idx)]
+    phi_mid = phi[mid_idx]
+
     logger.info(
-        "  %s | dataset=%s n_middle=%d k_schedule=%s",
+        "  %s | dataset=%s n_middle=%d",
         graph_name,
         dataset,
         num_nodes,
-        [(sel, k) for sel, k in k_schedule],
     )
 
-    logger.info("  ours spectral: %d runs (method grid × k schedule)", n_ours_grid)
+    logger.info("  ours spectral: %d auto-k runs (method grid)", len(METHOD_GRID))
     for method_config in METHOD_GRID:
-        for k_selection, target_k in k_schedule:
-            rows.append(
-                _evaluate_ours_fixed_k(
-                    prune_graph=prune_graph,
-                    graph_path=graph_path,
-                    graph_name=graph_name,
-                    dataset=dataset,
-                    output_dir=output_dir,
-                    method_config=method_config,
-                    target_k=target_k,
-                    k_selection=k_selection,
-                    num_nodes=num_nodes,
-                    max_layer_span=max_layer_span,
-                    random_state=random_state,
-                    n_init=n_init,
-                    enforce_dag=enforce_dag,
-                )
+        mean_method = cast(Literal["geo", "harm", "arith"], method_config["mean_method"])
+        decay_rate = float(cast(float, method_config["decay_rate"]))
+        method_slug = f"ours-{method_config['mean_method']}-decay-{decay_rate:.1f}"
+
+        def spectral_clusterer(target_k: int, _mm=mean_method, _dr=decay_rate) -> list[list[str]]:
+            return cluster_graph_spectral(
+                prune_graph,
+                target_k=target_k,
+                max_layer_span=max_layer_span,
+                mean_method=_mm,
+                decay_rate=_dr,
+                enforce_dag=enforce_dag,
+                random_state=random_state,
+                n_init=n_init,
             )
 
-    logger.info("  ours agglomerative: %d runs", n_ours_grid)
-    for method_config in METHOD_GRID:
-        for k_selection, target_k in k_schedule:
-            rows.append(
-                _evaluate_ours_agglomerative_fixed_k(
-                    prune_graph=prune_graph,
-                    graph_path=graph_path,
-                    graph_name=graph_name,
-                    dataset=dataset,
-                    output_dir=output_dir,
-                    method_config=method_config,
-                    target_k=target_k,
-                    k_selection=k_selection,
-                    num_nodes=num_nodes,
-                    max_layer_span=max_layer_span,
-                    enforce_dag=enforce_dag,
-                )
-            )
-
-    logger.info(
-        "  baselines: modularity + spectral-rbf + kmeans (%d k each)",
-        len(k_schedule),
-    )
-    mid_idx = _middle_indices(prune_graph)
-    middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
-    adjacency_mid = _adjacency_affinity(prune_graph)[np.ix_(mid_idx, mid_idx)]
-    features_bidir = _node_features_bidir(prune_graph, mid_idx)
-
-    for k_selection, target_k in k_schedule:
         rows.append(
-            _evaluate_baseline_fixed_k(
+            _evaluate_method_auto_k(
                 prune_graph=prune_graph,
                 graph_path=graph_path,
                 graph_name=graph_name,
                 dataset=dataset,
                 output_dir=output_dir,
-                method="baseline-modularity",
-                clusterer=lambda k=target_k: labels_to_supernodes(
-                    prune_graph,
-                    middle_ids,
-                    _modularity_middle_labels(adjacency_mid, k),
-                ),
-                target_k=target_k,
-                k_selection=k_selection,
+                method=method_slug,
+                method_family="ours",
+                mean_method=str(method_config["mean_method"]),
+                decay_rate=decay_rate,
+                clusterer=spectral_clusterer,
+                sim_phi=sim_phi,
+                sim_ppr=sim_ppr,
                 num_nodes=num_nodes,
                 enforce_dag=enforce_dag,
             )
         )
+
+    logger.info("  ours agglomerative: %d auto-k runs (method grid)", len(METHOD_GRID))
+    for method_config in METHOD_GRID:
+        mean_method = cast(Literal["geo", "harm", "arith"], method_config["mean_method"])
+        decay_rate = float(cast(float, method_config["decay_rate"]))
+        method_slug = f"ours-agglomerative-{method_config['mean_method']}-decay-{decay_rate:.1f}"
+
+        def agglomerative_clusterer(target_k: int, _mm=mean_method, _dr=decay_rate) -> list[list[str]]:
+            return cluster_graph_agglomerative(
+                prune_graph,
+                target_k=target_k,
+                max_layer_span=max_layer_span,
+                mean_method=_mm,
+                decay_rate=_dr,
+            )
+
         rows.append(
-            _evaluate_baseline_fixed_k(
+            _evaluate_method_auto_k(
                 prune_graph=prune_graph,
                 graph_path=graph_path,
                 graph_name=graph_name,
                 dataset=dataset,
                 output_dir=output_dir,
-                method="baseline-spectral-rbf",
-                clusterer=lambda k=target_k: labels_to_supernodes(
-                    prune_graph,
-                    middle_ids,
-                    _spectral_rbf_middle_labels(features_bidir, k, random_state, n_init),
-                ),
-                target_k=target_k,
-                k_selection=k_selection,
+                method=method_slug,
+                method_family="ours-agglomerative",
+                mean_method=str(method_config["mean_method"]),
+                decay_rate=decay_rate,
+                clusterer=agglomerative_clusterer,
+                sim_phi=sim_phi,
+                sim_ppr=sim_ppr,
                 num_nodes=num_nodes,
                 enforce_dag=enforce_dag,
             )
         )
+
+    logger.info("  baselines: modularity + spectral-rbf + kmeans (auto-k each, on phi)")
+
+    def modularity_clusterer(target_k: int) -> list[list[str]]:
+        return labels_to_supernodes(
+            prune_graph,
+            middle_ids,
+            _modularity_middle_labels(adjacency_mid, target_k),
+        )
+
+    def spectral_rbf_clusterer(target_k: int) -> list[list[str]]:
+        return labels_to_supernodes(
+            prune_graph,
+            middle_ids,
+            _spectral_rbf_middle_labels(phi_mid, target_k, random_state, n_init),
+        )
+
+    def kmeans_clusterer(target_k: int) -> list[list[str]]:
+        return labels_to_supernodes(
+            prune_graph,
+            middle_ids,
+            _kmeans_middle_labels(phi_mid, target_k, random_state, n_init),
+        )
+
+    for method, clusterer in [
+        ("baseline-modularity", modularity_clusterer),
+        ("baseline-spectral-rbf", spectral_rbf_clusterer),
+        ("baseline-kmeans", kmeans_clusterer),
+    ]:
         rows.append(
-            _evaluate_baseline_fixed_k(
+            _evaluate_method_auto_k(
                 prune_graph=prune_graph,
                 graph_path=graph_path,
                 graph_name=graph_name,
                 dataset=dataset,
                 output_dir=output_dir,
-                method="baseline-kmeans",
-                clusterer=lambda k=target_k: labels_to_supernodes(
-                    prune_graph,
-                    middle_ids,
-                    _kmeans_middle_labels(features_bidir, k, random_state, n_init),
-                ),
-                target_k=target_k,
-                k_selection=k_selection,
+                method=method,
+                method_family="baseline",
+                mean_method=None,
+                decay_rate=None,
+                clusterer=clusterer,
+                sim_phi=sim_phi,
+                sim_ppr=sim_ppr,
                 num_nodes=num_nodes,
                 enforce_dag=enforce_dag,
             )
@@ -894,9 +768,19 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 "baseline-kmeans",
             ],
             "cluster_k_policy": (
-                "Middle-node count n = |non-fixed nodes|. Ours and all baselines run at "
-                "k = round(n/2) and k = round(n/3), clamped to [1, n]. Modularity uses "
-                "networkx.greedy_modularity_communities(best_n=k) for K-matched comparison."
+                "Each method's best_k is selected via the eigengap-bounded sweep in "
+                "summarization.auto_grouping.find_best_k_for_clusterer, scored by the "
+                "arithmetic mean of silhouette_phi_norm, (1 - back_edge_fraction), "
+                "internal_independence, and size_entropy. silhouette is computed on the "
+                "cosine of phi = [v_out; v_in] (influence/relevance-weighted edge vectors). "
+                "All methods cluster on phi except baseline-modularity, which operates on "
+                "the symmetrized adjacency affinity (its native input). Modularity uses "
+                "networkx.greedy_modularity_communities(best_n=k)."
+            ),
+            "descriptive_metrics_note": (
+                "opposing_sign_frac and out_dir_cosine_{intra,inter,gap} are reported for "
+                "transparency but are late-layer-biased (they project onto the logit slice "
+                "of pruned_adj). Primary cohesion: silhouette_phi_norm + silhouette_ppr_norm."
             ),
             "summary_csv": str(summary_path),
             "results_json": str(results_path),

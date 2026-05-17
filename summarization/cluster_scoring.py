@@ -18,6 +18,80 @@ def _middle_indices(prune_graph: PruneGraph) -> list[int]:
     return [i for i, n in enumerate(prune_graph.nodes) if not node_is_fixed(n)]
 
 
+def _cosine_similarity(features: np.ndarray, nonnegative: bool = False) -> np.ndarray:
+    """Pairwise cosine similarity of row-features. If nonnegative, map [-1, 1] -> [0, 1]."""
+    safe = np.asarray(features, dtype=np.float64)
+    if safe.size == 0:
+        return np.zeros((0, 0), dtype=np.float64)
+    norms = np.linalg.norm(safe, axis=1, keepdims=True)
+    norms = np.where(norms > 1e-12, norms, 1.0)
+    normalized = safe / norms
+    similarity = np.nan_to_num(normalized @ normalized.T, nan=0.0, posinf=0.0, neginf=0.0)
+    if nonnegative:
+        similarity = np.clip((similarity + 1.0) / 2.0, 0.0, 1.0)
+    return similarity
+
+
+def _size_entropy_norm(rows: list[Supernode]) -> float:
+    """H(size_dist) / log K over feature-type supernodes; 1 = uniform sizes, 0 = degenerate."""
+    sizes = np.array(
+        [len(r.member_node_ids()) for r in rows if r.type == "features"],
+        dtype=np.float64,
+    )
+    k = len(sizes)
+    if k < 2 or sizes.sum() == 0:
+        return 1.0
+    p = sizes / sizes.sum()
+    h = -np.sum(p * np.log(p + 1e-12))
+    return float(h / np.log(k))
+
+
+def compute_ppr_vectors(
+    prune_graph: PruneGraph,
+    alpha: float = 0.15,
+    max_iter: int = 100,
+    tol: float = 1e-6,
+) -> np.ndarray:
+    """Personalized PageRank vectors per node on the symmetrized |pruned_adj| graph.
+
+    Row i is the PPR distribution of a random walker seeded at node i. Symmetrizing
+    makes PPR meaningful for nodes at any layer (otherwise late-layer features have
+    no outgoing mass).
+    """
+    adj = prune_graph.pruned_adj.detach().cpu().numpy().astype(np.float64)
+    w = np.abs(adj)
+    w = (w + w.T) / 2.0
+    row_sums = w.sum(axis=1, keepdims=True)
+    row_sums = np.where(row_sums > 1e-12, row_sums, 1.0)
+    p_trans = w / row_sums  # row-stochastic transition matrix (isolated rows stay self-loop)
+    isolated = (w.sum(axis=1) <= 1e-12)
+    if isolated.any():
+        # isolated nodes: keep walker at the seed by self-transition
+        p_trans[isolated] = 0.0
+        p_trans[isolated, np.where(isolated)[0]] = 1.0
+
+    n = p_trans.shape[0]
+    teleport = alpha * np.eye(n, dtype=np.float64)
+    r = np.eye(n, dtype=np.float64)  # row i starts as one-hot at i
+    for _ in range(max_iter):
+        r_new = teleport + (1.0 - alpha) * (r @ p_trans)
+        if np.max(np.abs(r_new - r)) < tol:
+            r = r_new
+            break
+        r = r_new
+    return r
+
+
+def silhouette_from_features(
+    features: np.ndarray,
+    prune_graph: PruneGraph,
+    rows: list[Supernode],
+) -> tuple[float, float]:
+    """Cosine-similarity silhouette over middle nodes for a fixed feature matrix."""
+    sim = _cosine_similarity(features, nonnegative=True)
+    return _silhouette_over_middle(sim, prune_graph, rows)
+
+
 def _silhouette_over_middle(
     similarity: np.ndarray,
     prune_graph: PruneGraph,
@@ -212,10 +286,14 @@ def _cluster_metrics_from_parts(
             "score_arith": 0.0,
             "score_harm": 0.0,
             "score_geo": 0.0,
+            "composite_score": 0.0,
             "sil_raw": 0.0,
             "sil_norm": 0.0,
+            "silhouette_phi_norm": 0.0,
             "internal_independence": 0.0,
             "dag_score": 0.0,
+            "back_edge_fraction": 0.0,
+            "size_entropy": 1.0,
             "cv_cluster_sizes": 0.0,
             "opposing_sign_frac": 0.0,
             "n_middle": 0,
@@ -233,18 +311,26 @@ def _cluster_metrics_from_parts(
     dag_score = _dag_interleave_edge_fraction(sn_adj_arr, sn_names, rows)
     cv = _cv_cluster_sizes(rows)
     opp = _opposing_sign_fraction(rows, prune_graph.pruned_adj, prune_graph.nodes)
+    size_entropy = _size_entropy_norm(rows)
     score_arith = (sil_norm + internal_independence) / 2.0
     score_harm = 2 / ((1 / (sil_norm + 1e-12)) + (1 / (internal_independence + 1e-12)))
     score_geo = np.sqrt(sil_norm * internal_independence)
+    # composite: arithmetic mean of silhouette_norm, (1 - back_edge), independence, size_entropy.
+    # Semantically silhouette_phi_norm when caller passes sim_phi (see auto_grouping.find_best_k).
+    composite_score = (sil_norm + (1.0 - dag_score) + internal_independence + size_entropy) / 4.0
 
     return {
         "score_arith": float(score_arith),
         "score_harm": float(score_harm),
         "score_geo": float(score_geo),
+        "composite_score": float(composite_score),
         "sil_raw": float(sil_raw),
         "sil_norm": float(sil_norm),
+        "silhouette_phi_norm": float(sil_norm),
         "internal_independence": float(internal_independence),
         "dag_score": float(dag_score),
+        "back_edge_fraction": float(dag_score),
+        "size_entropy": float(size_entropy),
         "cv_cluster_sizes": float(cv),
         "opposing_sign_frac": float(opp),
         "n_middle": int(n_middle),

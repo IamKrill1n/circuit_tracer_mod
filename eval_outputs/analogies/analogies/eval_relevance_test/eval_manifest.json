@@ -1,0 +1,15 @@
+{
+  "source_manifest": "eval_outputs/analogies/analogies/manifest.json",
+  "output_root": "eval_outputs/analogies/analogies/eval_relevance_test",
+  "limit": 20,
+  "skip_relevance_conservation": false,
+  "skip_token_faithfulness": false,
+  "skip_pruning_divergence": true,
+  "skip_influence_relevance_agreement": true,
+  "skip_clt_scores": true,
+  "n_records_processed": 20,
+  "n_failures": 0,
+  "results_json": "eval_outputs/analogies/analogies/eval_relevance_test/eval_results.json",
+  "summary_csv": "eval_outputs/analogies/analogies/eval_relevance_test/eval_summary.csv",
+  "failures": []
+}
