@@ -1,0 +1,203 @@
+{
+  "input_paths": [
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/000_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/001_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/002_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/003_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/004_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/005_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/006_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/007_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/008_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/009_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/010_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/011_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/012_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/013_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/014_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/015_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/016_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/017_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/018_prune_graph.pt",
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/019_prune_graph.pt"
+  ],
+  "node_threshold": null,
+  "graph_paths": [
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/000_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/001_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/002_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/003_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/004_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/005_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/006_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/007_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/008_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/009_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/010_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/011_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/012_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/013_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/014_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/015_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/016_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/017_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/018_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/019_prune_graph.pt"
+  ],
+  "output_dir": "/home/tu/circuit_tracer_mod/eval_outputs/clustering_analogies_test",
+  "objective": "L = L_coh + D_agg + L_cplx per paper/reformulation.tex Section 2-3, with all three terms redefined to lie in [0, 1]. L_coh is mean (1 - cos(r(u), centroid)) over middle features; D_agg is the magnitude-retention loss of Eq. 12 computed from the signed block sum (no dominant-direction tie-breaker); L_cplx is the average emb->logit shortest-path length in G_SN divided by (num_model_layers + 1).",
+  "selection_protocol": "Each solver sweeps its full hyperparameter grid x the shared eigengap-bounded K candidate set; the (config, K) minimizing L_total is reported as that solver's row. K candidates come from auto_grouping.eigengap_analysis on the symmetrized phi cosine.",
+  "method_grid": [
+    {
+      "mean_method": "arith",
+      "decay_rate": 0.0
+    },
+    {
+      "mean_method": "arith",
+      "decay_rate": 0.1
+    },
+    {
+      "mean_method": "arith",
+      "decay_rate": 0.2
+    },
+    {
+      "mean_method": "arith",
+      "decay_rate": 0.3
+    },
+    {
+      "mean_method": "arith",
+      "decay_rate": 0.4
+    },
+    {
+      "mean_method": "arith",
+      "decay_rate": 0.5
+    },
+    {
+      "mean_method": "arith",
+      "decay_rate": 0.6
+    },
+    {
+      "mean_method": "arith",
+      "decay_rate": 0.7
+    },
+    {
+      "mean_method": "arith",
+      "decay_rate": 0.8
+    },
+    {
+      "mean_method": "arith",
+      "decay_rate": 0.9
+    },
+    {
+      "mean_method": "arith",
+      "decay_rate": 1.0
+    },
+    {
+      "mean_method": "harm",
+      "decay_rate": 0.0
+    },
+    {
+      "mean_method": "harm",
+      "decay_rate": 0.1
+    },
+    {
+      "mean_method": "harm",
+      "decay_rate": 0.2
+    },
+    {
+      "mean_method": "harm",
+      "decay_rate": 0.3
+    },
+    {
+      "mean_method": "harm",
+      "decay_rate": 0.4
+    },
+    {
+      "mean_method": "harm",
+      "decay_rate": 0.5
+    },
+    {
+      "mean_method": "harm",
+      "decay_rate": 0.6
+    },
+    {
+      "mean_method": "harm",
+      "decay_rate": 0.7
+    },
+    {
+      "mean_method": "harm",
+      "decay_rate": 0.8
+    },
+    {
+      "mean_method": "harm",
+      "decay_rate": 0.9
+    },
+    {
+      "mean_method": "harm",
+      "decay_rate": 1.0
+    },
+    {
+      "mean_method": "geo",
+      "decay_rate": 0.0
+    },
+    {
+      "mean_method": "geo",
+      "decay_rate": 0.1
+    },
+    {
+      "mean_method": "geo",
+      "decay_rate": 0.2
+    },
+    {
+      "mean_method": "geo",
+      "decay_rate": 0.3
+    },
+    {
+      "mean_method": "geo",
+      "decay_rate": 0.4
+    },
+    {
+      "mean_method": "geo",
+      "decay_rate": 0.5
+    },
+    {
+      "mean_method": "geo",
+      "decay_rate": 0.6
+    },
+    {
+      "mean_method": "geo",
+      "decay_rate": 0.7
+    },
+    {
+      "mean_method": "geo",
+      "decay_rate": 0.8
+    },
+    {
+      "mean_method": "geo",
+      "decay_rate": 0.9
+    },
+    {
+      "mean_method": "geo",
+      "decay_rate": 1.0
+    }
+  ],
+  "solvers": [
+    "ours-spectral",
+    "ours-agglomerative",
+    "baseline-modularity",
+    "baseline-spectral-rbf",
+    "baseline-kmeans"
+  ],
+  "summary_csv": "/home/tu/circuit_tracer_mod/eval_outputs/clustering_analogies_test/summary.csv",
+  "results_json": "/home/tu/circuit_tracer_mod/eval_outputs/clustering_analogies_test/results.json",
+  "n_graphs": 20,
+  "n_runs": 100,
+  "config": {
+    "node_threshold": null,
+    "max_layer_span": 4,
+    "enforce_dag": true,
+    "map_location": "cuda",
+    "random_state": 42,
+    "n_init": 20
+  }
+}

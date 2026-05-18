@@ -229,6 +229,18 @@ def _dag_interleave_edge_fraction(
     return float(backward_mass / total_middle_mass)
 
 
+def _mean_layer_span(rows: list[Supernode]) -> float:
+    """Mean layer span over feature-type supernodes. Lower = thinner clusters (F2)."""
+    spans = [
+        int(r.layer_max) - int(r.layer_min)
+        for r in rows
+        if r.type == "features"
+    ]
+    if not spans:
+        return 0.0
+    return float(sum(spans) / len(spans))
+
+
 def _cv_cluster_sizes(rows: list[Supernode]) -> float:
     """Coefficient of variation of cluster sizes (std/mean). Lower = more balanced."""
     sizes = [len(row.member_node_ids()) for row in rows if row.type == "features"]
@@ -286,7 +298,6 @@ def _cluster_metrics_from_parts(
             "score_arith": 0.0,
             "score_harm": 0.0,
             "score_geo": 0.0,
-            "composite_score": 0.0,
             "sil_raw": 0.0,
             "sil_norm": 0.0,
             "silhouette_phi_norm": 0.0,
@@ -296,6 +307,7 @@ def _cluster_metrics_from_parts(
             "size_entropy": 1.0,
             "cv_cluster_sizes": 0.0,
             "opposing_sign_frac": 0.0,
+            "mean_layer_span": 0.0,
             "n_middle": 0,
         }
 
@@ -312,18 +324,15 @@ def _cluster_metrics_from_parts(
     cv = _cv_cluster_sizes(rows)
     opp = _opposing_sign_fraction(rows, prune_graph.pruned_adj, prune_graph.nodes)
     size_entropy = _size_entropy_norm(rows)
+    mean_span = _mean_layer_span(rows)
     score_arith = (sil_norm + internal_independence) / 2.0
     score_harm = 2 / ((1 / (sil_norm + 1e-12)) + (1 / (internal_independence + 1e-12)))
     score_geo = np.sqrt(sil_norm * internal_independence)
-    # composite: arithmetic mean of silhouette_norm, (1 - back_edge), independence, size_entropy.
-    # Semantically silhouette_phi_norm when caller passes sim_phi (see auto_grouping.find_best_k).
-    composite_score = (sil_norm + (1.0 - dag_score) + internal_independence + size_entropy) / 4.0
 
     return {
         "score_arith": float(score_arith),
         "score_harm": float(score_harm),
         "score_geo": float(score_geo),
-        "composite_score": float(composite_score),
         "sil_raw": float(sil_raw),
         "sil_norm": float(sil_norm),
         "silhouette_phi_norm": float(sil_norm),
@@ -333,6 +342,7 @@ def _cluster_metrics_from_parts(
         "size_entropy": float(size_entropy),
         "cv_cluster_sizes": float(cv),
         "opposing_sign_frac": float(opp),
+        "mean_layer_span": float(mean_span),
         "n_middle": int(n_middle),
     }
 

@@ -127,7 +127,7 @@ def find_best_k(
 
     if not results:
         return int(eg["eigengap_k"]), {}
-    best_k = max(results, key=lambda x: float(results[x]["composite_score"]))
+    best_k = max(results, key=lambda x: float(results[x]["sil_norm"]))
     return best_k, results
 
 
@@ -180,5 +180,5 @@ def find_best_k_for_clusterer(
         result["final_supernodes"] = {s.name: s.member_node_ids() for s in rows}
         results[target_k] = result
 
-    best_k = max(results, key=lambda k: float(results[k]["composite_score"]))
+    best_k = max(results, key=lambda k: float(results[k]["sil_norm"]))
     return best_k, results

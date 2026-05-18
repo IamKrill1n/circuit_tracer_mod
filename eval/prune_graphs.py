@@ -34,7 +34,7 @@ DEFAULT_SHAP_EVAL_NORMALIZATIONS: tuple[NormalizeMethod, ...] = (
     "softmax",
     "entmax",
 )
-DEFAULT_SHAP_VALUES_JSON = Path("demos") / "shap_values.json"
+DEFAULT_SHAP_VALUES_JSON = Path("dataset") / "analogies" / "shap_values.json"
 
 
 def _discover_graph_files(graphs_root: Path, source_sets: tuple[str, ...]) -> dict[str, list[Path]]:
@@ -265,6 +265,11 @@ def run_prune_sweep(args: argparse.Namespace) -> None:
                     for alpha in alphas:
                         for node_thr in node_thresholds:
                             total_runs += 1
+                            thr_dir = norm_dir / f"alpha_{alpha:.2f}" / f"node_{node_thr:.2f}"
+                            prune_graph_path = thr_dir / f"{stem}_prune_graph.pt"
+                            if prune_graph_path.exists():
+                                ok_runs += 1
+                                continue
                             try:
                                 prune_graph = prune_attr_graph(
                                     attr_graph,
@@ -280,9 +285,7 @@ def run_prune_sweep(args: argparse.Namespace) -> None:
                                     act_density_lb=args.act_density_lb,
                                     act_density_ub=args.act_density_ub,
                                 )
-                                thr_dir = norm_dir / f"alpha_{alpha:.2f}" / f"node_{node_thr:.2f}"
                                 thr_dir.mkdir(parents=True, exist_ok=True)
-                                prune_graph_path = thr_dir / f"{stem}_prune_graph.pt"
                                 save_prune_graph(prune_graph, str(prune_graph_path))
 
                                 rec = {
@@ -451,7 +454,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
         "--device",
-        default="cpu",
+        default="cuda",
         help="Device for prune tensor math (e.g. 'cpu', 'cuda', 'cuda:0').",
     )
     return parser

@@ -1,0 +1,14 @@
+{
+  "source_manifest": "eval_outputs/analogies/analogies/manifest.json",
+  "output_root": "eval_outputs/analogies/analogies/eval_faithfulness",
+  "model_name": "google/gemma-2-2b",
+  "transcoder_set": "mntss/clt-gemma-2-2b-2.5M",
+  "dtype": "bfloat16",
+  "device": "cuda",
+  "limit": null,
+  "n_records_processed": 900,
+  "n_failures": 0,
+  "results_json": "eval_outputs/analogies/analogies/eval_faithfulness/results.json",
+  "summary_csv": "eval_outputs/analogies/analogies/eval_faithfulness/summary.csv",
+  "failures": []
+}
