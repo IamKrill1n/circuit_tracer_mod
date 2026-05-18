@@ -1,0 +1,440 @@
+% reformulation.tex --- section fragment.
+% Intended to replace the current Section 2 of main.tex via \input{reformulation}.
+% Inherits all macros from main.tex (\layer, \Ncut, \vol, \cut, \sign, \argmin,
+% \argmax, definition / lemma / proposition theorem envs). Flow operators from
+% measure.tex are written as \mathrm{...} to avoid coupling to whether the
+% \DeclareMathOperator versions are present in the preamble.
+
+\section{Problem Formulation}\label{sec:setup}
+
+A summary of an attribution graph is determined by a pruned subgraph, a
+partition of the surviving nodes into supernodes, and the supernode-level
+adjacency that the pair induces. We state the problem in three parts.
+Section~\ref{sec:input} fixes the input, Section~\ref{sec:output} fixes the
+output and the induced summarization graph, and
+Section~\ref{sec:objective} states the objective as the sum of three
+losses---coherence, conservation, and complexity---together with
+structural well-formedness constraints. Section~\ref{sec:attr-instance}
+then commits to a concrete closed form for each loss term. We keep the
+problem statement and its instantiation separable from any
+\emph{solver}: $K$-means on stacked edge profiles, spectral clustering,
+greedy modularity, and the block-coordinate strategy of
+Section~\ref{sec:solution} may minimize different surrogates internally,
+but every solver is scored on the same $L$ defined here.
+
+\subsection{Input}\label{sec:input}
+
+A directed acyclic attribution graph $G = (V, E, W)$ has vertex partition
+$V = V_{\text{emb}} \cup V_{\text{mid}} \cup V_{\text{logit}}$ into
+embedding, mid-graph, and logit nodes; edge set $E$; and signed weight
+matrix $W \in \mathbb{R}^{N \times N}$ with $N = |V|$. We use the
+convention that $W_{uv}$ is the weight on the directed edge $u \to v$,
+so $W$ is sparse and strictly upper-triangular in any topological
+ordering of $V$. Each node carries a layer index $\layer(\cdot)$;
+embeddings sit at layer $0$ and logits at the final layer. Two side data
+accompany $G$: a token-weight vector $\tau \in \mathbb{R}^{|V_{\text{emb}}|}$
+on the source set (normalized SHAP values, $\sum_e \tau_e = 1$) and a
+logit-weight vector $\ell \in \mathbb{R}^{|V_{\text{logit}}|}$ on the
+sink set, identifying which inputs and outputs the summary should
+explain.
+
+\paragraph{Mid-graph nodes.}
+In a cross-layer transcoder attribution graph, $V_{\text{mid}}$
+originally contains both \emph{feature} nodes (interpretable
+transcoder features) and \emph{reconstruction-error} nodes (the
+residual that the transcoder fails to capture at each layer/position).
+Error nodes are not interpretable as concept-bearing units, so we
+restrict $V_{\text{mid}}$ to feature nodes throughout: all subsequent
+references to ``members'' of a supernode, to ``role'' vectors, and to
+the partition $\varphi$ apply only to feature nodes.
+
+\subsection{Output}\label{sec:output}
+
+A \emph{summary} is a triple $(V', E', \varphi)$:
+\begin{itemize}[leftmargin=*,topsep=2pt,itemsep=1pt]
+\item a pruned subgraph $V' \subseteq V$, $E' \subseteq E \cap (V' \times V')$,
+with $V_{\text{emb}} \cup V_{\text{logit}} \subseteq V'$ forced;
+\item a partition $\varphi : V' \to \pi(\varphi)$ assigning each surviving
+node to exactly one \emph{supernode} $S \in \pi(\varphi)$, with every
+$v \in V_{\text{emb}} \cup V_{\text{logit}}$ a singleton supernode.
+\end{itemize}
+The summary induces the \emph{summarization graph}
+$G_{SN} = (\pi(\varphi),\, E^{SN},\, W^{SN})$ whose nodes are the
+supernodes and whose adjacency aggregates the surviving weights:
+\begin{equation}
+W^{SN}_{ST} \;=\; \sum_{(u, v) \in E'} W_{uv}\,
+\mathbf{1}[u \in S]\,\mathbf{1}[v \in T],
+\label{eq:wsn}
+\end{equation}
+with $E^{SN} = \{(S, T) : W^{SN}_{ST} \ne 0,\; S \ne T\}$. The
+summarization graph is the artifact the user reads; $(V', E', \varphi)$
+are the decision variables that produce it.
+
+\subsection{Objective}\label{sec:objective}
+
+\paragraph{Three losses.}
+A summary is good to the extent that (i) the members of each supernode
+share a mechanistic role, (ii) $G_{SN}$ preserves the causal mass that
+flows through $G$ from $V_{\text{emb}}$ to $V_{\text{logit}}$, and (iii)
+the summary is small enough to read. We assemble these into a single
+scalar objective:
+\begin{equation}
+\min_{(V', E', \varphi)}\;
+L(V', E', \varphi)
+\;=\;
+L_{\text{coh}} \;+\; L_{\text{cons}} \;+\; L_{\text{cplx}}.
+\label{eq:Lsum}
+\end{equation}
+Each term is named by what it measures, not by how it is measured:
+\begin{description}[leftmargin=2.0em,style=nextline,topsep=2pt,itemsep=2pt]
+\item[$L_{\text{coh}}(\varphi;\, V', E')$.] Within-supernode disagreement
+on mechanistic role.
+\item[$L_{\text{cons}}(V', E', \varphi;\, G)$.] Causal mass lost when
+$G$ is replaced by $G_{SN}$.
+\item[$L_{\text{cplx}}(V', E', \varphi)$.] Description length of the
+summary.
+\end{description}
+The closed form of each term---and the multipliers that balance them---is
+a property of a \emph{solver}, not of the problem.
+Section~\ref{sec:attr-instance} fixes a concrete instantiation for
+transcoder attribution graphs; Section~\ref{sec:eval} explains how
+candidate solutions to~\eqref{eq:Lsum} are scored.
+
+\paragraph{Structural constraints.}
+Independent of the loss, a summary must be structurally well-formed:
+\begin{description}[leftmargin=2.0em,style=nextline,topsep=2pt,itemsep=2pt]
+\item[(F1) DAG integrity.] $G_{SN}$ is acyclic.
+\item[(F2) Partition well-formedness.] $\varphi$ is a function (each
+$v \in V'$ in exactly one supernode); embedding and logit nodes are
+singletons.
+\end{description}
+(F1) and (F2) are properties any valid summary must satisfy, regardless of
+which loss instantiation or solver is in play. Soft surrogates
+(Lagrangian relaxations, penalty terms, dual variables) are introduced
+only by specific solvers; the problem statement treats them as hard.
+
+\section{Instantiation for the Transcoder Attribution Graph}\label{sec:attr-instance}
+
+The losses of Section~\ref{sec:objective} are abstract. We now define each
+one concretely for the transcoder attribution graph, where feature nodes
+correspond to transcoder features and edge weights $W_{uv}$ encode the
+linear causal contribution of $u$ to $v$ under the cross-layer
+transcoder linearization. The point of this section is to pin down
+\emph{what} is being measured; the survey of solvers and their surrogate
+forms is the subject of Section~\ref{sec:solution}.
+
+\subsection{Coherence}\label{sec:attr-coh}
+
+The \emph{role} of a feature $u \in V'_{\text{mid}}$ is its pair of
+weighted outgoing and incoming edge profiles, with each coordinate
+scaled by the causal importance of its endpoint:
+\begin{align}
+(v_u^{\text{out}})_k &= W_{uk}\,\sqrt{\mathrm{Inf}_k} \nonumber \\
+(v_u^{\text{in}})_k  &= W_{ku}\,\sqrt{\mathrm{Rel}_k} \nonumber \\
+r(u) &= \bigl[\,v_u^{\text{out}}\,;\, v_u^{\text{in}}\,\bigr] \in \mathbb{R}^{2N}.
+\label{eq:role}
+\end{align}
+Here $\mathrm{Inf}_k$ and $\mathrm{Rel}_k$ are the per-node influence
+and relevance scores defined in Appendix~\ref{app:flow} via the Neumann
+series on $G$. Outgoing coordinates are weighted by the
+\emph{downstream} importance of their target ($\sqrt{\mathrm{Inf}_k}$),
+incoming coordinates by the \emph{upstream} importance of their source
+($\sqrt{\mathrm{Rel}_k}$), so the role vector concentrates on the edge
+dimensions that actually carry causal mass. This is exactly the role
+vector computed by every clusterer in our evaluation (the
+\texttt{compute\_phi\_vectors} construction).
+
+We commit to a single closed form for the coherence loss: the
+within-supernode sum of squared Euclidean distances of each member's
+role to the supernode centroid,
+\begin{equation}
+L_{\text{coh}}(\varphi) \;=\;
+\sum_{S \in \pi(\varphi)}\; \sum_{u \in S}
+\;\bigl\lVert r(u) - \bar r(S) \bigr\rVert_2^2,
+\label{eq:Lcoh}
+\end{equation}
+where $\bar r(S) = \frac{1}{|S|} \sum_{u \in S} r(u)$ is the supernode
+centroid in role space.
+Eq.~\eqref{eq:Lcoh} is the $K$-means within-cluster sum of squares on
+the Inf/Rel-weighted edge profiles. It is fixed once and reported
+uniformly across all solvers: a spectral clusterer that internally
+minimizes a normalized cut on a reweighted affinity, a modularity
+clusterer that maximizes a degree-corrected score, and a direct
+$K$-means clusterer all yield a partition $\varphi$, and each is
+scored on the same $L_{\text{coh}}(\varphi)$ above. The internal
+surrogate may differ; the reported number does not.
+
+\paragraph{Why this choice.}
+The Inf/Rel reweighting matches the role vector actually computed by
+the methods we evaluate, and the squared-Euclidean form makes
+$L_{\text{coh}}$ a well-defined function of the partition regardless of
+which surrogate any solver used internally. The price is that
+$\mathrm{Rel}$ inherits its dependence on the token-weight vector
+$\tau$, currently set to SHAP values---the same fairness limitation we
+flag for $L_{\text{cons}}$ (Section~\ref{sec:attr-cons}). A
+steering-based replacement---defining $r(u)$ as the per-feature logit
+perturbation $\Delta_u$ under intervention rather than the structural
+edge profile, and reusing Eq.~\eqref{eq:Lcoh}---would directly measure
+whether grouped features behave alike causally and is the natural
+future iteration.
+
+\subsection{Conservation}\label{sec:attr-cons}
+
+Edges in an attribution graph carry signed linear contributions;
+composing them along directed paths gives the causal mass that reaches
+$V_{\text{logit}}$ from $V_{\text{emb}}$. Conservation is measured in
+the same units. Working with magnitudes $|W|$, define the outgoing
+transition matrix
+\begin{equation}
+P^{\text{out}}_{uv}
+\;=\;
+\frac{|W_{uv}|}{\sum_{w : (u, w) \in E'} |W_{uw}|}
+\label{eq:Pout-reform}
+\end{equation}
+for each non-sink $u \in V'$, and the source vector $F^{\text{src}}$
+equal to $\tau$ on $V_{\text{emb}}$ and zero elsewhere. The node-level
+flow $\mathrm{Flow}(u) = [F^{\text{src}\top}(I - P^{\text{out}})^{-1}]_u$
+is well-defined on a DAG and satisfies a per-node conservation law plus
+the end-to-end identity $\sum_{\ell \in V_{\text{logit}}} \mathrm{Flow}(\ell)
+= 1$ on the original (unpruned) graph. Aggregating to supernodes,
+$\mathrm{Flow}^{SN}(S) = \sum_{u \in S} \mathrm{Flow}(u)$, similarly
+balances at every interior supernode of $G_{SN}$. Full statements,
+proofs, and the supernode lift are deferred to the flow note that
+accompanies this paper.
+
+A summary loses causal mass in two distinct ways.
+
+\paragraph{Pruning loss.}
+Edges and nodes removed in the cut to $(V', E')$ carry flow that no
+longer reaches a logit. The fraction of source mass that survives
+pruning is the \emph{flow completeness}
+\begin{equation}
+\mathcal{C}(V', E')
+\;=\;
+\sum_{\ell \in V_{\text{logit}}} \mathrm{Flow}_{V'}(\ell)
+\;\in\; [0, 1],
+\label{eq:Ccal}
+\end{equation}
+where $\mathrm{Flow}_{V'}$ denotes flow computed on the pruned graph
+with $\tau$ restricted and renormalized. $\mathcal{C}(V', E')$ depends
+only on $(V', E')$ and is partition-invariant.
+
+\paragraph{Aggregation loss.}
+Contracting features into supernodes destroys edge weight in two ways.
+Edges between members of the same supernode become self-loops and are
+dropped from $G_{SN}$. Edges between members of different supernodes
+sum with sign in $W^{SN}_{ST} = \sum_{u \in S, v \in T} W_{uv}$, so
+opposing-sign edges from $S$ to $T$ can partially or fully cancel.
+Both forms of loss are visible directly on the edge magnitudes:
+\begin{equation}
+D_{\text{agg}}(\varphi)
+\;=\;
+1 \;-\;
+\frac{\sum_{(S, T) \in E^{SN}} \lvert W^{SN}_{ST} \rvert}
+     {\sum_{(u, v) \in E'} \lvert W_{uv} \rvert}.
+\label{eq:Dagg}
+\end{equation}
+The numerator is the total magnitude of inter-supernode weight retained
+in $G_{SN}$; the denominator is the total edge magnitude in the pruned
+graph. $D_{\text{agg}}(\varphi) \in [0, 1]$, with $0$ iff every pruned
+edge is preserved as a same-sign contribution to a distinct
+inter-supernode block, and $1$ iff every pruned edge is absorbed (for
+example $|\pi(\varphi)| = 1$, all mid-graph features in one supernode).
+
+\paragraph{Conservation loss.}
+Combining the two,
+\begin{equation}
+L_{\text{cons}}(V', E', \varphi)
+\;=\;
+\underbrace{\bigl(1 - \mathcal{C}(V', E')\bigr)}_{\text{prune loss}}
+\;+\;
+\underbrace{D_{\text{agg}}(\varphi)}_{\text{aggregation loss}}.
+\label{eq:Lcons}
+\end{equation}
+The first term is the price of pruning and depends on $(V', E')$ and on
+the source vector $\tau$; the second is the price of grouping and
+depends only on $\varphi$ given $(V', E')$. No similarity matrix,
+signature reweighting, or spectral relaxation appears in either
+definition.
+
+\paragraph{Fairness caveat on $\tau$.}
+$D_{\text{agg}}$ is structural: it depends only on the signed edge
+weights $W$ and the partition $\varphi$, with no role for $\tau$ or
+$\ell$, so the aggregation half of $L_{\text{cons}}$ is fairness-clean. The
+prune-loss half $1 - \mathcal{C}$ is not: it is precisely the
+fraction of $\tau$-injected mass that fails to reach a logit, which
+makes $\mathcal{C}(V', E')$ equal to the relevance-reachability of
+$V_{\text{logit}}$. Our current pipeline sets $\tau$ to SHAP values,
+so the prune loss inherits the bias of an external attribution
+method. We treat $\tau$ as a free parameter of the problem
+statement---any nonnegative distribution on $V_{\text{emb}}$ with
+$\sum_e \tau_e = 1$ is admissible---and we flag a principled fairness
+fix as open work: candidate alternatives include uniform $\tau =
+1/|V_{\text{emb}}|$, a backward influence-side flow rooted at
+$V_{\text{logit}}$ with logit weights $\ell$, and a two-sided
+symmetrization combining forward and backward completeness.
+
+\subsection{Complexity}\label{sec:attr-cplx}
+
+A reader follows the summary by tracing causal paths from input tokens
+to output logits. The relevant complexity is therefore the typical
+distance from $V_{\text{emb}}$ to $V_{\text{logit}}$ in the supernode
+graph, measured in supernode hops:
+\begin{equation}
+L_{\text{cplx}}(V', E', \varphi)
+\;=\;
+\frac{1}{|\mathcal{P}|}
+\sum_{(e, \ell) \in \mathcal{P}}
+d_{G_{SN}}(e, \ell),
+\label{eq:Lcplx}
+\end{equation}
+where $\mathcal{P} = \{(e, \ell) \in V_{\text{emb}} \times V_{\text{logit}} : \ell \text{ reachable from } e \text{ in } G_{SN}\}$
+and $d_{G_{SN}}(e, \ell)$ is the shortest-path length between $e$ and
+$\ell$ in $G_{SN}$, counted in supernode edges. We set $L_{\text{cplx}}
+= 0$ by convention when $\mathcal{P} = \emptyset$ (a degenerate
+disconnected summary).
+
+Eq.~\eqref{eq:Lcplx} is the plain average shortest-path length over
+embedding-logit pairs; no flow weighting and no $\tau$ enters its
+definition, so $L_{\text{cplx}}$ is fairness-clean in the sense of the
+caveat in Section~\ref{sec:attr-cons}. Collapsing all mid-graph
+features into a single supernode trivially hits the floor
+$L_{\text{cplx}} = 2$ (one hop into the collapsed supernode, one hop
+out), so unbounded grouping is checked by $L_{\text{cons}}$ through
+$D_{\text{agg}}$ rather than rewarded here.
+
+\section{Evaluation Methodology}\label{sec:eval}
+
+A candidate solution to~\eqref{eq:Lsum} is a triple $(V', E', \varphi)$.
+We score it along three axes: (i) the objective itself, decomposed by
+term; (ii) the causal behaviour of the resulting summarization graph
+under intervention; (iii) external utility for the human reader.
+Decomposing in this way lets us compare solvers that minimize different
+surrogates of the same problem on a common scale.
+
+\subsection{Objective-aligned metrics}\label{sec:eval-obj}
+
+Because $L$ is concrete (Section~\ref{sec:attr-instance}), every solver
+is scored on exactly the same three numbers regardless of which
+surrogate it minimized internally.
+\begin{itemize}[leftmargin=*,topsep=2pt,itemsep=1pt]
+\item \textbf{Coherence.} The realized $L_{\text{coh}}(\varphi)$ from
+Eq.~\eqref{eq:Lcoh}: within-supernode sum of squared Euclidean
+distances of the Inf/Rel-weighted role vectors to the supernode
+centroid, identical to running \texttt{compute\_phi\_vectors} followed
+by within-cluster inertia.
+\item \textbf{Conservation.} $\mathcal{C}(V', E')$ and
+$D_{\text{agg}}(\varphi)$ from Eqs.~\eqref{eq:Ccal}--\eqref{eq:Dagg},
+reported separately. The first is partition-invariant given a fixed
+pruner and acts as a sanity check on the pruning step; the second is
+the per-partition quantity solvers compete on. $\mathcal{C}$ depends on
+the choice of $\tau$, which defaults to SHAP values
+(Section~\ref{sec:attr-cons}).
+\item \textbf{Complexity.} $L_{\text{cplx}}(\varphi)$ from
+Eq.~\eqref{eq:Lcplx}: average shortest-path length from
+$V_{\text{emb}}$ to $V_{\text{logit}}$ in $G_{SN}$. We also report
+$|\pi(\varphi)|$ as a descriptive statistic, though it is not part of
+the objective.
+\end{itemize}
+
+\subsection{Causal-behaviour metrics}\label{sec:eval-causal}
+
+$L_{\text{cons}}$ as defined in~\eqref{eq:Lcons} is intrinsic to the
+graph. We additionally verify that the resulting $G_{SN}$ behaves
+causally as the partition claims. The flow-based measures of the
+companion flow note apply directly and are graph-intrinsic (no forward
+passes through the model are required):
+\begin{itemize}[leftmargin=*,topsep=2pt,itemsep=1pt]
+\item \textbf{Flow faithfulness correlation}
+$\mathrm{FaithCorr}_{\mathrm{Flow}}(\varphi)$: Spearman correlation
+between supernode flow $\mathrm{Flow}^{SN}(S)$ and deletion-induced
+flow drop $\Delta \mathcal{C}(S)$. A faithful partition ranks supernodes
+by flow consistently with their causal contribution to logit-bound
+flow.
+\item \textbf{Flow-DAUC} and \textbf{Flow-IAUC}: areas under the
+deletion and insertion curves over supernodes ranked by flow.
+Lower DAUC and higher IAUC indicate that flow-ranked supernodes carry
+the causal mass the rank suggests.
+\item \textbf{Monotonicity} $\mathrm{Mono}(\varphi)$: fraction of
+consecutive ranked supernodes whose deletion drops are non-increasing.
+\item \textbf{Sufficiency} $\mathrm{Suff}_k^{\mathrm{Flow}}$ and
+\textbf{comprehensiveness} $\mathrm{Comp}_k^{\mathrm{Flow}}$ at fixed
+top-$k$: how much sink flow survives keeping or removing only the
+top-$k$ supernodes.
+\end{itemize}
+Each of these scores a partition $\varphi$ using only $(V', E', \varphi)$
+and the source vector $\tau$, with no reference to the solver that
+produced $\varphi$.
+
+\subsection{External utility metrics}\label{sec:eval-ext}
+
+Two further metrics live outside the optimization problem but are the
+practical reason summarization is useful.
+
+\paragraph{Semantic coherence (LLM judge).}
+For each supernode $S$, prompt a judge model with the auto-interpretation
+of every member feature and ask for a coherence score in $[0, 1]$;
+average over supernodes. This measures whether the partition aligns with
+human-readable concepts, which $L_{\text{coh}}$ approximates structurally
+but does not enforce.
+
+\paragraph{Steering.}
+For each supernode $S$ in a held-out evaluation set, scale the
+activations of all member features by a common factor at inference time
+and measure the resulting shift in the target logit. A partition
+supports steering if intervening at the supernode level produces
+predictable and concept-aligned logit shifts. This is the operational
+test of whether $G_{SN}$ exposes causally controllable handles.
+
+\subsection{Two-stage evaluation}\label{sec:eval-compare}
+
+The pipeline factors into a pruning stage (producing $(V', E')$) and
+an aggregation stage (producing $\varphi$), each with its own solver.
+We evaluate the two stages independently. Pruning is scored through
+the prune-loss component $1 - \mathcal{C}(V', E')$ alone, on a
+candidate $(V', E')$ basis, and is reported separately. The protocol
+below is the aggregation comparison, with the pruner held fixed.
+
+\paragraph{Fixed pruner.}
+A single pruning algorithm produces the $(V', E')$ that feeds every
+aggregation solver in the comparison. $\mathcal{C}(V', E')$ is
+therefore identical across rows, the prune-loss contribution to
+$L_{\text{cons}}$ is the same constant in every row, and all
+differences come from $D_{\text{agg}}$, $L_{\text{coh}}$, and
+$L_{\text{cplx}}$.
+
+\paragraph{Per-solver best-configuration reporting.}
+Each aggregation solver has its own hyperparameter space; we sweep
+exhaustively and report \emph{only the best configuration per solver}
+in the comparison table. The hyperparameter spaces are:
+\begin{itemize}[leftmargin=*,topsep=2pt,itemsep=1pt]
+\item \textbf{ASG-spectral (ours)}: number of clusters $K$, mean
+operator $F_{\text{mean}} \in \{\text{arith}, \text{harm}, \text{geo}\}$,
+layer-decay rate $\lambda \in [0, 1]$.
+\item \textbf{ASG-agglomerative (ours)}: same $K, F_{\text{mean}}, \lambda$,
+with agglomerative linkage replacing the spectral relaxation.
+\item \textbf{Greedy modularity}: target community count $K$ on the
+symmetrized weighted adjacency.
+\item \textbf{Spectral-RBF}: $K$, RBF kernel over the Inf/Rel-weighted
+role vectors $r(u)$.
+\item \textbf{$K$-means}: $K$ on the same role vectors.
+\end{itemize}
+``Best'' is decided by a single selection criterion fixed in advance
+and shared across all solvers (the experiments section gives the exact
+form). $K$ ranges over an eigengap-bounded candidate set common to
+every solver. Different solvers may select different $K^\star$, which
+is permitted: matching $|\pi(\varphi)|$ across solvers would force
+sub-optimal configurations on methods whose natural granularity
+differs, and the metrics already account for granularity via
+$L_{\text{cplx}}$.
+
+\paragraph{Reporting and dominance.}
+For each solver's best configuration we report all metric families
+from Sections~\ref{sec:eval-obj}--\ref{sec:eval-ext}. A solver
+dominates if it is Pareto-better on the objective-aligned metrics
+($L_{\text{coh}}, D_{\text{agg}}, L_{\text{cplx}}$) and at least
+matches on causal-behaviour and external metrics. Because every
+objective-aligned metric is intrinsic to the supernode graph---no
+method-private similarity matrix or spectral surrogate enters its
+definition---a solver that does well here is doing well at the stated
+problem rather than at its own internal proxy.

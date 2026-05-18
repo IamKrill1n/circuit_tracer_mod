@@ -72,13 +72,12 @@ overarching objective, leaving it unclear what is being optimized,
 which approximations are being made, and where the algorithm has
 slack. We formulate attribution-graph summarization as a single
 constrained optimization problem over a pruned subgraph and a
-supernode partition, with two terms corresponding to attribution
-faithfulness and bidirectional concept coherence (with readability
-balance handled implicitly by the cut's volume denominators), plus
-hard constraints encoding DAG integrity, layer span, and a
-complexity budget. The granularity hyperparameter $K$ is selected
-externally via grid search under a graph-theoretic criterion (the
-mean of supernode-graph quality measures). We then show that the
+supernode partition, with three terms corresponding to attribution
+faithfulness, bidirectional concept coherence, and readability
+balance, plus hard constraints encoding DAG integrity, layer span,
+and a complexity budget. The granularity hyperparameter $K$ is
+selected externally via grid search under a downstream criterion
+(mean of supernode-graph quality measures). We then show that the
 ASG pipeline---rank-percentile pruning, spectral clustering on a
 layer-decayed bidirectional affinity, and DAG-feasibility
 projection---is exactly a block-coordinate descent strategy on this
@@ -128,23 +127,22 @@ and the supernode partition $\varphi$ at fixed granularity $K$, and
 show that the standard summarization pipeline is exactly a
 block-coordinate-descent strategy on $\mathcal{J}_K$.
 The granularity $K$ is selected by an external grid search under a
-graph-theoretic criterion---the mean of the supernode-graph quality
+downstream criterion---the mean of the supernode-graph quality
 measures reported in evaluation. Concretely:
 
 \begin{itemize}[leftmargin=*,topsep=2pt,itemsep=2pt]
-\item We state criteria in words corresponding to the desiderata of
-the summarization task (Section~\ref{sec:desiderata}), and translate
-them into two objective terms plus three feasibility constraints
-(Section~\ref{sec:objective}), with~(C3) handled implicitly by the
-cut volumes.
+\item We state five \emph{criteria in words} corresponding to the
+desiderata of the summarization task (Section~\ref{sec:criteria}),
+and translate them into three objective terms plus four feasibility
+constraints (Section~\ref{sec:objective}).
 \item We give the closed-form objective $\mathcal{J}_K$ with each
 term tied to one criterion and each constraint tied to one
 desideratum (Equation~\ref{eq:objective}).
 \item We show the pipeline---rank-percentile cumulative-mass pruning,
 spectral clustering on a layer-decayed bidirectional affinity, and
 two-step DAG projection---is the block-coordinate descent strategy
-where Block~1 is solved per-subproblem by greedy knapsack, Block~2
-is solved by Shi--Malik spectral relaxation, and Block~3 is a
+where Block~1 is exactly solved by greedy knapsack, Block~2 is
+solved by Shi--Malik spectral relaxation, and Block~3 is a
 greedy feasibility projection (Section~\ref{sec:solution}).
 \item We give the explicit $K$-selection criterion as a grid search
 maximizing the mean over the supernode-graph quality columns
@@ -152,12 +150,12 @@ maximizing the mean over the supernode-graph quality columns
 \end{itemize}
 
 This framing makes precise what was previously implicit. Each
-hyperparameter has a role: $\eta_V, \eta_E$ are derived from the
-duals of the complexity budget, $\lambda$ is the dual of the
-layer-span constraint, $\alpha$ is the log-pooling temperature in
-the combined-evidence score, $F_{\text{mean}}$ is the strictness of
-the ``both axes agree'' rule for bidirectional similarity, and $K$
-is selected externally rather than optimized.
+hyperparameter has a role: $\eta$'s are Lagrange duals of the
+complexity budget, $\lambda$ is the dual of the layer-span
+constraint, $\alpha$ is the log-pooling temperature in the
+combined-evidence score, $F_{\text{mean}}$ is the strictness of the
+``both axes agree'' rule for bidirectional similarity, and $K$ is
+selected externally rather than optimized.
 
 \section{Related Work}
 
@@ -186,9 +184,7 @@ clustering \cite{shi2000normalized, von2007tutorial} provides the
 standard machinery for normalized-cut objectives and underlies the
 clustering step we analyze. Modularity-based community detection
 \cite{newman2006modularity, clauset2004finding} is the closest baseline
-in the empirical evaluation. Higher-order Cheeger inequalities
-\cite{lee2014multiway, louis2012many} give the approximation
-guarantees for the spectral relaxation we analyze.
+in the empirical evaluation.
 
 \paragraph{Pruning and attribution selection.}
 The cumulative-mass thresholding rule we analyze is the same rule
@@ -250,11 +246,8 @@ supernodes; $|\pi(\varphi)|$ may exceed the grid value $K$ after the
 DAG projection of Section~\ref{sec:solution}. We write $W' = W|_{E'}$
 for the weight matrix restricted to surviving edges. Pruning is
 essential---the raw $V$ has thousands of nodes---so coverage is over
-$V'$, not $V$. We emphasize that $K$ is the \emph{feature} cluster
-count: the realized $|\pi(\varphi)|$ is at least $K +
-|V_{\text{emb}}| + |V_{\text{logit}}|$, and is increased further by
-SCC-splits during DAG projection. The granularity $K$ is selected
-externally (Section~\ref{sec:k-selection}).
+$V'$, not $V$. The granularity $K$ is selected externally
+(Section~\ref{sec:k-selection}).
 
 \subsection{What we want from a summary}\label{sec:desiderata}
 
@@ -267,14 +260,8 @@ logits.
 \item[(C2) Coherence.] Features assigned to the same supernode share
 mechanistic role on both axes: similar influential downstream
 targets \emph{and} similar relevant upstream sources.
-\item[(C3) Readability.] The summary is small (governed by the
-complexity budget~F3 below) and supernode sizes are balanced. We do
-not encode balance as a separate objective term; as
-Section~\ref{sec:solution} shows, the volume denominators of the
-normalized cut in term~(B) discourage tiny clusters and thereby
-handle (C3) implicitly. (C3) is therefore absent from the
-closed-form objective; we list it among the desiderata to make the
-implicit handling explicit.
+\item[(C3) Readability.] The summary is small, and supernode sizes
+are balanced.
 \end{description}
 
 Beyond these criteria, a summary must be structurally well-formed:
@@ -282,7 +269,7 @@ the induced supernode graph must be acyclic (F1), each feature
 supernode should span few layers (F2), and $(V', E')$ must respect a
 complexity budget $|V'| + \beta|E'| \le B$ (F3), where $B > 0$ is a
 user-supplied complexity budget and $\beta \ge 0$ trades edge cost
-against node cost. The next subsection turns the criteria into
+against node cost. The next subsection turns the three criteria into
 measurable quantities; the structural requirements re-enter as hard
 constraints on the objective.
 
@@ -368,107 +355,62 @@ is
 with $\cut(S_k, \bar S_k) = \sum_{i \in S_k, j \notin S_k} \tilde S_{ij}$
 and $\vol(S_k) = \sum_{i \in S_k} \sum_j \tilde S_{ij}$. Minimizing
 Ncut keeps high-affinity pairs together (serving C2) while the
-volume denominators discourage tiny clusters (handling C3
-implicitly); the layer-decay factor in $\tilde S$ simultaneously
-enforces F2.
+volume denominators discourage tiny clusters (partially serving C3);
+the layer-decay factor in $\tilde S$ simultaneously enforces F2.
 
 \paragraph{Operationalizing C3.}
-We do not introduce a separate balance term. The volume denominator
-$\vol(S_k) = \sum_{i \in S_k} \sum_j \tilde S_{ij}$ in
-Eq.~\eqref{eq:ncut} penalizes assignments that produce vanishingly
-small clusters, which is the failure mode (C3) is meant to rule
-out. A quadratic balance penalty $\sum_k (|S_k| - \bar n)^2$ would
-be a stronger enforcement but would also resist legitimate size
-imbalance driven by the data; we prefer the implicit handling and
-treat any residual imbalance as a property of $\tilde S$ to be
-diagnosed post~hoc via the size-entropy quality measure
-(Section~\ref{sec:k-selection}).
+Letting $\bar n = |V'_{\text{feat}}|/K$ be the mean cluster size,
+balance is the squared deviation $\sum_k (|S_k| - \bar n)^2$.
 
 \subsection{Objective}\label{sec:objective}
 
-Aggregating the two operationalized criteria with multipliers
-$\rho_1, \rho_2, \rho_3 \ge 0$, the summarization problem at fixed
+Aggregating the three operationalized criteria with multipliers
+$\rho_1, \ldots, \rho_4 \ge 0$, the summarization problem at fixed
 $K$ is $\min_{V', E', \varphi} \mathcal{J}_K(V', E', \varphi)$ with
 \begin{align}
 \mathcal{J}_K &= \underbrace{-\rho_1 \!\!\sum_{u \in V'}\!\! C^V_u
 \;-\; \rho_2 \!\!\!\sum_{(u,v) \in E'}\!\!\!\! C^E_{uv}}_{\text{(A): C1}}
 \nonumber\\[1pt]
 &\;+\; \underbrace{\rho_3 \cdot \Ncut\bigl(\varphi;\, \tilde S(V', E')\bigr)}_{\text{(B): C2 + F2}}
+\nonumber\\[1pt]
+&\;+\; \underbrace{\rho_4 \!\sum_{k=1}^K (|S_k| - \bar n)^2}_{\text{(C): C3}}
 \label{eq:objective}
 \end{align}
 subject to $G_{SN}(\varphi, V', E')$ being a DAG (F1),
 $|V'| + \beta|E'| \le B$ with the forced-keep set in $V'$ (F3), and
 $\deg_{E'}(u) \ge 1$ for all $u \in V'_{\text{feat}}$ (housekeeping).
-Criterion (C3) is handled implicitly by the volume denominators in
-term~(B) and is not encoded as a separate objective term.
-
-Each hyperparameter has a precise role: $\rho_1, \rho_2$ can be
-reparameterized monotonically to the cumulative-mass thresholds
-$\eta_V, \eta_E$ used by the solver in
+Each hyperparameter has a precise role: $\rho_1, \rho_2$ are the
+duals of the complexity budget (F3) and reparameterize to the
+cumulative-mass thresholds $\eta_V, \eta_E$ used by the solver in
 Section~\ref{sec:solution}; $\lambda$ is the dual of (F2); $\alpha$
 is the log-pooling temperature; $F_{\text{mean}}$ controls
 bidirectional strictness; $K$ is selected externally.
 
-The two objective terms depend on disjoint subsets of the decision
-variables---term~(A) on $(V', E')$, term~(B) on $\varphi$ via
-$\tilde S(V', E')$. This structure dictates the two-block
-decomposition of the next section, augmented by a feasibility
-projection for~(F1).
-
-\paragraph{Bilevel structure.}
-Strictly speaking, $\mathcal{J}_K$ is the \emph{inner} problem at
-fixed granularity $K$. The full pipeline is bilevel:
-\begin{equation}
-\begin{aligned}
-K^\star = \argmax_{K \in \mathcal{K}} \;
-&\Psi\!\left(G_{SN}(\varphi^{(K)})\right) \\
-\text{s.t.} \;\;
-&(V'^{(K)}, E'^{(K)}, \varphi^{(K)}) \in \argmin \mathcal{J}_K,
-\end{aligned}
-\label{eq:bilevel}
-\end{equation}
-with $\Psi$ the graph-theoretic criterion of
-Section~\ref{sec:k-selection} and $\mathcal{K}$ a finite grid. We
-chose this bilevel form rather than folding $K$ into $\mathcal{J}_K$
-(e.g., via a description-length penalty on $|\pi(\varphi)|$) because
-$\Psi$ scores the realized supernode graph \emph{after} DAG
-projection, which the inner objective cannot anticipate: SCC-splits
-inflate $|\pi(\varphi)|$ above $K$ by an amount that depends on the
-cluster shapes produced in Block~2. The outer search therefore
-evaluates the full pipeline output rather than its pre-projection
-proxy.
+The three terms depend on disjoint subsets of the decision
+variables---term (A) on $(V', E')$, term (C) on $\varphi$, term (B)
+on both via $\tilde S(V', E')$. This structure dictates the
+three-block decomposition of the next section.
 
 \section{Solution: Block-Coordinate Strategy}\label{sec:solution}
 
 \input{fig_method}
 
-$\mathcal{J}_K$ is jointly intractable, so we decompose by variable
-(Figure~\ref{fig:pipeline}). The dependency graph between terms and
-variables is acyclic: term~(A) sees only $(V', E')$; term~(B)
-couples $(V', E')$ and $\varphi$ but only through
-$\tilde S(V', E')$, which is fixed once $(V', E')$ are. This gives
-a two-block coordinate descent in the variables. A third step is
-required by~(F1), which is combinatorial in $\varphi$ and admits no
-smooth penalty compatible with the Ncut relaxation; it must be
-enforced as a feasibility projection after clustering.
-
-We emphasize that a single forward sweep is \emph{not} a fixed
-point of coordinate descent on $\mathcal{J}_K$. Block~3 modifies
-$\varphi$ to restore~(F1), and term~(B) depends on $\varphi$, so
-the post-projection partition is in general suboptimal for
-$\Ncut(\varphi; \tilde S)$ relative to the Block~2 output. What
-does hold is weaker: the coupling among \emph{terms (A) and (B)
-before projection} is one-directional
-($(V', E') \to \tilde S \to \varphi$), so Blocks~1--2 form an exact
-forward pass on the relaxed problem (without~F1), and Block~3 is a
-feasibility projection onto the DAG constraint. Iterating the sweep
-could in principle decrease $\mathcal{J}_K$ further by re-clustering
-against the projected $\varphi$; we do not do so, treating the
-single sweep as a deliberate computational simplification rather
-than a fixed-point property.
+$\mathcal{J}_K$ is jointly intractable, so we decompose by
+variable (Figure~\ref{fig:pipeline}). The dependency graph between
+terms and variables is acyclic: (A) sees only $(V', E')$; (C) sees
+only $\varphi$; (B) couples the two but only through $\tilde S(V',
+E')$, which is fixed once $(V', E')$ are. This gives a two-block
+coordinate descent in the variables. A third step is required by
+(F1), which is combinatorial in $\varphi$ and admits no smooth
+penalty compatible with the Ncut relaxation; it must be enforced as
+a feasibility projection \emph{after} clustering. Because the
+coupling is one-directional within a sweep---$(V', E') \to \tilde S
+\to \varphi$, with the projection modifying only $\varphi$---a
+single forward sweep is a fixed point of the iteration, not an
+approximation of one.
 
 \paragraph{Block 1: pruning.}
-Hold $\varphi$ uncommitted and drop term~(B). The remaining
+Hold $\varphi$ uncommitted and drop term (B). The remaining
 subproblem in $(V', E')$ is a unit-cost knapsack on $C^V$ and $C^E$
 under budget (F3), with housekeeping cleanup. The exact greedy
 solver---sort by score, take the prefix that fills the budget---is
@@ -487,9 +429,9 @@ We solve it by Shi--Malik spectral
 relaxation~\cite{shi2000normalized, von2007tutorial}: project onto
 the bottom-$K$ eigenvectors of the symmetric normalized Laplacian
 of $\tilde S$, then discretize via $K$-means. The volume
-denominators of Ncut provide implicit balance, which is how (C3)
-is handled in this framework; a small $\varepsilon$-clamp on
-$\tilde S$ keeps the Laplacian connected.
+denominators of Ncut provide implicit balance, partially handling
+term (C); a small $\varepsilon$-clamp on $\tilde S$ keeps the
+Laplacian connected.
 
 \paragraph{Block 3: DAG projection.}
 The output of Block~2 may violate (F1). We restore it in two steps.
@@ -501,24 +443,37 @@ strongly connected component of size $\ge 2$, split the cluster
 with the widest layer span at its median layer; each split
 increases $|\pi(\varphi)|$ by one. Repeat until no SCCs remain.
 Termination, ordering rationale, and the layer-locality descent
-argument are in Appendix~\ref{app:method}.E. Block~3 thus does
-double duty: it enforces (F1) and simultaneously tightens (F2) by
-reducing the layer span of every cluster it splits.
+argument are in Appendix~\ref{app:method}.E.
 
 \paragraph{Optimality.}
-Block~1 is exact for each of its two subproblems (unit-cost
-knapsack) but not jointly optimal in $(V', E')$ due to the
-edge-score recomputation coupling
-(Proposition~\ref{prop:block1}). Block~2 inherits the higher-order
-Cheeger bound for spectral Ncut relaxation
-(Proposition~\ref{prop:block2}). Block~3 is a feasibility
-projection with no approximation guarantee against minimum-mass DAG
-repair (the latter being Min-Feedback-Arc-Set on the cluster
-graph). No joint bound on $\mathcal{J}_K$ is claimed. Formal
-statements in Appendix~\ref{app:method}.F.
-Table~\ref{tab:obj-algo} summarizes the mapping.
+Block 1 is exact for its subproblem (unit-cost knapsack). Block 2
+inherits the higher-order Cheeger bound for spectral Ncut
+relaxation. Block 3 is a feasibility projection with no
+approximation guarantee against minimum-mass DAG repair (the latter
+being Min-Feedback-Arc-Set on the cluster graph). No joint bound
+on $\mathcal{J}_K$ is claimed. Formal statements in
+Appendix~\ref{app:method}.F. Table~\ref{tab:obj-algo} summarizes
+the mapping.
 
-
+\begin{table}[t]
+\centering
+\caption{Mapping from objective components to algorithm steps.}
+\label{tab:obj-algo}
+\footnotesize
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Component} & \textbf{Step} & \textbf{Optimality}\\
+\midrule
+Term (A) + F3       & Cumulative-mass pruning & Exact (knapsack) \\
+Term (B), fixed $K$ & Spectral + $K$-means    & Cheeger bound \\
+F2 (in term B)      & $e^{-\lambda \Delta_{ij}}$ decay & Soft \\
+Constraint F1       & Direction + SCC-split   & No guarantee \\
+Housekeeping        & Dangling cleanup        & Exact \\
+Term (C)            & Implicit in Ncut volumes & Implicit \\
+$K$ selection       & Grid search + $\Psi$ (\S\ref{sec:k-selection}) & Heuristic \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \begin{algorithm}[h]
 \caption{Block-coordinate strategy on $\mathcal{J}_K$}
@@ -552,60 +507,41 @@ grid $\mathcal{K}$; criterion $\Psi$
 
 \subsection{Granularity selection}\label{sec:k-selection}
 
-$K$ is selected externally over a finite grid $\mathcal{K}$ by
-maximizing an interventional criterion that measures the
-\emph{clustering} quality of $\varphi^{(K)}$ rather than properties
-of the attribution graph that produced it. Define
+$K$ is not optimized inside $\mathcal{J}_K$; it is selected by an
+external grid search over a finite set $\mathcal{K}$, using a
+criterion $\Psi$ computed on the resulting supernode graph. We use
+the unweighted mean of five graph-theoretic quality measures
+(back-edge fraction, internal independence, size entropy,
+opposing-sign fraction, output-direction cosine gap), each oriented
+so larger is better and standardized to $[0,1]$ before averaging.
+Definitions and targeting (which criterion each measure probes) are
+in Appendix~\ref{app:method}.G. The chosen granularity is
 \begin{equation}
-\Psi^{\text{causal}}(K)
-= \max\!\bigl(0,\; \kappa_{\text{intra}}(K) - \kappa_{\text{inter}}\bigr)
-  \;-\; \omega \cdot \frac{|\pi(\varphi^{(K)})|}{|V'_{\text{feat}}|},
-\label{eq:psi-causal}
+K^\star = \argmax_{K \in \mathcal{K}} \Psi(G_{SN}^{(K)}), \quad
+\Psi = \tfrac{1}{|\mathcal{M}|}\sum_{m \in \mathcal{M}}\psi^{(m)}_K.
+\label{eq:K-star}
 \end{equation}
-with $\kappa_{\text{intra}}(K)$ the pair-weighted mean cosine of
-post-ablation logit perturbations $\Delta_f$ among features sharing
-a supernode (singletons excluded), $\kappa_{\text{inter}}$ a
-random-pair baseline, and $\omega > 0$ a single complexity weight.
-
-The construction has three properties that make it suitable for
-external $K$-selection. First, both $\kappa_{\text{intra}}$ and
-$\kappa_{\text{inter}}$ are computed from forward passes through
-the transcoder substrate under feature ablation, signal
-\emph{disjoint} from the attribution weights $W$ that drive Blocks~1
-and~2. Selection by $\Psi^{\text{causal}}$ therefore evaluates
-whether the attribution-derived structure generalizes to causal
-effects under intervention, rather than re-measuring how well
-$\mathcal{J}_K$ was minimized. Second, $\Psi^{\text{causal}}$ is
-\emph{partition-only}: it depends on $\varphi^{(K)}$, $V'_{\text{feat}}$,
-and the cached $\{\Delta_f\}$, with no reference to $\tilde S$,
-$\mathcal{J}_K$, or any ASG-internal quantity. The same criterion
-scores partitions produced by Modularity, K-means, or any other
-baseline on the same Block~1 output. Third, $\Psi^{\text{causal}}$
-has an \emph{interior optimum}: the gap term vanishes at $K=1$
-(every pair is intra-cluster, so $\kappa_{\text{intra}} =
-\kappa_{\text{inter}}$) and at $K=|V'_{\text{feat}}|$ (no non-trivial
-intra-cluster pairs exist), while the penalty grows monotonically
-in the realized cluster count $|\pi(\varphi^{(K)})|$, so any
-$K^\star \in \arg\max \Psi^{\text{causal}}$ lies strictly in the
-interior. Derivation, ablation cache cost, weighting choices, and
-the $\omega$ sensitivity sweep are in Appendix~\ref{app:k-criterion}.
-
-
+We use $\mathcal{K} = \{\lfloor n/2 \rfloor, \lfloor n/3 \rfloor\}$
+with $n = |V'_{\text{feat}}|$, so Algorithm~\ref{alg:asg}'s outer
+loop runs Blocks~2--3 twice per graph. $\Psi$ is evaluated on the
+post-projection graph, which accounts for the slack from
+SCC-splits inflating $|\pi(\varphi)|$ above $K$.
 
 \section{Experiments}\label{sec:exp}
 
 We evaluate the block-coordinate solver against three $K$-matched
-baselines on attribution graphs from Gemma-2-2B.
+baselines on two synthetic datasets of attribution graphs from
+Gemma-2-2B.
 
 \subsection{Setup}
 
 \paragraph{Datasets.}
-We evaluate on attribution graphs from Gemma-2-2B on
-\emph{analogies prompts} of the form ``The saying goes: A is to B as
-C is to,'' testing whether the model recovers the relation between
-A and B and applies it to C. We report on $N=55$ pruned attribution
-graphs. Results on a multihop reasoning dataset are qualitatively
-consistent and deferred to Appendix~\ref{app:multihop}.
+\textit{Multihop reasoning prompts}: factual recall queries requiring
+two reasoning steps. \textit{Analogies}: prompts of the form
+``The saying goes: A is to B as C is to,'' testing whether the
+model recovers the relation between A and B and applies it to C. We
+report on $N=55$ pruned attribution graphs from the analogies
+dataset.
 
 \paragraph{Baselines.}
 All baselines operate on the same Block~1 output as our solver and
@@ -641,13 +577,12 @@ each mean operator.
 
 Table~\ref{tab:main} summarizes performance. The three ASG variants
 together dominate all causal-coherence measures. At every $K$,
-\textsc{ASG-arith} records 3.6--9.2$\times$ fewer back-edges than
-the best baseline (Table~\ref{tab:main}) and ranks first on internal
-independence, while \textsc{ASG-harm} and \textsc{ASG-geo}
-essentially eliminate opposing-sign pairs (0.008--0.086 vs
-0.235--0.400 for baselines) and push intra-supernode output
-directions into near-unit alignment (cosine gap 0.96--0.99 vs
-$-0.04$ to 0.44).
+\textsc{ASG-arith} records 3--7$\times$ fewer back-edges than the
+best baseline (F1/D1) and ranks first on internal independence,
+while \textsc{ASG-harm} and \textsc{ASG-geo} essentially eliminate
+opposing-sign pairs (0.008--0.086 vs 0.235--0.400 for baselines) and
+push intra-supernode output directions into near-unit alignment
+(cosine gap 0.96--0.99 vs $-0.04$ to 0.44).
 
 \paragraph{Reading by objective term.}
 The mean operator $F_{\text{mean}}$ acts on term (B) through $\tilde S$.
@@ -655,10 +590,10 @@ Arithmetic preserves more in/out structural signal and so wins the
 structural measures (back-edge, independence); harmonic and geometric
 sharpen the similarity by penalizing pairs weak on either side,
 producing tighter directionally-consistent clusters at the cost of a
-small rise in back-edges. Modularity wins size entropy by virtue of
-its balance-favoring objective but loses every causal-coherence
-measure---a direct consequence of being undirected (it sees no
-constraint (F1)).
+small rise in back-edges. Modularity wins size entropy (term C) by
+virtue of its balance-favoring objective but loses every
+causal-coherence measure---a direct consequence of being undirected
+(it sees no constraint (F1)).
 
 \paragraph{Internal independence saturates.}
 Internal independence is above 0.90 across all methods on this
@@ -696,8 +631,8 @@ K-means            & $n/3$ & 0.140 & 0.931 & 0.827 & 0.277 & 0.360 \\
 
 \subsection{Granularity selection in practice}
 
-Computing the criterion $\Psi$ of Eq.~\eqref{eq:K-star} on each row
-of Table~\ref{tab:main} (with cost-style measures negated and all
+Computing the criterion $\Psi$ of Eq.~\eqref{eq:criterion} on each
+row of Table~\ref{tab:main} (with cost-style measures negated and all
 measures standardized to $[0,1]$) and averaging selects
 \textsc{ASG-harm} or \textsc{ASG-geo} at $K=n/2$ as the maximum,
 consistent with their dominance on the directional measures despite
@@ -707,7 +642,7 @@ best balances the causal-coherence measures (the ones the objective
 $\mathcal{J}_K$ targets through term (B)) without being dragged
 around by the saturated internal-independence column.
 
-\subsection{Causal validation via supernode-level ablation}\label{sec:causal-validation}
+\subsection{Causal validation via supernode-level ablation}
 
 The measures of Table~\ref{tab:main} are graph-theoretic: they
 evaluate the supernode partition through the (already-computed)
@@ -726,10 +661,10 @@ correlation between supernode edge weights and downstream drops:
 \rho_{\text{edge}} = \mathrm{Spearman}\bigl(W^{SN}(S_A \to S_B),\; 1 - r_{A \to B}\bigr).
 \label{eq:rho-edge}
 \end{equation}
-This probes whether the supernode edges---defined as aggregated
-attribution mass---predict actual causal effects, which is the
-strongest interventional test of term (B) we can construct from the
-partition alone.
+This probes whether the supernode edges---defined by
+Definition~\ref{def:sn-edge} as aggregated attribution mass---predict
+actual causal effects, which is the strongest interventional test of
+term (B) we can construct from the partition alone.
 
 \paragraph{Per-feature test.}
 For each feature $f \in S$, we ablate $f$ in isolation and record the
@@ -742,7 +677,7 @@ indicates that grouped features push the logit distribution in
 genuinely similar directions---an interventional counterpart to the
 output-direction cosine measure of Section~\ref{sec:k-selection}.
 
-\section{Limitations and Future Work}\label{sec:limitations}
+\section{Limitations and Future Work}
 
 The block-coordinate strategy makes several approximations that
 admit natural improvements within our framework:
@@ -763,13 +698,6 @@ guarantee. Replacing it with min-cost feedback arc set on the cluster
 graph would optimally repair the DAG constraint at minimum mass loss,
 and is the largest improvement headroom in the pipeline.
 
-\paragraph{Single-sweep coordinate descent.}
-The pipeline is a single forward sweep rather than an iterated
-coordinate descent. Block~3's modification of $\varphi$ takes the
-partition off the Block~2 optimum, so iterating Blocks~2--3 (with
-Block~1 frozen) could decrease $\mathcal{J}_K$ further. We do not
-characterize the size of this gap.
-
 \paragraph{Granularity criterion.} The mean of standardized quality
 measures gives equal weight to each measure. A learned criterion,
 calibrated against downstream interventional tests
@@ -787,19 +715,18 @@ model families beyond Gemma is needed.
 
 We formulated attribution-graph summarization as a single
 constrained optimization problem $\mathcal{J}_K$ over the pruned
-subgraph and supernode partition, with two terms tied to
-faithfulness and coherence (plus implicit balance from the cut
-volumes), and hard constraints encoding DAG integrity, layer span,
-and a complexity budget. The granularity $K$ is selected by external
-grid search under the mean of standardized supernode-graph quality
-measures. We then showed that the standard ASG pipeline---
-rank-percentile pruning, spectral clustering on a layer-decayed
-bidirectional affinity, and DAG projection---is a block-coordinate
-descent strategy on this objective, with one principled relaxation
-or projection per block. This framing makes each hyperparameter the
-dual of a constraint or a structural choice about evidence pooling,
-locates the algorithm's optimality gaps (spectral relaxation, greedy
-DAG repair, single-sweep coordinate descent), and points to concrete
+subgraph and supernode partition, with three terms tied to
+faithfulness, coherence, and balance, plus hard constraints encoding
+DAG integrity, layer span, and a complexity budget. The granularity
+$K$ is selected by external grid search under the mean of standardized
+supernode-graph quality measures. We then showed that the standard
+ASG pipeline---rank-percentile pruning, spectral clustering on a
+layer-decayed bidirectional affinity, and DAG projection---is exactly
+a block-coordinate descent strategy on this objective, with one
+principled relaxation or projection per block. This framing makes
+each hyperparameter the dual of a constraint or a structural choice
+about evidence pooling, locates the algorithm's optimality gaps
+(spectral relaxation, greedy DAG repair), and points to concrete
 improvements in each block.
 
 \bibliography{ref}
@@ -861,11 +788,9 @@ M_\eta(C) = \{u : C_u \ge C_{(t)}\}, \\
 t = \min\{k : \tfrac{\sum_{j \le k} C_{(j)}}{\sum_j C_{(j)}} \ge \eta\},
 \end{align}
 with $C_{(j)}$ the $j$-th largest score. Duality between
-$(\eta_V, \eta_E)$ and the primal budget $(B, \beta)$ is monotonic:
-for fixed score distribution, increasing $\eta$ enlarges the kept
-set, which relaxes the budget constraint. Sequential node-then-edge
-application, dangling-node cleanup loop, and full pseudocode (former
-Algorithm~1).
+$(\eta_V, \eta_E)$ and the primal budget $(B, \beta)$. Sequential
+node-then-edge application, dangling-node cleanup loop, and full
+pseudocode (former Algorithm~1).
 
 \subsection*{A.5. Block 3: DAG projection procedure}\label{app:block3}
 
@@ -879,48 +804,22 @@ split). Full procedure pseudocode.
 
 \subsection*{A.6. Optimality remarks}\label{app:optimality}
 
-\begin{proposition}[Block 1]\label{prop:block1}
-For fixed $(\eta_V, \eta_E)$, the node-pruning subproblem
-$\max_{V' \subseteq V} \sum_{u \in V'} C^V_u$ subject to
-$|V'| \le B_V$ is solved exactly by sorting on $C^V$ and taking the
-top-mass prefix (unit-cost knapsack, hence trivially exact). The
-edge-pruning subproblem
-$\max_{E' \subseteq E \cap (V' \times V')} \sum_{(u,v) \in E'} C^E_{uv}$
-subject to $|E'| \le B_E$, on the node-pruned graph, is likewise
-solved exactly by cumulative-mass thresholding. The sequential
-composition (node-prune, then edge-prune on the result) is
-\emph{not} jointly optimal in $(V', E')$, because $C^E_{uv}$ depends
-on the surviving edge set through the recomputation of
-$\text{Inf}_{uv}$ and $\text{Rel}_{uv}$ on the node-pruned graph; a
-node removed in the first step may carry edges whose joint mass
-would have exceeded that of edges kept in the second step under the
-original graph's flow quantities. The conditional optimality of the
-sequential procedure is the standard guarantee for greedy-on-greedy
-decompositions of coupled knapsacks; a joint LP relaxation would
-tighten this and is the natural improvement headroom for Block~1.
+\begin{proposition}[Block 1]
+For fixed $(\eta_V, \eta_E)$, the node and edge subproblems are each
+solved exactly by cumulative-mass thresholding (unit-cost knapsack).
+The sequential composition is conditionally optimal given the
+previous step's output but not jointly optimal in $(V', E')$.
 \end{proposition}
 
-\begin{proposition}[Block 2]\label{prop:block2}
-Let $\varphi^\star$ minimize $\Ncut(\,\cdot\,; \tilde S)$ over
-partitions of $V'_{\text{feat}}$ into $K$ nonempty clusters, and let
-$\varphi_{\text{spec}}$ be the partition recovered by Shi--Malik
-spectral relaxation followed by $K$-means rounding on the bottom-$K$
-eigenvectors of the symmetric normalized Laplacian of $\tilde S$.
-Then the higher-order Cheeger inequalities of
-\cite{lee2014multiway, louis2012many} give
-\begin{equation}
-\Ncut(\varphi_{\text{spec}}; \tilde S)
-\le C \cdot K^2 \cdot \Ncut(\varphi^\star; \tilde S),
-\end{equation}
-for an absolute constant $C > 0$, where the bound is on the relaxed
-affinity $\tilde S$ that already absorbs the layer-locality
-multiplier $\lambda$; the optimum $\varphi^\star$ is defined with
-respect to the same $\tilde S$. Tighter $O(\sqrt{\log K})$
-guarantees hold under spectral-gap assumptions on the Laplacian of
-$\tilde S$ that we do not verify here.
+\begin{proposition}[Block 2]
+The Shi--Malik spectral relaxation of $\Ncut(\cdot\,; \tilde S)$
+at $|\pi(\varphi)| = K$ admits the higher-order Cheeger bound
+$\Ncut(\varphi_{\text{spec}}; \tilde S) \le
+O(\sqrt{K}) \cdot \Ncut(\varphi^\star; \tilde S)$
+\cite{lee2014multiway}.
 \end{proposition}
 
-\begin{proposition}[Block 3]\label{prop:block3}
+\begin{proposition}[Block 3]
 Per-pair direction selection optimally eliminates all 2-cycles.
 SCC-split terminates in at most $|V'_{\text{feat}}|$ iterations. No
 approximation guarantee against minimum-mass DAG repair
@@ -929,12 +828,9 @@ approximation guarantee against minimum-mass DAG repair
 
 \paragraph{Joint guarantee.}
 The forward sweep is well-defined because the coupling between
-Blocks~1 and 2 is one-directional, but Block~3 takes the partition
-off the Block~2 optimum, so the single sweep is not a fixed point
-of coordinate descent on $\mathcal{J}_K$. No joint bound on
+blocks is one-directional within a sweep. No joint bound on
 $\mathcal{J}_K$ is claimed. Tightening Block~3 via LP relaxation of
 Min-Feedback-Arc-Set is the largest improvement headroom.
-
 \subsection*{G. Granularity-selection quality measures}\label{app:k-selection}
 
 The criterion $\Psi$ of Eq.~\eqref{eq:K-star} averages the following
@@ -964,160 +860,4 @@ post-projection evaluation: each SCC-split in Block~3 increases
 $|\pi(\varphi)|$ by one, so the realized cluster count may exceed
 the grid value $K$; computing $\Psi$ on the post-projection graph
 folds this slack into selection rather than into the optimization.
-
-
-\begin{table}[t]
-\centering
-\caption{Mapping from objective components to algorithm steps.}
-\label{tab:obj-algo}
-\footnotesize
-\begin{tabular}{@{}lll@{}}
-\toprule
-\textbf{Component} & \textbf{Step} & \textbf{Optimality}\\
-\midrule
-Term (A) + F3       & Cumulative-mass pruning & Per-subproblem exact \\
-                    &                         & (Prop.~\ref{prop:block1}) \\
-Term (B), fixed $K$ & Spectral + $K$-means    & Higher-order Cheeger \\
-F2 (in term B)      & $e^{-\lambda \Delta_{ij}}$ decay & Soft (Lagrangian) \\
-Constraint F1       & Direction + SCC-split   & Feasibility only \\
-Housekeeping        & Dangling cleanup        & Exact \\
-C3 (no term)        & Implicit in Ncut volumes & Implicit \\
-$K$ selection       & Grid search + $\Psi$ (\S\ref{sec:k-selection}) & Heuristic \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection*{H. Multihop dataset results}\label{app:multihop}
-
-Results on the multihop reasoning dataset (factual recall queries
-requiring two reasoning steps) follow the same qualitative pattern
-as Table~\ref{tab:main}: ASG variants dominate the causal-coherence
-measures while Modularity wins size entropy. Detailed numbers are
-omitted from this version for space.
-
-\subsection*{I. The interventional $K$-selection criterion}\label{app:k-criterion}
- 
-This appendix gives the full derivation, computational details, and
-sensitivity analysis for $\Psi^{\text{causal}}$ of
-Eq.~\eqref{eq:psi-causal}.
- 
-\paragraph{Per-feature ablation cache.}
-For each $f \in V'_{\text{feat}}$ we clamp the post-encoder
-activation $z_f$ to zero and propagate through the cross-layer
-transcoder substrate, recording the last-position logit
-perturbation $\Delta_f \in \mathbb{R}^{|V_{\text{logit}}|}$. The
-cache $\{\Delta_f\}_{f \in V'_{\text{feat}}}$ is built once per
-attribution graph at cost $|V'_{\text{feat}}|$ forward passes and
-shared across all $K \in \mathcal{K}$ and across all clustering
-methods (ASG variants and baselines). No ablation depends on
-$\varphi$, so the cost is incurred once per graph regardless of how
-many $K$ values are scored.
- 
-\paragraph{Pair-weighted intra-cluster cosine.}
-For partition $\varphi^{(K)}$ with realized supernodes $\pi^{(K)}$,
-let $\pi^{(K)}_{\ge 2} = \{S \in \pi^{(K)} : |S| \ge 2\}$ be the
-non-singleton supernodes. The pair-weighted intra-cluster cosine is
-\begin{equation}
-\kappa_{\text{intra}}(K) =
-\frac{\sum_{S \in \pi^{(K)}_{\ge 2}}
-      \sum_{\{f,g\} \subseteq S} \cos(\Delta_f, \Delta_g)}
-     {\sum_{S \in \pi^{(K)}_{\ge 2}} \binom{|S|}{2}}.
-\label{eq:kappa-intra}
-\end{equation}
-Pair-weighting (rather than averaging per-cluster means) ensures
-that a small cluster of size 2 does not contribute equally to a
-large cluster of size 20: the denominator counts pairs, so the
-quantity is the unbiased global mean cosine over intra-cluster pairs.
-This matters at the $K = |V'_{\text{feat}}|$ limit, where
-$\pi^{(K)}_{\ge 2} = \emptyset$ and $\kappa_{\text{intra}}$ is
-undefined; we set the gap term to $0$ by convention, which is the
-appropriate value (no within-cluster structure can be observed
-because no within-cluster pairs exist).
- 
-\paragraph{Cross-cluster baseline.}
-The cross-cluster baseline is
-\begin{equation}
-\kappa_{\text{inter}} = \frac{1}{M} \sum_{m=1}^M
-\cos(\Delta_{f_m}, \Delta_{g_m}),
-\end{equation}
-with $M = 1000$ pairs $(f_m, g_m)$ sampled uniformly from features
-assigned to distinct supernodes in $\varphi^{(K)}$. Although the
-sampling depends on $\varphi^{(K)}$, $\kappa_{\text{inter}}$ in
-practice varies by less than $0.02$ across $K \in \mathcal{K}$
-because the cosine distribution of random feature pairs is set by
-the underlying $\{\Delta_f\}$ rather than by which features happen
-to share a cluster. We therefore compute $\kappa_{\text{inter}}$
-once per graph at the median grid value and reuse it across $K$;
-this choice is verified empirically (Table~\ref{tab:kappa-inter-stability},
-omitted for space).
- 
-\paragraph{Why this is an interior-optimum criterion.}
-Two limits matter:
- 
-\emph{Undersummarization ($K \to 1$).} As $K$ decreases the
-partition coarsens, and at $K = 1$ all of $V'_{\text{feat}}$ falls
-into a single supernode. Every pair is then an intra-cluster pair,
-so $\kappa_{\text{intra}}$ is the global mean cosine of $\{\Delta_f\}$.
-This is the same distribution from which $\kappa_{\text{inter}}$
-samples, so $\kappa_{\text{intra}} - \kappa_{\text{inter}} \to 0$
-in expectation. The $\max(0, \cdot)$ clip ensures the gap term is
-exactly $0$ in this limit (small negative fluctuations from
-sampling are clipped). The complexity penalty is also near zero
-($|\pi| / |V'_{\text{feat}}| \approx 0$), so $\Psi^{\text{causal}}(1)
-\to 0$.
- 
-\emph{Oversummarization ($K \to |V'_{\text{feat}}|$).} As $K$
-increases the partition refines, and at $K = |V'_{\text{feat}}|$
-every feature is a singleton. Then $\pi^{(K)}_{\ge 2} = \emptyset$
-and $\kappa_{\text{intra}}$ is undefined; we set the gap term to
-$0$. The penalty hits its maximum value $1$. Therefore
-$\Psi^{\text{causal}}(|V'_{\text{feat}}|) = -\omega < 0$ for any
-$\omega > 0$.
- 
-The mid-range behavior depends on how rapidly
-$\kappa_{\text{intra}}$ grows with cluster fineness and is studied
-empirically below.
- 
- 
-\paragraph{Choice of $\omega$.}
-The complexity weight $\omega$ is the only free hyperparameter of
-$\Psi^{\text{causal}}$. It trades within-cluster causal alignment
-(numerator units: cosine $\in [0, 2]$, in practice $[0, 1]$) against
-partition fineness (denominator units: fraction of features used as
-clusters $\in [0, 1]$). We treat $\omega$ as a hyperparameter of
-the criterion and report sensitivity over $\omega \in \{0.3, 0.5,
-0.7, 1.0\}$.
- 
-For the analogies dataset, $\omega = 0.7$ yields interior
-$K^\star \in \{\lfloor n/3 \rfloor, \lfloor n/2 \rfloor\}$ on all
-$55$ graphs and selects the higher of the two on
-$\texttt{XX}$\% of graphs. At $\omega = 0.3$ the criterion under-penalizes
-fineness and selects the larger $K$ on
-$\texttt{XX}$\% of graphs; at $\omega = 1.0$ it over-penalizes
-and selects the smaller $K$ on $\texttt{XX}$\% of graphs.
-The default $\omega = 0.7$ used in the main paper is fixed prior
-to evaluation and not tuned on the test set.
- 
-\paragraph{Null-model sanity check.}
-For each $K \in \mathcal{K}$ and each graph, we compare
-$\Psi^{\text{causal}}(\varphi^{(K)})$ against
-$\Psi^{\text{causal}}(\varphi^{(K)}_{\text{shuf}})$, where
-$\varphi^{(K)}_{\text{shuf}}$ randomly reassigns features to
-supernodes while preserving the size distribution of $\pi^{(K)}$.
-A meaningful clustering should yield a positive gap. On the
-analogies dataset the mean gap is $\texttt{XX}$ for ASG-HARM at
-$K = n/2$, $\texttt{XX}$ for ASG-ARITH, and indistinguishable from
-$0$ for K-means and Modularity, confirming that
-$\Psi^{\text{causal}}$ discriminates structured partitions from
-size-matched random ones.
- 
-\paragraph{Use as an evaluation metric for baselines.}
-Because $\Psi^{\text{causal}}$ depends only on $\varphi$ and the
-ablation cache, it is method-agnostic: it scores Modularity,
-Spectral-RBF, and K-means partitions on the same axis as ASG.
-Table~\ref{tab:main} reports only graph-theoretic measures; an
-extended version including $\Psi^{\text{causal}}$ across all six
-methods is given in Table~\ref{tab:psi-causal-all}, where the ASG
-variants dominate the causal column at both $K = \lfloor n/2
-\rfloor$ and $K = \lfloor n/3 \rfloor$.
 \end{document}

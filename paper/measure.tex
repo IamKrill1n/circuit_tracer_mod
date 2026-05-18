@@ -1,0 +1,548 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb, amsthm, amsfonts}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{bm}
+\usepackage{tikz}
+
+\renewcommand{\algorithmicrequire}{\textbf{Input:}}
+\renewcommand{\algorithmicensure}{\textbf{Output:}}
+
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator{\Flow}{Flow}
+\DeclareMathOperator{\Suff}{Suff}
+\DeclareMathOperator{\Comp}{Comp}
+\DeclareMathOperator{\Mono}{Mono}
+\DeclareMathOperator{\FaithCorr}{FaithCorr}
+\DeclareMathOperator{\layer}{layer}
+\DeclareMathOperator{\sign}{sign}
+\DeclareMathOperator{\SCS}{SCS}
+
+\newtheorem{definition}{Definition}
+\newtheorem{proposition}{Proposition}
+\newtheorem{lemma}{Lemma}
+
+\title{Flow-Based XAI Evaluation for \\ Attribution Graph Summarization}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Motivation}\label{sec:motivation}
+
+A standard requirement for any attribution-based explanation is the
+\emph{completeness axiom}: the sum of the parts equals the whole.
+A naive operationalization---summing supernode-to-logit edge
+weights and comparing against the model's logit response---fails
+because the attribution graph and the model's logits live in
+different units. Attribution edge weights $W$ are derived from a
+local linear surrogate (the cross-layer transcoder); logits are
+nonlinear forward-pass outputs. There is no theoretical guarantee
+that $\sum_{S} \mathcal{A}(S \to V_{\text{logit}})$ matches
+$L(x) - L_0$, so any measure built from that comparison is
+ill-posed.
+
+We resolve this by defining all evaluation quantities in a
+\emph{single unit}: graph flow. The original attribution graph
+$G = (V, E, W)$ is a directed acyclic graph with a distinguished
+source set (embedding nodes $V_{\text{emb}}$) and sink set (logit
+nodes $V_{\text{logit}}$). On such a graph there is a natural
+notion of flow from sources to sinks; it satisfies a conservation
+law at every interior node by construction. Faithfulness
+(``important parts cause large drops when removed'') and
+completeness (``the parts sum to the whole'') then become two
+facets of the same flow quantity, with no unit mismatch.
+
+This document (i) defines flow on the original attribution graph,
+(ii) lifts it to the supernode graph, (iii) defines completeness,
+deletion, insertion, and ranking measures in flow units, and
+(iv) gives the computational procedure.
+
+\section{Flow on the Original Graph}\label{sec:flow}
+
+\subsection{Setup}
+
+The attribution graph $G = (V, E, W)$ is a DAG with vertex partition
+$V = V_{\text{emb}} \cup V_{\text{feat}} \cup V_{\text{logit}}$.
+Embedding nodes have no in-edges; logit nodes have no out-edges.
+Each node carries a layer index $\layer(\cdot)$ with embeddings at
+layer 0 and logits at the final layer. The weighted adjacency
+$W \in \mathbb{R}^{N \times N}$ has $W_{uv}$ the signed attribution
+weight of edge $(u, v)$.
+
+\subsection{Source flow and conservation}
+
+We treat the embedding nodes as flow sources and propagate flow
+forward through the DAG. To handle signed weights cleanly we work
+with absolute weights $|W|$ throughout, treating sign as a separate
+attribute used only in the directional measures of
+Section~\ref{sec:directional}.
+
+\paragraph{Outgoing weight normalization.}
+For each non-sink node $u$, define the outgoing transition matrix
+\begin{equation}
+P^{\text{out}}_{uv} = \frac{|W_{uv}|}{\sum_{w : (u, w) \in E} |W_{uw}|},
+\label{eq:Pout}
+\end{equation}
+with $\sum_v P^{\text{out}}_{uv} = 1$ whenever $u$ has at least one
+out-edge. This redistributes any flow entering $u$ across its
+out-edges in proportion to attribution mass.
+
+\paragraph{Source vector.}
+Let $\tau \in \mathbb{R}^{|V_{\text{emb}}|}$ be the token-importance
+vector of the main paper (normalized SHAP values),
+$\sum_{e \in V_{\text{emb}}} \tau_e = 1$. We inject one unit of
+flow into the embedding layer, partitioned by $\tau$:
+\begin{equation}
+F^{\text{src}}_u =
+\begin{cases}
+\tau_u & u \in V_{\text{emb}}, \\
+0      & \text{otherwise}.
+\end{cases}
+\label{eq:Fsrc}
+\end{equation}
+
+\paragraph{Node flow.}
+The flow at node $u$ is the total mass arriving via all directed
+source-to-$u$ paths:
+\begin{equation}
+\Flow(u) = \bigl[\, F^{\text{src}\top}\,(I - P^{\text{out}})^{-1}\,\bigr]_u,
+\label{eq:flow}
+\end{equation}
+which converges on the DAG because $P^{\text{out}}$ is strictly
+upper-triangular in any topological ordering and so nilpotent.
+Equivalently, $\Flow$ satisfies the linear recursion
+\begin{equation}
+\Flow(u) = F^{\text{src}}_u + \sum_{w : (w, u) \in E} \Flow(w) \cdot P^{\text{out}}_{wu}.
+\label{eq:flow-recursion}
+\end{equation}
+
+\paragraph{Edge flow.}
+The flow on edge $(u, v)$ is the mass that traverses it:
+\begin{equation}
+\Flow(u, v) = \Flow(u) \cdot P^{\text{out}}_{uv}.
+\label{eq:edge-flow}
+\end{equation}
+
+\subsection{Conservation lemma}
+
+\begin{lemma}[Flow conservation]\label{lem:conservation}
+For any node $u \notin V_{\text{emb}} \cup V_{\text{logit}}$,
+\begin{equation}
+\sum_{w : (w, u) \in E} \Flow(w, u)
+\;=\;
+\sum_{v : (u, v) \in E} \Flow(u, v)
+\;=\;
+\Flow(u).
+\label{eq:conservation}
+\end{equation}
+Furthermore, total flow is preserved end-to-end:
+\begin{equation}
+\sum_{\ell \in V_{\text{logit}}} \Flow(\ell)
+\;=\;
+\sum_{e \in V_{\text{emb}}} F^{\text{src}}_e
+\;=\;
+1.
+\label{eq:total-flow}
+\end{equation}
+\end{lemma}
+
+\begin{proof}[Proof sketch]
+The recursion~\eqref{eq:flow-recursion} together with
+$\sum_v P^{\text{out}}_{uv} = 1$ for interior nodes gives the per-node
+balance~\eqref{eq:conservation}. Summing the balance over all
+interior nodes telescopes along directed paths, leaving the
+source-sink identity~\eqref{eq:total-flow}.
+\end{proof}
+
+Equation~\eqref{eq:total-flow} is the key property: total flow is
+$1$ by construction, regardless of the graph, the partition, or
+the attribution weights. Completeness is automatic on the original
+graph; the question becomes how much of it survives pruning and
+supernode aggregation.
+
+\section{Flow on the Supernode Graph}\label{sec:supernode-flow}
+
+\subsection{Lifting flow to supernodes}
+
+Given a supernode partition $\varphi$ of the pruned graph
+$(V', E')$, contract each supernode $S \in \pi(\varphi)$ into a
+single vertex. Embedding and logit nodes remain singletons by
+construction. The supernode flow is defined by aggregating the
+node flow:
+\begin{equation}
+\Flow^{SN}(S) = \sum_{u \in S} \Flow(u),
+\label{eq:flow-sn-node}
+\end{equation}
+and supernode edge flow by aggregating edge flows of original edges
+crossing the cluster boundary:
+\begin{equation}
+\Flow^{SN}(S, T) = \sum_{\substack{(u, v) \in E' \\ u \in S, v \in T}} \Flow(u, v).
+\label{eq:flow-sn-edge}
+\end{equation}
+
+\begin{lemma}[Supernode conservation]\label{lem:sn-conservation}
+For any non-source, non-sink supernode $S$,
+$\sum_{R} \Flow^{SN}(R, S) = \sum_{T} \Flow^{SN}(S, T) = \Flow^{SN}(S)$.
+\end{lemma}
+
+The proof is immediate: summing~\eqref{eq:conservation} over
+$u \in S$ and splitting flows by whether their endpoints lie in
+$S$ or its complement gives the supernode balance.
+
+\subsection{Pruning and flow loss}
+
+Pruning $(V, E) \to (V', E')$ in Block~1 of the main paper deletes
+nodes and edges with low combined-evidence score. Let
+$\Flow_{V'}(\cdot)$ denote the flow computed on the pruned graph
+(with the same source vector $\tau$ restricted to surviving
+embedding nodes, renormalized to sum to 1). The
+\emph{pruning flow loss} is
+\begin{equation}
+\mathcal{L}_{\text{prune}} = 1 - \sum_{\ell \in V_{\text{logit}}}
+\Flow_{V'}(\ell).
+\label{eq:prune-loss}
+\end{equation}
+By Lemma~\ref{lem:conservation} this is exactly the flow that
+\emph{would have} reached the logits via paths through pruned nodes
+or edges. The pruning thresholds $(\eta_V, \eta_E)$ in the main
+paper are chosen so that $\mathcal{L}_{\text{prune}}$ is small;
+$1 - \mathcal{L}_{\text{prune}}$ is the fraction of flow retained
+and provides a natural sanity check on Block~1.
+
+\section{Flow-Based Completeness}\label{sec:completeness}
+
+\begin{definition}[Flow Completeness]\label{def:flow-completeness}
+For a supernode partition $\varphi$ on the pruned graph,
+\begin{equation}
+\mathcal{C}(\varphi) = \sum_{\ell \in V_{\text{logit}}} \Flow^{SN}(\ell).
+\label{eq:flow-completeness}
+\end{equation}
+\end{definition}
+
+\begin{proposition}[Bounds and interpretation]
+$\mathcal{C}(\varphi) \in [0, 1]$, and
+\begin{equation}
+\mathcal{C}(\varphi) = 1 - \mathcal{L}_{\text{prune}}.
+\label{eq:completeness-equals-retention}
+\end{equation}
+In particular, $\mathcal{C}(\varphi)$ does not depend on the
+partition $\varphi$ (only on the pruned graph $(V', E')$): supernode
+aggregation conserves flow.
+\end{proposition}
+
+\begin{proof}
+Singleton logit supernodes give
+$\Flow^{SN}(\ell) = \Flow_{V'}(\ell)$, so the sum
+in~\eqref{eq:flow-completeness} is exactly the pruned-graph total
+flow into logits, which equals $1 - \mathcal{L}_{\text{prune}}$ by
+Lemma~\ref{lem:conservation} applied to the pruned graph.
+\end{proof}
+
+This is the right shape for a completeness axiom: well-defined,
+bounded in $[0, 1]$, equal to 1 when no flow is lost, and invariant
+under valid contractions. It also makes precise what $\SCS$ was
+trying to capture: \emph{completeness measures pruning retention,
+not partition quality}. All clustering methods that share the same
+Block~1 output report identical $\mathcal{C}(\varphi)$.
+
+\section{Flow-Based Faithfulness via Supernode Deletion}\label{sec:faithfulness}
+
+Faithfulness asks whether \emph{removing} important supernodes
+costs more flow than removing unimportant ones. Define supernode
+deletion as removing $S$ from the pruned graph along with all
+edges incident to it, then recomputing flow on the surviving
+subgraph.
+
+\subsection{Deletion flow and supernode importance}
+
+\begin{definition}[Deletion flow]\label{def:deletion-flow}
+Let $G_{SN} \setminus S$ denote the supernode graph with $S$ and
+its incident edges removed, and let $\Flow_{\setminus S}$ be the
+flow on this subgraph (with the same source vector). The
+\emph{deletion flow loss} of $S$ is
+\begin{equation}
+\Delta \mathcal{C}(S)
+= \mathcal{C}(\varphi)
+- \sum_{\ell \in V_{\text{logit}}} \Flow_{\setminus S}(\ell).
+\label{eq:deletion-flow}
+\end{equation}
+\end{definition}
+
+$\Delta \mathcal{C}(S) \in [0, \mathcal{C}(\varphi)]$ measures the
+fraction of logit-bound flow that passes through $S$. It is the
+flow-theoretic analog of an ablation effect: deleting a supernode
+that lies on heavy source-to-sink paths produces a large
+$\Delta \mathcal{C}$, while deleting a side-branch supernode
+produces a small one.
+
+The natural importance score is the supernode's own flow:
+\begin{equation}
+\sigma_{\text{flow}}(S) = \Flow^{SN}(S).
+\label{eq:sigma-flow}
+\end{equation}
+
+\subsection{Per-supernode faithfulness correlation}
+
+\begin{definition}[Flow Faithfulness Correlation]\label{def:flow-faithcorr}
+\begin{equation}
+\FaithCorr_{\Flow}(\varphi)
+= \mathrm{Spearman}\bigl(
+    \sigma_{\text{flow}}(S),\;
+    \Delta \mathcal{C}(S)
+  \bigr)_{S \in \pi(\varphi)}.
+\label{eq:flow-faithcorr}
+\end{equation}
+A faithful partition ranks supernodes by flow consistently with
+their causal contribution to logit-bound flow.
+\end{definition}
+
+A perfectly tree-shaped flow graph yields
+$\FaithCorr_{\Flow} = 1$: each supernode's deletion loss equals its
+own flow exactly. Divergence from 1 measures how much
+\emph{flow redundancy} the partition contains: alternative paths
+that route around a deleted supernode and preserve sink flow.
+
+\subsection{Deletion AUC}
+
+\begin{definition}[Flow Deletion AUC]\label{def:flow-deletion-auc}
+Order supernodes by decreasing $\sigma_{\text{flow}}$:
+$S_{(1)}, \ldots, S_{(|\pi|)}$. Let $\mathcal{S}_r = \{S_{(1)}, \ldots, S_{(r)}\}$.
+Define the deletion curve
+\begin{equation}
+\delta(r) = \frac{1}{\mathcal{C}(\varphi)} \sum_{\ell \in V_{\text{logit}}}
+\Flow_{\setminus \mathcal{S}_r}(\ell),
+\end{equation}
+and the deletion AUC
+\begin{equation}
+\Flow\text{-}\mathrm{DAUC}(\varphi)
+= \frac{1}{|\pi(\varphi)| + 1} \sum_{r=0}^{|\pi(\varphi)|} \delta(r).
+\label{eq:flow-dauc}
+\end{equation}
+$\delta(0) = 1$, $\delta(|\pi(\varphi)|) = 0$;
+\emph{lower $\Flow\text{-}\mathrm{DAUC}$ is more faithful}.
+\end{definition}
+
+\subsection{Insertion AUC}
+
+\begin{definition}[Flow Insertion AUC]\label{def:flow-insertion-auc}
+Let $G_{SN}\!\restriction_{\mathcal{S}_r}$ denote the subgraph
+keeping only supernodes in $\mathcal{S}_r$ together with the
+embedding and logit singletons. The insertion curve is
+\begin{equation}
+\iota(r) = \frac{1}{\mathcal{C}(\varphi)} \sum_{\ell \in V_{\text{logit}}}
+\Flow_{G_{SN}\restriction \mathcal{S}_r}(\ell),
+\end{equation}
+and
+\begin{equation}
+\Flow\text{-}\mathrm{IAUC}(\varphi)
+= \frac{1}{|\pi(\varphi)| + 1} \sum_{r=0}^{|\pi(\varphi)|} \iota(r).
+\label{eq:flow-iauc}
+\end{equation}
+\emph{Higher is more faithful.}
+\end{definition}
+
+\subsection{Sufficiency and Comprehensiveness}
+
+\begin{definition}[Flow Sufficiency at top-$k$]\label{def:flow-suff}
+\begin{equation}
+\Suff_k^{\Flow}(\varphi) = 1 - \iota(k).
+\label{eq:flow-suff}
+\end{equation}
+Lower is better: the top-$k$ supernodes alone should retain most of
+the sink flow.
+\end{definition}
+
+\begin{definition}[Flow Comprehensiveness at top-$k$]\label{def:flow-comp}
+\begin{equation}
+\Comp_k^{\Flow}(\varphi) = 1 - \delta(k).
+\label{eq:flow-comp}
+\end{equation}
+Higher is better: removing the top-$k$ supernodes should cost most
+of the sink flow.
+\end{definition}
+
+\subsection{Monotonicity}
+
+\begin{definition}[Monotonicity]\label{def:mono}
+With $\Delta \mathcal{C}_{(k)} = \Delta \mathcal{C}(S_{(k)})$,
+\begin{equation}
+\Mono(\varphi)
+= \frac{1}{|\pi(\varphi)| - 1}
+  \sum_{k=1}^{|\pi(\varphi)| - 1}
+  \mathbf{1}\bigl[\, \Delta \mathcal{C}_{(k)} \ge \Delta \mathcal{C}_{(k+1)} \,\bigr].
+\label{eq:mono}
+\end{equation}
+Higher is more faithful.
+\end{definition}
+
+\section{Directional Faithfulness}\label{sec:directional}
+
+Flow as defined above uses $|W|$ and is sign-agnostic. To recover
+directional information, we track the signed contribution
+separately. Let
+\begin{equation}
+\Flow^{\pm}(u, v) = \Flow(u, v) \cdot \sign(W_{uv})
+\label{eq:flow-signed}
+\end{equation}
+and aggregate at the supernode level by net inflow:
+\begin{equation}
+\Flow^{SN, \pm}(S) = \sum_{e \in V_{\text{emb}}} \sum_{\text{paths } e \to S}
+\prod_{(u, v) \in \text{path}} \sign(W_{uv}) \cdot \Flow(u, v).
+\end{equation}
+A partition is \emph{directionally faithful} if features sharing a
+supernode contribute with consistent sign. The opposing-sign
+fraction of the main paper is exactly the empirical version of this
+constraint at the pair level.
+
+\section{Computational Procedure}\label{sec:procedure}
+
+\begin{algorithm}[h]
+\caption{Flow-based XAI evaluation of a supernode partition}
+\label{alg:flow-xai}
+\begin{algorithmic}[1]
+\REQUIRE Pruned graph $(V', E', W')$; partition $\varphi$; source $\tau$;
+top-$k$ values $\{k_1, \ldots, k_m\}$
+\ENSURE Measures $(\mathcal{C}, \FaithCorr_{\Flow}, \Flow\text{-}\mathrm{DAUC},
+                   \Flow\text{-}\mathrm{IAUC}, \Mono, \{\Suff_{k_j}^{\Flow}, \Comp_{k_j}^{\Flow}\})$
+\STATE Compute $P^{\text{out}}$ via Eq.~\eqref{eq:Pout}
+\STATE Compute $\Flow(u)$ for all $u \in V'$ via the
+       recursion~\eqref{eq:flow-recursion} in topological order
+       \COMMENT{$O(|E'|)$}
+\STATE Compute $\Flow^{SN}(S)$ and $\Flow^{SN}(S, T)$ via
+       Eqs.~\eqref{eq:flow-sn-node}--\eqref{eq:flow-sn-edge}
+\STATE $\mathcal{C}(\varphi) \gets \sum_{\ell} \Flow^{SN}(\ell)$
+\FOR{each $S \in \pi(\varphi)$}
+  \STATE Recompute flow on $G_{SN} \setminus S$ via
+         Eq.~\eqref{eq:flow-recursion} restricted to surviving nodes
+         \COMMENT{$O(|E'|)$ per supernode}
+  \STATE $\Delta \mathcal{C}(S) \gets$ Eq.~\eqref{eq:deletion-flow}
+\ENDFOR
+\STATE Sort supernodes by $\sigma_{\text{flow}} = \Flow^{SN}$
+\FOR{$r = 0, 1, \ldots, |\pi(\varphi)|$}
+  \STATE Compute $\delta(r)$ and $\iota(r)$ by recomputing flow on
+         the corresponding subgraphs
+\ENDFOR
+\STATE Compute $\FaithCorr_{\Flow}, \Flow\text{-}\mathrm{DAUC},
+       \Flow\text{-}\mathrm{IAUC}, \Mono$ from the curves
+\STATE Compute $\Suff_{k_j}^{\Flow}, \Comp_{k_j}^{\Flow}$ for each $k_j$
+\RETURN all measures
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Cost.}
+Each flow computation is $O(|E'|)$ via topological-order
+propagation. The total cost per partition is $O(|\pi(\varphi)| \cdot |E'|)$:
+one base flow plus one flow per supernode for the deletion curve
+(insertion reuses values via $\iota(r) = 1 - \delta(|\pi| - r)$ when
+the graph factorizes; in general both directions are computed).
+Crucially, \textbf{no forward passes through the model are
+required}: the entire evaluation runs on the attribution graph
+alone, using only its weights $W'$ and the source vector $\tau$.
+This is a substantial cost reduction compared with the ablation-based
+measures of the previous version.
+
+\section{Why Flow Is the Right Unit}\label{sec:discussion}
+
+\paragraph{Unit consistency.}
+Completeness, deletion loss, sufficiency, and comprehensiveness are
+all measured as fractions of total source-to-sink flow. There is no
+comparison between attribution-derived quantities and forward-pass
+logits, so no unit mismatch can arise.
+
+\paragraph{Conservation by construction.}
+Lemmas~\ref{lem:conservation} and~\ref{lem:sn-conservation} pin the
+completeness axiom to the graph structure. Completeness fails only
+when flow is destroyed---by pruning, by removing supernodes during
+deletion tests, or by restricting to top-$k$ for insertion. Each
+failure has a precise cause traceable to a graph operation.
+
+\paragraph{Relationship to the main paper's Inf and Rel.}
+The Inf and Rel quantities of Appendix~A.1 are special cases of
+flow. Inf is the flow when $\tau$ is uniform and the propagation
+direction is reversed (sink-to-source); Rel is forward flow with
+$\tau$ as defined here. Edge-level Inf$_{uv}$ and Rel$_{uv}$ are
+edge flows in their respective directions. The flow framework
+unifies these into one quantity used consistently across pruning
+(Block~1), clustering (Block~2 via $\tilde S$), and evaluation
+(this document).
+
+\paragraph{Faithfulness vs.\ flow path redundancy.}
+$\FaithCorr_{\Flow} < 1$ has a sharp interpretation: it measures how
+many supernodes lie on parallel source-to-sink paths whose removal
+can be compensated by alternative routes. A high
+$\FaithCorr_{\Flow}$ identifies a partition with low path
+redundancy---each supernode is a bottleneck for the flow attributed
+to it. This is exactly the property the supernode graph should have
+to support causal reading.
+
+\paragraph{Comparison to ablation-based faithfulness.}
+Forward-pass ablation faithfulness (the earlier version of this
+document) and flow-based faithfulness will agree on partitions
+where the transcoder linearization is faithful to the model.
+Reporting both is informative: large gaps diagnose transcoder
+failure, not partition failure.
+
+\section{Proposed Comparison Table}\label{sec:proposed-table}
+
+\begin{table}[h]
+\centering
+\caption{Flow-based XAI evaluation on the analogies dataset
+($N = 55$ pruned graphs, $K = \lfloor n/2 \rfloor$). Cost-style
+($\downarrow$): $\Flow$-DAUC, $\Suff^{\Flow}$. Benefit-style
+($\uparrow$): $\mathcal{C}$, $\FaithCorr_{\Flow}$,
+$\Flow$-IAUC, $\Mono$, $\Comp^{\Flow}$.
+$\mathcal{C}$ is partition-invariant and reported once per Block~1
+configuration.}
+\label{tab:flow-xai}
+\small
+\begin{tabular}{@{}lccccccc@{}}
+\toprule
+\textbf{Method} &
+$\mathcal{C} \uparrow$ &
+$\FaithCorr_{\Flow} \uparrow$ &
+$\Flow$-DAUC $\downarrow$ &
+$\Flow$-IAUC $\uparrow$ &
+$\Mono \uparrow$ &
+$\Suff_5^{\Flow} \downarrow$ &
+$\Comp_5^{\Flow} \uparrow$ \\
+\midrule
+\textsc{ASG-arith} & --- & --- & --- & --- & --- & --- & --- \\
+\textsc{ASG-harm}  & --- & --- & --- & --- & --- & --- & --- \\
+\textsc{ASG-geo}   & --- & --- & --- & --- & --- & --- & --- \\
+Modularity         & --- & --- & --- & --- & --- & --- & --- \\
+Spectral-RBF       & --- & --- & --- & --- & --- & --- & --- \\
+K-means            & --- & --- & --- & --- & --- & --- & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Limitations}\label{sec:limitations}
+
+\begin{enumerate}[leftmargin=*,topsep=2pt,itemsep=1pt]
+\item Flow uses $|W|$ and so loses sign information. Directional
+faithfulness (Section~\ref{sec:directional}) recovers it but at
+the cost of leaving the conservation framework.
+\item Flow is a property of the attribution graph, not the model.
+Faithfulness of the attribution graph itself (transcoder fidelity)
+remains a separate question. Forward-pass ablation provides the
+complementary test.
+\item Deletion flow is the absolute drop in sink flow when $S$ is
+removed; alternative definitions (relative drop, weighted by which
+sinks lose flow) are possible and may better match
+application-specific notions of importance.
+\item The conservation law holds exactly only when
+$P^{\text{out}}$ is row-stochastic at every interior node. Nodes
+with no out-edges in the pruned graph violate this; we treat them
+as sinks with zero flow forwarded, which is conservative for
+completeness but inflates $\mathcal{L}_{\text{prune}}$.
+\end{enumerate}
+
+\end{document}
