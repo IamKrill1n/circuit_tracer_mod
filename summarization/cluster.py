@@ -10,7 +10,13 @@ from sklearn.cluster import SpectralClustering
 
 
 from summarization.prune import PruneGraph
-from summarization.supernode_graph import Node, Supernode, cluster_kind_to_supernode_type, node_from_prune_graph
+from summarization.supernode_graph import (
+    Node,
+    Supernode,
+    cluster_kind_to_supernode_type,
+    compute_sn_adj,
+    node_from_prune_graph,
+)
 from summarization.utils import (
     layer_index_from_node,
     layer_index_from_node_id,
@@ -24,6 +30,14 @@ logger = logging.getLogger(__name__)
 
 def _nodes_by_id(prune_graph: PruneGraph) -> dict[str, Node]:
     return {n.node_id: n for n in prune_graph.nodes}
+
+
+def _fixed_singletons(
+    kept_ids: list[str], nodes_by_id: dict[str, Node]
+) -> tuple[list[list[str]], list[list[str]]]:
+    emb = [[nid] for nid in kept_ids if node_is_embedding(nodes_by_id[nid])]
+    logit = [[nid] for nid in kept_ids if node_is_logit(nodes_by_id[nid])]
+    return emb, logit
 
 
 def _classify_node(node_id: str, nodes_by_id: dict[str, Node]) -> str:
@@ -177,43 +191,16 @@ def _supernode_edges(
     pruned_adj: torch.Tensor,
     id_to_idx: dict[str, int],
 ) -> list[tuple[int, int]]:
-    """Directed edges (source_cluster -> target_cluster) at the supernode level,
-    using net weighted edge mass with a stronger-direction tie-breaker.
-
-    For each cluster pair {i, j}, sums pruned edges in each direction and keeps
-    only the direction with larger absolute mass; ties (incl. both-zero) emit
-    no edge. This eliminates 2-cycles by construction; remaining SCCs of length
-    >= 3 are handled by the caller.
-
-    pruned_adj[target, source] is the project convention.
+    """Directed edges (source_cluster -> target_cluster) from `compute_sn_adj`'s
+    dominant-direction tie-break. Eliminates 2-cycles by construction; longer
+    SCCs are handled by the caller.
     """
-    n = len(clusters)
-    cluster_idx_lists: list[list[int]] = [
+    index_lists = [
         [id_to_idx[nid] for nid in members if nid in id_to_idx] for members in clusters
     ]
-
-    adj = pruned_adj.detach().cpu().numpy()
-    # M[i, j] = net mass flowing j -> i  (target=i, source=j; matches pruned_adj convention)
-    M = np.zeros((n, n), dtype=np.float64)
-    for i, u_idx in enumerate(cluster_idx_lists):
-        if not u_idx:
-            continue
-        for j, v_idx in enumerate(cluster_idx_lists):
-            if i == j or not v_idx:
-                continue
-            M[i, j] = float(adj[np.ix_(u_idx, v_idx)].sum())
-
-    edges: list[tuple[int, int]] = []
-    for i in range(n):
-        for j in range(i + 1, n):
-            ij = abs(M[i, j])  # j -> i
-            ji = abs(M[j, i])  # i -> j
-            if ij > ji:
-                edges.append((j, i))
-            elif ji > ij:
-                edges.append((i, j))
-            # equal (or both zero): no edge
-    return edges
+    M = compute_sn_adj(index_lists, pruned_adj)  # M[t, s] = mass s -> t
+    tgts, srcs = np.where(M != 0.0)
+    return [(int(s), int(t)) for s, t in zip(srcs, tgts)]
 
 
 def _resolve_cycles_only(
@@ -440,8 +427,7 @@ def cluster_graph_spectral(
     # Keep deterministic naming order for middle SNs, but return member lists only.
     named_middle = _name_middle_supernodes(middle_clusters, nodes_by_id)
 
-    emb_singletons = [[nid] for nid in kept_ids if node_is_embedding(nodes_by_id[nid])]
-    logit_singletons = [[nid] for nid in kept_ids if node_is_logit(nodes_by_id[nid])]
+    emb_singletons, logit_singletons = _fixed_singletons(kept_ids, nodes_by_id)
 
     supernodes = list(named_middle.values()) + emb_singletons + logit_singletons
     logger.info("Returning %d total supernodes.", len(supernodes))
@@ -605,9 +591,8 @@ def cluster_graph_agglomerative(
         middle_clusters = _merge_to_budget(middle_clusters, nodes_by_id, max_sn=max_sn)
 
     named_middle = _name_middle_supernodes(middle_clusters, nodes_by_id)
-    emb_singletons = [[nid] for nid in kept_ids if node_is_embedding(nodes_by_id[nid])]
-    logit_singletons = [[nid] for nid in kept_ids if node_is_logit(nodes_by_id[nid])]
-    
+    emb_singletons, logit_singletons = _fixed_singletons(kept_ids, nodes_by_id)
+
     total_supernodes = len(named_middle) + len(emb_singletons) + len(logit_singletons)
     logger.info("Agglomerative clustering done. Returning %d total supernodes.", total_supernodes)
     return list(named_middle.values()) + emb_singletons + logit_singletons

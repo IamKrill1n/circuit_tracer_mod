@@ -80,6 +80,19 @@ def find_threshold(scores: torch.Tensor, threshold: float) -> torch.Tensor:
     return sorted_scores[threshold_index]
 
 
+def _normalize_pair(
+    influence: torch.Tensor,
+    relevance: torch.Tensor,
+    normalization: str,
+    eps: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if normalization == "min_max":
+        return normalize_scores_min_max(influence, eps), normalize_scores_min_max(relevance, eps)
+    if normalization == "rank":
+        return normalize_scores_rank(influence), normalize_scores_rank(relevance)
+    raise ValueError(f"Invalid normalization method: {normalization}")
+
+
 def combine_scores_geometric(
     influence: torch.Tensor,
     relevance: torch.Tensor,
@@ -87,14 +100,7 @@ def combine_scores_geometric(
     alpha: float = 0.5,
     eps: float = 1e-10,
 ) -> torch.Tensor:
-    if normalization == "min_max":
-        I = normalize_scores_min_max(influence, eps)
-        R = normalize_scores_min_max(relevance, eps)
-    elif normalization == "rank":
-        I = normalize_scores_rank(influence)
-        R = normalize_scores_rank(relevance)
-    else:
-        raise ValueError(f"Invalid normalization method: {normalization}")
+    I, R = _normalize_pair(influence, relevance, normalization, eps)
     return (I + eps) ** alpha * (R + eps) ** (1 - alpha)
 
 
@@ -105,14 +111,7 @@ def combined_scores_arithmetic(
     alpha: float = 0.5,
     eps: float = 1e-10,
 ) -> torch.Tensor:
-    if normalization == "min_max":
-        I = normalize_scores_min_max(influence, eps)
-        R = normalize_scores_min_max(relevance, eps)
-    elif normalization == "rank":
-        I = normalize_scores_rank(influence)
-        R = normalize_scores_rank(relevance)
-    else:
-        raise ValueError(f"Invalid normalization method: {normalization}")
+    I, R = _normalize_pair(influence, relevance, normalization, eps)
     return I * alpha + R * (1 - alpha)
 
 
@@ -123,12 +122,5 @@ def combined_scores_harmonic(
     alpha: float = 0.5,
     eps: float = 1e-10,
 ) -> torch.Tensor:
-    if normalization == "min_max":
-        I = normalize_scores_min_max(influence, eps)
-        R = normalize_scores_min_max(relevance, eps)
-    elif normalization == "rank":
-        I = normalize_scores_rank(influence)
-        R = normalize_scores_rank(relevance)
-    else:
-        raise ValueError(f"Invalid normalization method: {normalization}")
+    I, R = _normalize_pair(influence, relevance, normalization, eps)
     return 1 / ((1 / (I + eps) + alpha) + (1 / (R + eps) + alpha))

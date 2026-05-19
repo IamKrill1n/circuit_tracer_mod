@@ -1,34 +1,17 @@
 """Closed-form objective terms from paper/reformulation.tex.
 
-Each term is in [0, 1] so L_total = L_coh + D_agg + L_cplx is in [0, 3]. Lower is better.
+Each term is in [0, 1]. The scalar L = lambda_coh L_coh + lambda_cons L_cons +
+lambda_cplx L_cplx is a simplex-weighted sum (default 1/3 each) in [0, 1], with
+L_cons = 0.5 (prune_loss + D_agg). Lower is better.
 """
 
 from __future__ import annotations
 
-import networkx as nx
 import numpy as np
 
 from summarization.prune import PruneGraph
-from summarization.supernode_graph import Supernode
-from summarization.utils import layer_index_from_node, node_is_embedding
-
-
-def _block_sum_matrix(
-    supernodes: list[Supernode], prune_graph: PruneGraph
-) -> np.ndarray:
-    """Signed block sum W^SN per paper Eq. 7 — no dominant-direction tie-breaker.
-
-    Returns block[t, s] = sum over u in S_s, v in S_t of pruned_adj[v, u].
-    """
-    adj = prune_graph.pruned_adj.detach().cpu().numpy().astype(np.float64)  # [tgt, src]
-    n_total = adj.shape[0]
-    n_sn = len(supernodes)
-    indicator = np.zeros((n_sn, n_total), dtype=np.float64)
-    for sn_idx, sn in enumerate(supernodes):
-        for node in sn.features:
-            if 0 <= node.node_idx < n_total:
-                indicator[sn_idx, node.node_idx] = 1.0
-    return indicator @ adj @ indicator.T
+from summarization.supernode_graph import Supernode, compute_sn_adj
+from summarization.utils import node_is_fixed
 
 
 def compute_L_coh(
@@ -77,63 +60,28 @@ def compute_D_agg(
     total_mag = float(np.abs(adj).sum())
     if total_mag <= 0.0:
         return 0.0
-    block = _block_sum_matrix(supernodes, prune_graph)
-    np.fill_diagonal(block, 0.0)
+    index_lists = [[n.node_idx for n in sn.features] for sn in supernodes]
+    block = compute_sn_adj(index_lists, prune_graph.pruned_adj)
     retained_mag = float(np.abs(block).sum())
     return 1.0 - retained_mag / total_mag
-
-
-def _num_model_layers(prune_graph: PruneGraph) -> int:
-    """Largest finite non-embedding layer index, + 1. Used as the L_cplx denominator base."""
-    finite = []
-    for node in prune_graph.nodes:
-        if node_is_embedding(node):
-            continue
-        layer = layer_index_from_node(node)
-        if layer < 10_000:  # filter the fallback for unparseable ids
-            finite.append(layer)
-    return (max(finite) + 1) if finite else 1
 
 
 def compute_L_cplx(
     supernodes: list[Supernode], prune_graph: PruneGraph
 ) -> float:
-    """Average shortest path V_emb -> V_logit in G_SN (supernode hops), normalized.
+    """Number of feature supernodes / |V'_mid|, per paper Eq. (Lcplx).
 
-    Denominator is (num_model_layers + 1) so dense end-to-end supernode chains land
-    near 1.0 and tight summaries land near 2 / denom. Returns 0 if no reachable
-    embedding-logit pair (degenerate disconnected summary).
+    Embedding and logit supernodes are forced singletons by (F2) and excluded
+    from both numerator and denominator. Returns 0 on a degenerate pruned
+    graph with no mid-graph features.
     """
-    block = _block_sum_matrix(supernodes, prune_graph)
-    n_sn = block.shape[0]
-    if n_sn == 0:
+    n_feature_supernodes = sum(
+        1 for sn in supernodes if sn.type in ("features", "feature")
+    )
+    n_middle = sum(1 for node in prune_graph.nodes if not node_is_fixed(node))
+    if n_middle == 0:
         return 0.0
-
-    graph = nx.DiGraph()
-    graph.add_nodes_from(range(n_sn))
-    for t in range(n_sn):
-        for s in range(n_sn):
-            if t == s:
-                continue
-            if block[t, s] != 0.0:
-                graph.add_edge(s, t)  # block[tgt, src] != 0 => edge src -> tgt
-
-    emb_idx = [i for i, sn in enumerate(supernodes) if sn.type == "emb"]
-    logit_idx = [i for i, sn in enumerate(supernodes) if sn.type == "logit"]
-    if not emb_idx or not logit_idx:
-        return 0.0
-
-    lengths: list[int] = []
-    for e in emb_idx:
-        path_lengths = nx.single_source_shortest_path_length(graph, e)
-        for ell in logit_idx:
-            if ell in path_lengths:
-                lengths.append(path_lengths[ell])
-    if not lengths:
-        return 0.0
-
-    denom = _num_model_layers(prune_graph) + 1
-    return float(np.mean(lengths) / denom)
+    return float(n_feature_supernodes / n_middle)
 
 
 def _supernode_labels_for_middle(
@@ -160,20 +108,33 @@ def compute_L(
     role_vectors_middle: np.ndarray,
     middle_node_id_to_local: dict[str, int],
     prune_graph: PruneGraph,
+    *,
+    prune_loss: float = 0.0,
+    lambdas: tuple[float, float, float] = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
 ) -> dict[str, float | int]:
-    """Bundle the three losses + L_total + simple counts for one partition."""
+    """Bundle the per-axis losses + simplex-weighted scalar L for one partition.
+
+    prune_loss is partition-invariant within a pruned graph; pass it in once per
+    PruneGraph. lambdas = (lambda_coh, lambda_cons, lambda_cplx) must sit on the
+    probability simplex (sum to 1, each in [0, 1]).
+    """
     n_middle = role_vectors_middle.shape[0]
     labels = _supernode_labels_for_middle(supernodes, middle_node_id_to_local, n_middle)
     L_coh = compute_L_coh(role_vectors_middle, labels)
     D_agg = compute_D_agg(supernodes, prune_graph)
     L_cplx = compute_L_cplx(supernodes, prune_graph)
-    L_total = L_coh + D_agg + L_cplx
+    L_cons = 0.5 * (float(prune_loss) + D_agg)
+    lam_coh, lam_cons, lam_cplx = lambdas
+    L = lam_coh * L_coh + lam_cons * L_cons + lam_cplx * L_cplx
     n_middle_supernodes = sum(1 for sn in supernodes if sn.type in ("features", "feature"))
     return {
         "L_coh": float(L_coh),
         "D_agg": float(D_agg),
+        "prune_loss": float(prune_loss),
+        "L_cons": float(L_cons),
         "L_cplx": float(L_cplx),
-        "L_total": float(L_total),
+        "L": float(L),
+        "L_total": float(L_coh + D_agg + L_cplx),  # back-compat
         "n_supernodes": int(len(supernodes)),
         "n_middle_supernodes": int(n_middle_supernodes),
     }

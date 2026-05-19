@@ -7,16 +7,17 @@ import logging
 import math
 import re
 from pathlib import Path
-from typing import Any, Callable, Literal, Sequence, cast
+from typing import Any, Callable, Literal, Sequence
 
 import networkx as nx
 import numpy as np
 import torch
 from sklearn.cluster import KMeans, SpectralClustering
 
+from eval.eval_prune import compute_prune_loss
+from summarization.attr_graph import AttrGraph
 from summarization.auto_grouping import eigengap_analysis
 from summarization.cluster import (
-    cluster_graph_agglomerative,
     cluster_graph_spectral,
     clusters_to_supernodes,
     compute_phi_vectors,
@@ -29,28 +30,30 @@ from summarization.utils import node_is_fixed
 
 logger = logging.getLogger(__name__)
 
-METHOD_GRID: list[dict[str, str | float]] = [
-    {"mean_method": mean_method, "decay_rate": decay_rate}
-    for mean_method in ("arith", "harm", "geo")
-    for decay_rate in (i / 10.0 for i in range(11))
+METHOD_GRID_DECAY: list[dict[str, float]] = [
+    {"decay_rate": i / 10.0} for i in range(11)
 ]
+
+_NORM_TOKENS = {"softmax", "entmax", "sparsemax", "entmax15"}
 
 SUMMARY_COLUMNS = [
     "graph_name",
     "dataset",
     "graph_path",
+    "token_normalization",
     "num_nodes",
     "solver",
-    "mean_method",
     "decay_rate",
     "best_k",
     "k_candidates",
     "n_supernodes",
     "n_middle_supernodes",
-    "L_total",
+    "L",
     "L_coh",
-    "D_agg",
+    "L_cons",
     "L_cplx",
+    "prune_loss",
+    "D_agg",
     "sweep_path",
     "best_dir",
     "supernode_map_path",
@@ -188,6 +191,107 @@ def _graph_identity(graph_path: Path, input_paths: Sequence[str]) -> tuple[str, 
     return _safe_slug(graph_path.stem), graph_path.parent.name or "graphs"
 
 
+def _token_normalization_from_path(graph_path: Path) -> str:
+    """Pull softmax/entmax/... from the prune-graphs output layout."""
+    for part in graph_path.parts:
+        if part in _NORM_TOKENS:
+            return part
+    return "unknown"
+
+
+def _find_prune_graphs_manifest(graph_path: Path) -> Path | None:
+    """Walk up from graph_path looking for the prune_graphs manifest.json."""
+    for parent in graph_path.parents:
+        candidate = parent / "manifest.json"
+        if candidate.is_file():
+            try:
+                payload = json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            # prune_graphs manifest carries these two keys; reject other manifests.
+            if isinstance(payload, dict) and "results_json" in payload and "summary_csv" in payload:
+                return candidate
+    return None
+
+
+def _lookup_prune_manifest_row(
+    manifest_path: Path, graph_path: Path
+) -> dict[str, Any] | None:
+    """Find the results.json row whose prune_graph_path matches graph_path."""
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    results_json = Path(manifest.get("results_json", ""))
+    if not results_json.is_file():
+        results_json = manifest_path.parent / "results.json"
+    if not results_json.is_file():
+        return None
+    rows = json.loads(results_json.read_text(encoding="utf-8"))
+    target = graph_path.resolve()
+    target_name = target.name
+    for row in rows:
+        row_path = row.get("prune_graph_path")
+        if not row_path:
+            continue
+        candidate = Path(row_path)
+        # Resolve relative paths relative to repo root (parent of eval_outputs).
+        if not candidate.is_absolute():
+            candidate = (manifest_path.parents[-1] / candidate).resolve()
+            # If that doesn't exist, also try resolving against the manifest dir.
+            if not candidate.exists():
+                candidate = (manifest_path.parent / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        if candidate == target or (candidate.name == target_name and str(candidate).endswith(str(target).split("eval_outputs", 1)[-1])):
+            return row
+    return None
+
+
+def _compute_prune_loss_for_graph(
+    *,
+    graph_path: Path,
+    prune_graph: PruneGraph,
+    map_location: str,
+) -> float:
+    """Look up the original AttrGraph + token_weights via the prune_graphs
+    manifest, then compute 1 - token_attribution_faithfulness. Returns 0.0
+    if the manifest can't be found or the wiring fails (with a warning)."""
+    manifest = _find_prune_graphs_manifest(graph_path)
+    if manifest is None:
+        logger.warning(
+            "Could not find prune_graphs manifest for %s; prune_loss=0.0", graph_path
+        )
+        return 0.0
+    row = _lookup_prune_manifest_row(manifest, graph_path)
+    if row is None:
+        logger.warning(
+            "Manifest %s has no row for %s; prune_loss=0.0", manifest, graph_path
+        )
+        return 0.0
+    orig_graph_path = row.get("graph_path")
+    token_weights = row.get("token_weights")
+    if not orig_graph_path or not token_weights:
+        logger.warning(
+            "Manifest row for %s missing graph_path/token_weights; prune_loss=0.0",
+            graph_path,
+        )
+        return 0.0
+    try:
+        attr_graph = AttrGraph.from_graph(str(orig_graph_path))
+    except Exception as exc:
+        logger.warning("AttrGraph.from_graph failed for %s: %s", orig_graph_path, exc)
+        return 0.0
+    device = "cpu" if map_location == "cpu" else "cuda"
+    try:
+        return compute_prune_loss(
+            attr_graph,
+            prune_graph,
+            [float(w) for w in token_weights],
+            device=device,
+        )
+    except Exception as exc:
+        logger.warning("compute_prune_loss failed for %s: %s", graph_path, exc)
+        return 0.0
+
+
 def _middle_indices(prune_graph: PruneGraph) -> list[int]:
     return [i for i, n in enumerate(prune_graph.nodes) if not node_is_fixed(n)]
 
@@ -214,14 +318,18 @@ def _kmeans_middle_labels(
         return np.zeros(n, dtype=np.int64)
     if k == n:
         return np.arange(n, dtype=np.int64)
+    # Spherical K-means: unit-normalise r(u) so Euclidean distance = cosine distance,
+    # making this a direct surrogate of L_coh.
+    norms = np.linalg.norm(features, axis=1, keepdims=True)
+    features_normed = features / np.where(norms > 1e-12, norms, 1.0)
     return (
         KMeans(n_clusters=k, random_state=random_state, n_init=n_init)
-        .fit_predict(features)
+        .fit_predict(features_normed)
         .astype(np.int64)
     )
 
 
-def _spectral_rbf_middle_labels(
+def _spectral_cosine_middle_labels(
     features: np.ndarray, target_k: int, random_state: int, n_init: int
 ) -> np.ndarray:
     n = features.shape[0]
@@ -232,15 +340,17 @@ def _spectral_rbf_middle_labels(
         return np.zeros(n, dtype=np.int64)
     if k == n:
         return np.arange(n, dtype=np.int64)
+    # Rectified cosine affinity matches the cos+ in L_coh exactly.
+    affinity = _cosine_similarity(features, nonnegative=True)
     return (
         SpectralClustering(
             n_clusters=k,
-            affinity="rbf",
+            affinity="precomputed",
             assign_labels="kmeans",
             random_state=random_state,
             n_init=n_init,  # type: ignore[arg-type]
         )
-        .fit_predict(features)
+        .fit_predict(affinity)
         .astype(np.int64)
     )
 
@@ -295,6 +405,7 @@ def _evaluate_solver(
     graph_path: Path,
     graph_name: str,
     dataset: str,
+    token_normalization: str,
     output_dir: Path,
     solver: str,
     clusterer_factory: Callable[..., Callable[[int], list[list[str]]]],
@@ -303,8 +414,10 @@ def _evaluate_solver(
     role_vectors_middle: np.ndarray,
     middle_id_to_local: dict[str, int],
     num_nodes: int,
+    prune_loss: float,
+    lambdas: tuple[float, float, float],
 ) -> dict[str, Any]:
-    """Full hyperparameter × K sweep; pick argmin(L_total) and write artifacts."""
+    """Full hyperparameter × K sweep; pick argmin(L) and write artifacts."""
     sweep: list[dict[str, Any]] = []
     best: dict[str, Any] | None = None
     best_supernode_map: dict[str, list[str]] | None = None
@@ -321,7 +434,12 @@ def _evaluate_solver(
                 clusters = clusterer(target_k)
                 rows = clusters_to_supernodes(prune_graph, clusters)
                 metrics = compute_L(
-                    rows, role_vectors_middle, middle_id_to_local, prune_graph
+                    rows,
+                    role_vectors_middle,
+                    middle_id_to_local,
+                    prune_graph,
+                    prune_loss=prune_loss,
+                    lambdas=lambdas,
                 )
             except Exception as exc:
                 logger.warning(
@@ -330,7 +448,7 @@ def _evaluate_solver(
                 continue
             record = {**hp, "K": int(target_k), **metrics}
             sweep.append(record)
-            if best is None or record["L_total"] < best["L_total"]:
+            if best is None or record["L"] < best["L"]:
                 best = record
                 best_supernode_map = {sn.name: sn.member_node_ids() for sn in rows}
 
@@ -369,18 +487,20 @@ def _evaluate_solver(
         "graph_name": graph_name,
         "dataset": dataset,
         "graph_path": str(graph_path),
+        "token_normalization": token_normalization,
         "num_nodes": num_nodes,
         "solver": solver,
-        "mean_method": best.get("mean_method") if best else "",
         "decay_rate": best.get("decay_rate") if best else "",
         "best_k": best.get("K") if best else "",
         "k_candidates": json.dumps(list(map(int, k_candidates))),
         "n_supernodes": best.get("n_supernodes") if best else "",
         "n_middle_supernodes": best.get("n_middle_supernodes") if best else "",
-        "L_total": best.get("L_total") if best else math.nan,
+        "L": best.get("L") if best else math.nan,
         "L_coh": best.get("L_coh") if best else math.nan,
-        "D_agg": best.get("D_agg") if best else math.nan,
+        "L_cons": best.get("L_cons") if best else math.nan,
         "L_cplx": best.get("L_cplx") if best else math.nan,
+        "prune_loss": best.get("prune_loss") if best else math.nan,
+        "D_agg": best.get("D_agg") if best else math.nan,
         "sweep_path": str(sweep_path),
         "best_dir": str(best_dir),
         "supernode_map_path": str(supernode_map_path) if best is not None else "",
@@ -399,10 +519,12 @@ def evaluate_prune_graph(
     random_state: int,
     n_init: int,
     enforce_dag: bool,
+    lambdas: tuple[float, float, float],
 ) -> list[dict[str, Any]]:
-    """Evaluate all 5 solvers on a single prune graph; return one summary row per solver."""
+    """Evaluate all 6 solvers on a single prune graph; return one summary row per solver."""
     prune_graph = load_prune_graph(str(graph_path), map_location=map_location)
     graph_name, dataset = _graph_identity(graph_path, input_paths)
+    token_normalization = _token_normalization_from_path(graph_path)
 
     mid_idx = _middle_indices(prune_graph)
     middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
@@ -417,54 +539,41 @@ def evaluate_prune_graph(
 
     k_candidates = _build_k_candidates(prune_graph, sim_phi)
 
-    logger.info(
-        "  %s | dataset=%s n_middle=%d k_candidates=%s",
-        graph_name,
-        dataset,
-        num_nodes,
-        k_candidates,
+    prune_loss = _compute_prune_loss_for_graph(
+        graph_path=graph_path,
+        prune_graph=prune_graph,
+        map_location=map_location,
     )
 
-    def make_ours_spectral(
-        *,
-        mean_method: str,
-        decay_rate: float,
-    ) -> Callable[[int], list[list[str]]]:
-        mm = cast(Literal["geo", "harm", "arith"], mean_method)
-        dr = float(decay_rate)
+    logger.info(
+        "  %s | dataset=%s norm=%s n_middle=%d k_candidates=%s prune_loss=%.4f",
+        graph_name,
+        dataset,
+        token_normalization,
+        num_nodes,
+        k_candidates,
+        prune_loss,
+    )
 
-        def clusterer(target_k: int) -> list[list[str]]:
-            return cluster_graph_spectral(
-                prune_graph,
-                target_k=target_k,
-                max_layer_span=max_layer_span,
-                mean_method=mm,
-                decay_rate=dr,
-                enforce_dag=enforce_dag,
-                random_state=random_state,
-                n_init=n_init,
-            )
+    def make_ours_spectral_factory(mean_method: Literal["geo", "harm", "arith"]):
+        def factory(*, decay_rate: float) -> Callable[[int], list[list[str]]]:
+            dr = float(decay_rate)
 
-        return clusterer
+            def clusterer(target_k: int) -> list[list[str]]:
+                return cluster_graph_spectral(
+                    prune_graph,
+                    target_k=target_k,
+                    max_layer_span=max_layer_span,
+                    mean_method=mean_method,
+                    decay_rate=dr,
+                    enforce_dag=enforce_dag,
+                    random_state=random_state,
+                    n_init=n_init,
+                )
 
-    def make_ours_agglomerative(
-        *,
-        mean_method: str,
-        decay_rate: float,
-    ) -> Callable[[int], list[list[str]]]:
-        mm = cast(Literal["geo", "harm", "arith"], mean_method)
-        dr = float(decay_rate)
+            return clusterer
 
-        def clusterer(target_k: int) -> list[list[str]]:
-            return cluster_graph_agglomerative(
-                prune_graph,
-                target_k=target_k,
-                max_layer_span=max_layer_span,
-                mean_method=mm,
-                decay_rate=dr,
-            )
-
-        return clusterer
+        return factory
 
     def make_modularity() -> Callable[[int], list[list[str]]]:
         def clusterer(target_k: int) -> list[list[str]]:
@@ -476,12 +585,12 @@ def evaluate_prune_graph(
 
         return clusterer
 
-    def make_spectral_rbf() -> Callable[[int], list[list[str]]]:
+    def make_spectral_cosine() -> Callable[[int], list[list[str]]]:
         def clusterer(target_k: int) -> list[list[str]]:
             return labels_to_supernodes(
                 prune_graph,
                 middle_ids,
-                _spectral_rbf_middle_labels(phi_mid, target_k, random_state, n_init),
+                _spectral_cosine_middle_labels(phi_mid, target_k, random_state, n_init),
             )
 
         return clusterer
@@ -498,10 +607,11 @@ def evaluate_prune_graph(
 
     rows: list[dict[str, Any]] = []
     solver_specs: list[tuple[str, Callable[..., Any], list[dict[str, Any]]]] = [
-        ("ours-spectral", make_ours_spectral, METHOD_GRID),
-        ("ours-agglomerative", make_ours_agglomerative, METHOD_GRID),
+        ("ours-spectral-arith", make_ours_spectral_factory("arith"), METHOD_GRID_DECAY),
+        ("ours-spectral-harm",  make_ours_spectral_factory("harm"),  METHOD_GRID_DECAY),
+        ("ours-spectral-geo",   make_ours_spectral_factory("geo"),   METHOD_GRID_DECAY),
         ("baseline-modularity", make_modularity, []),
-        ("baseline-spectral-rbf", make_spectral_rbf, []),
+        ("baseline-spectral-cosine", make_spectral_cosine, []),
         ("baseline-kmeans", make_kmeans, []),
     ]
     for solver_name, factory, grid in solver_specs:
@@ -512,6 +622,7 @@ def evaluate_prune_graph(
                 graph_path=graph_path,
                 graph_name=graph_name,
                 dataset=dataset,
+                token_normalization=token_normalization,
                 output_dir=output_dir,
                 solver=solver_name,
                 clusterer_factory=factory,
@@ -520,13 +631,27 @@ def evaluate_prune_graph(
                 role_vectors_middle=role_vectors_middle,
                 middle_id_to_local=middle_id_to_local,
                 num_nodes=num_nodes,
+                prune_loss=prune_loss,
+                lambdas=lambdas,
             )
         )
     return rows
 
 
+def _validate_lambdas(lambda_coh: float, lambda_cons: float) -> tuple[float, float, float]:
+    if not (0.0 <= lambda_coh <= 1.0 and 0.0 <= lambda_cons <= 1.0):
+        raise ValueError("--lambda-coh and --lambda-cons must each be in [0, 1].")
+    lambda_cplx = 1.0 - lambda_coh - lambda_cons
+    if lambda_cplx < -1e-9:
+        raise ValueError(
+            f"--lambda-coh + --lambda-cons must be <= 1; got {lambda_coh + lambda_cons:.4f}"
+        )
+    return lambda_coh, lambda_cons, max(0.0, lambda_cplx)
+
+
 def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = Path(args.output_dir).expanduser().resolve()
+    lambdas = _validate_lambdas(args.lambda_coh, args.lambda_cons)
     graph_paths = _discover_prune_graphs(
         args.input_path,
         node_threshold=args.node_threshold,
@@ -538,6 +663,9 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     )
     if args.node_threshold is not None:
         logger.info("Node-threshold filter: %g", args.node_threshold)
+    logger.info(
+        "lambdas: (coh=%.4f, cons=%.4f, cplx=%.4f)", lambdas[0], lambdas[1], lambdas[2]
+    )
 
     summary_rows: list[dict[str, Any]] = []
     n_graphs = len(graph_paths)
@@ -554,6 +682,7 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 random_state=args.random_state,
                 n_init=args.n_init,
                 enforce_dag=args.enforce_dag,
+                lambdas=lambdas,
             )
         )
         logger.info(
@@ -578,26 +707,30 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             "graph_paths": [str(path) for path in graph_paths],
             "output_dir": str(output_dir),
             "objective": (
-                "L = L_coh + D_agg + L_cplx per paper/reformulation.tex Section 2-3, "
-                "with all three terms redefined to lie in [0, 1]. L_coh is mean "
-                "(1 - cos(r(u), centroid)) over middle features; D_agg is the "
-                "magnitude-retention loss of Eq. 12 computed from the signed "
-                "block sum (no dominant-direction tie-breaker); L_cplx is the "
-                "average emb->logit shortest-path length in G_SN divided by "
-                "(num_model_layers + 1)."
+                "L = lambda_coh L_coh + lambda_cons L_cons + lambda_cplx L_cplx, "
+                "simplex weights (default 1/3 each) per paper/reformulation.tex Section 3.4. "
+                "L_cons = 0.5 (prune_loss + D_agg) where prune_loss = "
+                "1 - token_attribution_faithfulness from eval/eval_prune.py. "
+                "Each per-axis loss is in [0, 1], so L is in [0, 1]."
             ),
             "selection_protocol": (
-                "Each solver sweeps its full hyperparameter grid x the shared "
+                "Each solver sweeps its hyperparameter grid x the shared "
                 "eigengap-bounded K candidate set; the (config, K) minimizing "
-                "L_total is reported as that solver's row. K candidates come from "
+                "L is reported as that solver's row. K candidates come from "
                 "auto_grouping.eigengap_analysis on the symmetrized phi cosine."
             ),
-            "method_grid": METHOD_GRID,
+            "method_grid": METHOD_GRID_DECAY,
+            "lambdas": {
+                "lambda_coh": lambdas[0],
+                "lambda_cons": lambdas[1],
+                "lambda_cplx": lambdas[2],
+            },
             "solvers": [
-                "ours-spectral",
-                "ours-agglomerative",
+                "ours-spectral-arith",
+                "ours-spectral-harm",
+                "ours-spectral-geo",
                 "baseline-modularity",
-                "baseline-spectral-rbf",
+                "baseline-spectral-cosine",
                 "baseline-kmeans",
             ],
             "summary_csv": str(summary_path),
@@ -611,6 +744,9 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 "map_location": args.map_location,
                 "random_state": args.random_state,
                 "n_init": args.n_init,
+                "lambda_coh": lambdas[0],
+                "lambda_cons": lambdas[1],
+                "lambda_cplx": lambdas[2],
             },
         },
     )
@@ -629,7 +765,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Evaluate clustering solvers on saved prune-graph .pt files under the "
-            "L_coh + D_agg + L_cplx objective from paper/reformulation.tex."
+            "simplex-weighted L = lambda_coh L_coh + lambda_cons L_cons + "
+            "lambda_cplx L_cplx objective from paper/reformulation.tex."
         )
     )
     parser.add_argument(
@@ -671,6 +808,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--n-init", type=int, default=20)
+    parser.add_argument(
+        "--lambda-coh",
+        type=float,
+        default=1.0 / 3.0,
+        help="Simplex weight on L_coh (default 1/3).",
+    )
+    parser.add_argument(
+        "--lambda-cons",
+        type=float,
+        default=1.0 / 3.0,
+        help="Simplex weight on L_cons (default 1/3). lambda_cplx = 1 - lambda_coh - lambda_cons.",
+    )
     return parser
 
 
@@ -686,7 +835,8 @@ def main() -> None:
     if not args.input_path:
         args.input_path = _default_input_paths()
     logger.info(
-        "=== Clustering evaluation (L_coh + D_agg + L_cplx; per-solver best) ==="
+        "=== Clustering evaluation (simplex-weighted L = lambda_coh L_coh + "
+        "lambda_cons L_cons + lambda_cplx L_cplx; per-solver best) ==="
     )
     result = run_evaluation(args)
     logger.info("output_dir: %s", result["output_dir"])

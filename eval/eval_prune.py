@@ -235,6 +235,43 @@ def token_attribution_faithfulness(
     return weighted_sum / weight_total if weight_total > 0 else 0.0
 
 
+def compute_prune_loss(
+    attr_graph: AttrGraph,
+    prune_graph: PruneGraph,
+    token_weights: list[float],
+    *,
+    device: str = "cpu",
+) -> float:
+    """1 - token_attribution_faithfulness; one number per (full, pruned) pair.
+
+    Used as the partition-invariant prune-loss component of L_cons in
+    paper/reformulation.tex. Constructs the full-graph cache lazily via
+    GraphCache so callers don't have to wire A_full_norm/full_target_rel
+    by hand.
+    """
+    cache = GraphCache(device=device)
+    key = f"_inline_{id(attr_graph)}"
+    attr_graph.adj = attr_graph.adj.to(device)
+    cache._attr_graph[key] = attr_graph
+    cache._idx_sets[key] = _build_index_sets(attr_graph.nodes)
+    cache._id_to_idx[key] = {nd.node_id: i for i, nd in enumerate(attr_graph.nodes)}
+    full_idx = cache._idx_sets[key]
+    id_to_idx = cache._id_to_idx[key]
+    A_full_norm = normalize_matrix(attr_graph.adj.T)
+    cache._a_full_norm[key] = A_full_norm
+
+    faith = token_attribution_faithfulness(
+        attr_graph,
+        prune_graph,
+        token_weights,
+        full_idx=full_idx,
+        A_full_norm=A_full_norm,
+        id_to_idx=id_to_idx,
+        full_target_rel_fn=lambda emb_i: cache.full_target_rel(key, emb_i),
+    )
+    return 1.0 - float(faith if faith is not None else 0.0)
+
+
 def asymmetric_pruning_divergence(
     prune_graph: PruneGraph,
     uniform_prune_graph: PruneGraph,

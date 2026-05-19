@@ -99,6 +99,33 @@ def node_from_prune_graph(
     )
 
 
+def compute_sn_adj(
+    index_lists: list[list[int]],
+    pruned_adj: torch.Tensor,
+) -> np.ndarray:
+    """Block-sum adjacency between supernodes with dominant-direction tie-breaker.
+
+    index_lists[i] = node indices of supernode i. Returns sn_adj[t, s] = mass
+    flowing s -> t (matches pruned_adj convention). For each unordered pair
+    {i, j} keeps only the stronger direction; zeros both on ties. Diagonal
+    always zero.
+    """
+    adj = pruned_adj.detach().cpu().numpy().astype(np.float64)  # [tgt, src]
+    n_total = adj.shape[0]
+    n_sn = len(index_lists)
+    indicator = np.zeros((n_sn, n_total), dtype=np.float64)
+    for sn_idx, idxs in enumerate(index_lists):
+        for i in idxs:
+            if 0 <= i < n_total:
+                indicator[sn_idx, i] = 1.0
+    block = indicator @ adj @ indicator.T  # block[t, s] = sum_{u in S_s, v in S_t} adj[v, u]
+
+    abs_block = np.abs(block)
+    keep = abs_block > abs_block.T  # strict dominance; ties drop both
+    np.fill_diagonal(keep, False)
+    return block * keep
+
+
 @dataclass
 class Supernode:
     """One grouped supernode: display name, typed members, role, and layer span."""
@@ -133,37 +160,11 @@ class SummarizationGraph:
 
     @property
     def sn_adj(self) -> np.ndarray:
-        # recalculate sn_adj as the sum of the pruned_adj between the supernode features
-        sn_adj = np.zeros((len(self.supernodes), len(self.supernodes)), dtype=np.float64)
-        for i, u in enumerate(self.supernodes):
-            u_idx = [n.node_idx for n in u.features if n.node_idx >= 0]
-            if not u_idx:
-                continue
-            for j, v in enumerate(self.supernodes):
-                if i == j:
-                    continue
-                v_idx = [n.node_idx for n in v.features if n.node_idx >= 0]
-                if not v_idx:
-                    continue
-                block = self.pruned_adj[np.ix_(u_idx, v_idx)].detach().cpu().numpy()
-                sn_adj[i, j] = float(block.sum())
-
-        # Dominant-direction tie-breaker: for each pair {i, j}, keep only the direction
-        # with larger absolute mass; zero both on ties (matches _supernode_edges convention).
-        # sn_adj[i, j] = mass flowing j -> i  (target=i, source=j)
-        n = len(self.supernodes)
-        for i in range(n):
-            for j in range(i + 1, n):
-                ij = abs(sn_adj[i, j])  # flow j -> i
-                ji = abs(sn_adj[j, i])  # flow i -> j
-                if ij > ji:
-                    sn_adj[j, i] = 0.0
-                elif ji > ij:
-                    sn_adj[i, j] = 0.0
-                else:  # tie or both zero
-                    sn_adj[i, j] = 0.0
-                    sn_adj[j, i] = 0.0
-        return sn_adj
+        index_lists = [
+            [n.node_idx for n in sn.features if n.node_idx >= 0]
+            for sn in self.supernodes
+        ]
+        return compute_sn_adj(index_lists, self.pruned_adj)
 
     def node_by_name(self) -> dict[str, Supernode]:
         return {n.name: n for n in self.supernodes}
