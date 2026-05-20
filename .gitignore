@@ -183,7 +183,11 @@ demos/temp_graph_files/
 demos/graph_files/
 nohup.out
 runs/
-*.pt
+pruned_graph
+dataset/
+analogy_graphs/
+multihop_graphs/
+eval_outputs/analogies/analogies
 # agent
 .claude/
 .cursor/
