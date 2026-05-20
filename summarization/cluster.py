@@ -260,6 +260,22 @@ def _resolve_cycles_only(
     return clusters
 
 
+def resolve_cluster_cycles(
+    clusters: list[list[str]],
+    prune_graph: PruneGraph,
+) -> list[list[str]]:
+    """Split clusters until the induced supernode graph is a DAG.
+
+    Embedding/logit singletons cannot participate in cycles (emb=source, logit=sink),
+    so this is safe to call on a mixed middle+emb+logit cluster list.
+    """
+    nodes_by_id = _nodes_by_id(prune_graph)
+    id_to_idx = {nid: i for i, nid in enumerate(prune_graph.node_ids)}
+    return _resolve_cycles_only(
+        clusters, prune_graph.pruned_adj, nodes_by_id, id_to_idx,
+    )
+
+
 def _merge_to_budget(
     clusters: list[list[str]], nodes_by_id: dict[str, Node], max_sn: int
 ) -> list[list[str]]:
@@ -412,13 +428,7 @@ def cluster_graph_spectral(
 
     if enforce_dag:
         logger.info("Resolving cycles in %d initial clusters...", len(middle_clusters))
-        id_to_idx = {nid: i for i, nid in enumerate(kept_ids)}
-        middle_clusters = _resolve_cycles_only(
-            middle_clusters,
-            prune_graph.pruned_adj,
-            nodes_by_id,
-            id_to_idx,
-        )
+        middle_clusters = resolve_cluster_cycles(middle_clusters, prune_graph)
 
     if max_sn is not None and enforce_dag:
         logger.info("Merging to budget of %d supernodes...", max_sn)
@@ -625,8 +635,16 @@ def clusters_to_supernodes(
     prune_graph: PruneGraph,
     supernodes: list[list[str]],
     middle_prefix: str = "SN",
+    *,
+    enforce_dag: bool = True,
 ) -> list[Supernode]:
-    """Convert `cluster_graph_spectral` member lists into named `Supernode` rows (middle + emb + logit)."""
+    """Convert `cluster_graph_spectral` member lists into named `Supernode` rows (middle + emb + logit).
+
+    If `enforce_dag=True` (default), split clusters until the induced supernode graph is acyclic
+    (idempotent — safe to set even if the caller already resolved cycles upstream).
+    """
+    if enforce_dag:
+        supernodes = resolve_cluster_cycles(supernodes, prune_graph)
     nodes_by_id = _nodes_by_id(prune_graph)
     middle: list[list[str]] = []
     emb: list[list[str]] = []

@@ -169,7 +169,9 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         random_state=args.random_state,
         n_init=args.n_init,
     )
-    rows = clusters_to_supernodes(prune_graph, clusters)
+    # Idempotent: cycle resolution already ran inside cluster_graph_spectral; this
+    # is the canonical seam where every caller (CLI + eval) enforces DAG.
+    rows = clusters_to_supernodes(prune_graph, clusters, enforce_dag=args.enforce_dag)
     supernode_map = {s.name: s.member_node_ids() for s in rows}
     sng = SummarizationGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
     labelled_supernodes = _clustered_supernodes_for_upload(clusters)

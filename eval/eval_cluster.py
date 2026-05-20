@@ -416,6 +416,7 @@ def _evaluate_solver(
     num_nodes: int,
     prune_loss: float,
     lambdas: tuple[float, float, float],
+    enforce_dag: bool,
 ) -> dict[str, Any]:
     """Full hyperparameter × K sweep; pick argmin(L) and write artifacts."""
     sweep: list[dict[str, Any]] = []
@@ -432,7 +433,9 @@ def _evaluate_solver(
         for target_k in k_candidates:
             try:
                 clusters = clusterer(target_k)
-                rows = clusters_to_supernodes(prune_graph, clusters)
+                rows = clusters_to_supernodes(
+                    prune_graph, clusters, enforce_dag=enforce_dag
+                )
                 metrics = compute_L(
                     rows,
                     role_vectors_middle,
@@ -560,13 +563,14 @@ def evaluate_prune_graph(
             dr = float(decay_rate)
 
             def clusterer(target_k: int) -> list[list[str]]:
+                # DAG enforcement happens uniformly at clusters_to_supernodes for all solvers.
                 return cluster_graph_spectral(
                     prune_graph,
                     target_k=target_k,
                     max_layer_span=max_layer_span,
                     mean_method=mean_method,
                     decay_rate=dr,
-                    enforce_dag=enforce_dag,
+                    enforce_dag=False,
                     random_state=random_state,
                     n_init=n_init,
                 )
@@ -633,6 +637,7 @@ def evaluate_prune_graph(
                 num_nodes=num_nodes,
                 prune_loss=prune_loss,
                 lambdas=lambdas,
+                enforce_dag=enforce_dag,
             )
         )
     return rows
