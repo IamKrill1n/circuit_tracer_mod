@@ -13,8 +13,8 @@ from summarization.cluster import (
 from summarization.cluster_scoring import (
     _cosine_similarity,
     _middle_indices,
-    score_clusters,
 )
+from summarization.objective import compute_L
 from summarization.prune import PruneGraph
 
 
@@ -54,14 +54,13 @@ def eigengap_analysis(
     return {"eigengap_k": k_hat, "eigenvalues": evals, "gaps": gaps, "search_range": (k_min, k_max)}
 
 
-def _phi_similarity(prune_graph: PruneGraph) -> np.ndarray:
-    """Cosine similarity of the influence/relevance-weighted phi vectors over all nodes.
+def _phi_and_similarity(prune_graph: PruneGraph) -> tuple[np.ndarray, np.ndarray]:
+    """Phi role vectors over all nodes and their cosine similarity (nonnegative).
 
-    This is the shared method-neutral similarity used by auto-k for both eigengap
-    and silhouette scoring.
+    The similarity is the method-neutral matrix used by auto-k for the eigengap range.
     """
     phi = compute_phi_vectors(prune_graph).detach().cpu().numpy()
-    return _cosine_similarity(phi, nonnegative=True)
+    return phi, _cosine_similarity(phi, nonnegative=True)
 
 
 def find_best_k(
@@ -77,22 +76,28 @@ def find_best_k(
     enforce_dag: bool = False,
     random_state: int = 42,
     n_init: int = 20,
+    prune_loss: float = 0.0,
+    lambdas: tuple[float, float, float] = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
 ) -> tuple[int, dict[int, dict[str, Any]]]:
     """
-    Auto-select k for `cluster_graph_spectral` via composite-score sweep on phi-similarity.
+    Auto-select k for `cluster_graph_spectral` by minimizing the closed-form L objective.
 
-    The eigengap range and silhouette are computed against sim_phi (the cosine of the
-    influence/relevance-weighted feature vectors), so every method picks k on the same
-    method-neutral yardstick.
+    The eigengap search range is computed against sim_phi (the cosine of the
+    influence/relevance-weighted feature vectors). For each k in the range, we build
+    the spectral partition and score it with `compute_L` (paper Eq. L). Best k = argmin(L).
 
     Returns `(best_k, results)` where each results[k] includes `final_supernodes`.
     """
-    del similarity  # legacy arg; we always use sim_phi for scoring/eigengap now
-    del weights  # legacy weight kwargs
-    sim_phi = _phi_similarity(prune_graph)
-    n_middle = len(_middle_indices(prune_graph))
+    del similarity  # legacy arg; we always use sim_phi for eigengap now
+    del weights  # legacy weight kwargs; objective uses `lambdas`
+    phi, sim_phi = _phi_and_similarity(prune_graph)
+    mid_idx = _middle_indices(prune_graph)
+    n_middle = len(mid_idx)
     if n_middle < 3:
         return 2, {}
+
+    role_vectors_middle = phi[mid_idx]
+    middle_id_to_local = {prune_graph.nodes[i].node_id: local for local, i in enumerate(mid_idx)}
 
     eg = eigengap_analysis(sim_phi, prune_graph, max_k=min(20, n_middle - 1))
     k_min = k_min_override if k_min_override is not None else int(eg["search_range"][0])
@@ -116,18 +121,20 @@ def find_best_k(
             n_init=n_init,
         )
         rows = clusters_to_supernodes(prune_graph, supernodes)
-        sc = score_clusters(
+        sc: dict[str, Any] = dict(compute_L(
             rows,
+            role_vectors_middle,
+            middle_id_to_local,
             prune_graph,
-            sim_phi,
-            enforce_dag=enforce_dag,
-        )
+            prune_loss=prune_loss,
+            lambdas=lambdas,
+        ))
         sc["final_supernodes"] = {s.name: s.member_node_ids() for s in rows}
         results[k] = sc
 
     if not results:
         return int(eg["eigengap_k"]), {}
-    best_k = max(results, key=lambda x: float(results[x]["sil_norm"]))
+    best_k = min(results, key=lambda x: float(results[x]["L"]))
     return best_k, results
 
 
@@ -140,24 +147,33 @@ def find_best_k_for_clusterer(
     k_max_override: int | None = None,
     weights: dict[str, float] | None = None,
     enforce_dag: bool = False,
+    prune_loss: float = 0.0,
+    lambdas: tuple[float, float, float] = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
 ) -> tuple[int, dict[int, dict[str, Any]]]:
     """
-    Auto-select k for an arbitrary clusterer via composite-score sweep on phi-similarity.
+    Auto-select k for an arbitrary clusterer by minimizing the closed-form L objective.
     """
-    del similarity  # legacy arg; phi-similarity is computed internally
+    del similarity  # legacy arg; phi is computed internally
     del weights
-    sim_phi = _phi_similarity(prune_graph)
-    n_middle = len(_middle_indices(prune_graph))
+    del enforce_dag  # legacy arg; objective is partition-only
+    phi, sim_phi = _phi_and_similarity(prune_graph)
+    mid_idx = _middle_indices(prune_graph)
+    n_middle = len(mid_idx)
+    role_vectors_middle = phi[mid_idx] if n_middle else phi[:0]
+    middle_id_to_local = {prune_graph.nodes[i].node_id: local for local, i in enumerate(mid_idx)}
+
     if n_middle < 3:
         fallback_k = max(0, n_middle)
         clusters = clusterer(fallback_k)
         rows = clusters_to_supernodes(prune_graph, clusters)
-        result = score_clusters(
+        result: dict[str, Any] = dict(compute_L(
             rows,
+            role_vectors_middle,
+            middle_id_to_local,
             prune_graph,
-            sim_phi,
-            enforce_dag=enforce_dag,
-        )
+            prune_loss=prune_loss,
+            lambdas=lambdas,
+        ))
         result["final_supernodes"] = {s.name: s.member_node_ids() for s in rows}
         return fallback_k, {fallback_k: result}
 
@@ -171,14 +187,16 @@ def find_best_k_for_clusterer(
     for target_k in range(k_min, k_max + 1):
         clusters = clusterer(target_k)
         rows = clusters_to_supernodes(prune_graph, clusters)
-        result = score_clusters(
+        result = dict(compute_L(
             rows,
+            role_vectors_middle,
+            middle_id_to_local,
             prune_graph,
-            sim_phi,
-            enforce_dag=enforce_dag,
-        )
+            prune_loss=prune_loss,
+            lambdas=lambdas,
+        ))
         result["final_supernodes"] = {s.name: s.member_node_ids() for s in rows}
         results[target_k] = result
 
-    best_k = max(results, key=lambda k: float(results[k]["sil_norm"]))
+    best_k = min(results, key=lambda k: float(results[k]["L"]))
     return best_k, results

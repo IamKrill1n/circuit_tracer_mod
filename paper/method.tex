@@ -1,0 +1,189 @@
+The pipeline produces $(V', E', \varphi)$ in two blocks
+(Figure~\ref{fig:pipeline}). Block~1 selects $(V', E')$ from $G$ by
+combining influence and relevance into a single score and keeping the
+top cumulative-mass prefix. Block~2 builds a bidirectional similarity
+matrix on the pruned graph and runs spectral clustering on it; the
+three algorithm variants ASG-arith, ASG-harm, ASG-geo come from the
+choice of mean operator used to combine the two similarity matrices.
+
+\subsection{Block 1: pruning}\label{sec:solution-prune}
+
+\paragraph{Influence and relevance.}
+On the original attribution graph $G = (V, E, W)$ with signed weights,
+define the row- and column-normalized magnitude matrices
+\begin{equation}
+W^{\text{in}}_{ij} = \frac{|W_{ij}|}{\sum_k |W_{kj}|}, \qquad
+W^{\text{out}}_{ij} = \frac{|W_{ij}|}{\sum_k |W_{ik}|}.
+\label{eq:Win-Wout}
+\end{equation}
+Because $G$ is acyclic, the Neumann series
+$\sum_t (W^{\text{in}})^t$ and $\sum_t (W^{\text{out}})^t$ both
+converge, and the per-node \emph{influence} on logits and
+\emph{relevance} from tokens are
+\begin{equation}
+\mathrm{Inf} = \ell^\top \bigl(I - (W^{\text{in}})^\top\bigr)^{-1},
+\quad
+\mathrm{Rel} = \tau^\top \bigl(I - W^{\text{out}}\bigr)^{-1}.
+\label{eq:inf-rel}
+\end{equation}
+Here $\ell \in \mathbb{R}^N$ identifies the logit positions of
+interest and $\tau \in \mathbb{R}^N$ identifies the input-token
+positions, normalised so $\sum_e \tau_e = 1$. The choice of $\tau$ is
+the input to the pruner; the headline evaluation
+(Section~\ref{sec:eval}) sweeps two SHAP-based constructions
+(softmax and entmax). Edge-level analogues are
+\begin{equation}
+\mathrm{Inf}_{uv} = \mathrm{Inf}_v \, W^{\text{in}}_{uv}, \qquad
+\mathrm{Rel}_{uv} = \mathrm{Rel}_u \, W^{\text{out}}_{uv}.
+\label{eq:inf-rel-edge}
+\end{equation}
+A kept node should be strong on both axes; a kept edge likewise.
+
+\paragraph{Combined score.}
+We pool the two axes via the geometric mean of rank percentiles
+$\widehat{\mathrm{Inf}}_u, \widehat{\mathrm{Rel}}_u \in [0, 1]$:
+\begin{equation}
+\begin{aligned}
+C^V_u    &= (\widehat{\mathrm{Inf}}_u    + \varepsilon)^\alpha
+            (\widehat{\mathrm{Rel}}_u    + \varepsilon)^{1-\alpha}, \\
+C^E_{uv} &= (\widehat{\mathrm{Inf}}_{uv} + \varepsilon)^\alpha
+            (\widehat{\mathrm{Rel}}_{uv} + \varepsilon)^{1-\alpha},
+\end{aligned}
+\label{eq:CV-CE}
+\end{equation}
+with $\alpha \in [0, 1]$ a log-pooling temperature and $\varepsilon$
+a small constant. The geometric form penalises nodes (resp.\ edges)
+weak on either axis. Arithmetic and harmonic combiners are also
+available; geometric is the default.
+
+\paragraph{Cumulative-mass thresholding.}
+Given a score $C$ and a target $\eta \in [0, 1]$, sort the entries
+in decreasing order $C_{(1)} \ge C_{(2)} \ge \cdots$ and keep the
+top-mass prefix:
+\begin{equation}
+\mathrm{Keep}_\eta(C)
+= \bigl\{u : C_u \ge C_{(t)}\bigr\}, \quad
+t = \min\Bigl\{k : \tfrac{\sum_{j \le k} C_{(j)}}{\sum_j C_{(j)}} \ge \eta\Bigr\}.
+\label{eq:cum-mass}
+\end{equation}
+Block~1 applies this rule at $\eta = \eta_V$ to $C^V$ to produce
+$V'$, then recomputes $C^E$ on the node-pruned graph and applies the
+rule at $\eta = \eta_E$ to produce $E'$. A short housekeeping step
+drops any feature node left without surviving edges. This is the
+standard cumulative-mass pruning rule of \cite{ameisen2024scaling}
+applied to a combined Inf/Rel score; the contribution is the score,
+not the threshold rule.
+
+\subsection{Block 2: clustering}\label{sec:solution-cluster}
+
+\paragraph{Role vectors and similarity matrix.}
+On the pruned graph $(V', E')$ with weights $W'$ restricted to $E'$,
+the role of a feature $u \in V'_{\text{mid}}$ is its pair of
+Inf/Rel-weighted edge profiles
+\begin{equation}
+(v_u^{\text{out}})_k = W'_{uk}\,\sqrt{\mathrm{Inf}_k}, \quad
+(v_u^{\text{in}})_k  = W'_{ku}\,\sqrt{\mathrm{Rel}_k},
+\label{eq:role-method}
+\end{equation}
+matching Eq.~\eqref{eq:role}. The rectified-cosine similarity
+matrices are
+\begin{equation}
+\begin{aligned}
+S^{\text{out}}_{ij} &= \mathrm{ReLU}\,\cos\!\bigl(v_i^{\text{out}}, v_j^{\text{out}}\bigr), \\
+S^{\text{in}}_{ij}  &= \mathrm{ReLU}\,\cos\!\bigl(v_i^{\text{in}},  v_j^{\text{in}}\bigr),
+\end{aligned}
+\label{eq:Sout-Sin}
+\end{equation}
+or in matrix form
+\begin{equation}
+\begin{aligned}
+S^{\text{out}} &= \mathrm{ReLU}\,\mathrm{CosNorm}\bigl(W' \,\mathrm{diag}(\mathrm{Inf})\, W'^\top\bigr), \\
+S^{\text{in}}  &= \mathrm{ReLU}\,\mathrm{CosNorm}\bigl(W'^\top \,\mathrm{diag}(\mathrm{Rel})\, W'\bigr),
+\end{aligned}
+\label{eq:Sout-Sin-matrix}
+\end{equation}
+with $\mathrm{CosNorm}(M)_{ij} = M_{ij}/\sqrt{M_{ii}\,M_{jj}}$.
+
+\paragraph{Three algorithm variants.}
+The two similarities are combined component-wise into a single
+similarity matrix $S$ via one of three mean operators
+$F_{\text{mean}}$:
+\begin{equation}
+\begin{aligned}
+\text{ASG-arith:}\quad S_{ij} &= \tfrac{1}{2}\bigl(S^{\text{out}}_{ij} + S^{\text{in}}_{ij}\bigr), \\
+\text{ASG-harm:}\quad S_{ij}  &= \tfrac{2\,S^{\text{out}}_{ij}\,S^{\text{in}}_{ij}}
+                                {S^{\text{out}}_{ij} + S^{\text{in}}_{ij} + \varepsilon}, \\
+\text{ASG-geo:}\quad S_{ij}   &= \sqrt{S^{\text{out}}_{ij}\,S^{\text{in}}_{ij}}.
+\end{aligned}
+\label{eq:Fmean}
+\end{equation}
+Arithmetic preserves a pair's signal whenever either axis is strong;
+harmonic and geometric require both axes to be strong, penalising
+pairs that agree on one direction but not the other. The three
+variants are the three algorithms compared in
+Section~\ref{sec:eval-protocol}.
+
+\paragraph{Layer-decay multiplier.}
+Cross-layer similarity values are damped by a soft locality factor
+\begin{equation}
+\tilde S_{ij} = S_{ij}\,e^{-\lambda \, |\layer(i) - \layer(j)|},
+\label{eq:Stilde}
+\end{equation}
+with $\lambda \ge 0$ a locality knob; an optional hard cap
+$|\layer(i) - \layer(j)| \le \layer_{\max}$ zeroes entries beyond a
+fixed span. Both serve the same purpose---features that span the
+whole network should not collapse into one supernode---and are
+swept jointly in evaluation.
+
+\paragraph{Spectral clustering on $\tilde S$.}
+Treating $\tilde S$ as an affinity matrix, we run the standard
+Shi--Malik recipe~\cite{shi2000normalized, von2007tutorial}: build
+the symmetric normalized Laplacian, project onto its bottom-$K$
+eigenvectors, and assign cluster labels by $K$-means. We write this
+as
+\begin{equation}
+\varphi^{(K)} \;=\; \textsc{SpectralCluster}(\tilde S,\, K).
+\label{eq:spec}
+\end{equation}
+A small $\varepsilon$-clamp on $\tilde S$ keeps the Laplacian
+connected.
+
+\paragraph{DAG cleanup.}
+The partition $\varphi^{(K)}$ may induce cycles in $G_{SN}$ that
+violate (F1). We resolve them with a short post-processing pass:
+detect strongly connected components of size $\ge 2$ on the supernode
+graph; for each, split the cluster with the widest layer span at its
+median layer; repeat until no non-trivial SCCs remain. The
+direction of each retained inter-supernode edge is set by the larger
+absolute signed block sum, eliminating 2-cycles by construction.
+
+\paragraph{Granularity selection.}
+The method is fully specified by $(F_{\text{mean}}, \lambda, K)$.
+$K$ is chosen by grid search over an eigengap-bounded candidate set
+computed once per pruned graph from the spectrum of the symmetric
+normalized Laplacian of $\tilde S$; we report the $K$ that minimises
+the scalar $L$ of Eq.~\eqref{eq:Lsum} on the resulting partition.
+
+\begin{algorithm}[h]
+\caption{ASG: Inf/Rel pruning + bidirectional spectral clustering}
+\label{alg:asg}
+\begin{algorithmic}[1]
+\REQUIRE Attribution graph $G$; thresholds $(\eta_V, \eta_E)$,
+$\alpha$; mean operator $F_{\text{mean}}$; locality $\lambda$;
+$K$ grid $\mathcal{K}$
+\ENSURE Summary $(V', E', \varphi)$
+\STATE Compute $\mathrm{Inf}, \mathrm{Rel}$ via Eq.~\eqref{eq:inf-rel}
+\STATE $C^V \gets$ Eq.~\eqref{eq:CV-CE};
+       $V' \gets \mathrm{Keep}_{\eta_V}(C^V)$
+\STATE Recompute $C^E$ on $V'$; $E' \gets \mathrm{Keep}_{\eta_E}(C^E)$
+\STATE Build $S^{\text{out}}, S^{\text{in}}$ on $(V', E')$;
+       $S \gets F_{\text{mean}}(S^{\text{out}}, S^{\text{in}})$
+\STATE $\tilde S \gets S \odot \exp(-\lambda\, |\layer(i) - \layer(j)|)$
+\FOR{$K \in \mathcal{K}$}
+  \STATE $\varphi^{(K)} \gets \textsc{SpectralCluster}(\tilde S, K)$
+  \STATE Resolve SCCs in $G_{SN}(\varphi^{(K)})$ by widest-span split
+\ENDFOR
+\STATE $K^\star \gets \argmin_{K \in \mathcal{K}} L\bigl(V', E', \varphi^{(K)}\bigr)$
+\RETURN $\bigl(V', E', \varphi^{(K^\star)}\bigr)$
+\end{algorithmic}
+\end{algorithm}

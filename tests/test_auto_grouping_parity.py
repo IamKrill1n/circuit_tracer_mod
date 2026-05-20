@@ -1,21 +1,10 @@
 from __future__ import annotations
 
-import numpy as np
 import torch
 
-from summarization.auto_grouping import (
-    eigengap_analysis,
-    find_best_k,
-    score_k,
-)
-from summarization.cluster import (
-    compute_similarity,
-    mapping_dict_to_supernodes,
-    supernodes_to_mapping,
-)
-from summarization.cluster_scoring import score_clusters, score_summarization_graph
+from summarization.auto_grouping import eigengap_analysis, find_best_k, find_best_k_for_clusterer
+from summarization.cluster import compute_similarity
 from summarization.prune import PruneGraph
-from summarization.supernode_graph import SummarizationGraph
 from summarization.utils import _node_from_json_dict
 
 
@@ -59,69 +48,16 @@ def _build_test_graph() -> PruneGraph:
 
 def test_eigengap_analysis_outputs_expected_keys() -> None:
     prune_graph = _build_test_graph()
-    similarity = compute_similarity(
-        prune_graph,
-        mean_method="arith",
-
-    )
+    similarity = compute_similarity(prune_graph, mean_method="arith")
     result = eigengap_analysis(similarity, prune_graph, max_k=5)
     assert {"eigengap_k", "eigenvalues", "gaps", "search_range"} <= set(result.keys())
     assert result["search_range"][0] <= result["search_range"][1]
 
 
-def test_score_k_returns_base_metrics_only() -> None:
+def test_find_best_k_returns_L_metrics_and_picks_argmin() -> None:
     prune_graph = _build_test_graph()
-    similarity = compute_similarity(
-        prune_graph,
-        mean_method="arith",
-
-    )
-    supernodes = [["1_0_0", "1_1_0"], ["2_0_0", "2_1_0"], ["E_0_0"], ["27_0_0"]]
-    mapping = supernodes_to_mapping(prune_graph, supernodes)
-    score = score_k(
-        mapping,
-        prune_graph,
-        similarity,
-        enforce_dag=False,
-    )
-    assert "F_phi" not in score
-    assert "sigma_phi" not in score
-    assert "sil_raw" in score
-    assert "sil_norm" in score
-    assert "dag_score" in score
-    assert score["score_arith"] >= 0.0
-
-
-def test_score_summarization_graph_matches_score_clusters() -> None:
-    prune_graph = _build_test_graph()
-    similarity = compute_similarity(
-        prune_graph,
-        mean_method="arith",
-
-    )
-    supernodes = [["1_0_0", "1_1_0"], ["2_0_0", "2_1_0"], ["E_0_0"], ["27_0_0"]]
-    mapping = supernodes_to_mapping(prune_graph, supernodes)
-    rows = mapping_dict_to_supernodes(prune_graph, mapping)
-    sng = SummarizationGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
-    a = score_clusters(rows, prune_graph, similarity, enforce_dag=False)
-    b = score_summarization_graph(sng, prune_graph, similarity)
-    assert a.keys() == b.keys()
-    for key in a:
-        if key == "dbcv" and (np.isnan(a[key]) and np.isnan(b[key])):
-            continue
-        assert abs(float(a[key]) - float(b[key])) < 1e-9
-
-
-def test_find_best_k_returns_scored_results() -> None:
-    prune_graph = _build_test_graph()
-    similarity = compute_similarity(
-        prune_graph,
-        mean_method="arith",
-
-    )
     best_k, results = find_best_k(
         prune_graph,
-        similarity=similarity,
         max_layer_span=4,
         k_min_override=2,
         k_max_override=3,
@@ -129,5 +65,51 @@ def test_find_best_k_returns_scored_results() -> None:
         enforce_dag=False,
     )
     assert best_k in results
-    assert all("score_arith" in v for v in results.values())
-    assert all("final_supernodes" in v for v in results.values())
+    # Each entry should carry the closed-form objective terms and the partition.
+    for v in results.values():
+        assert {"L", "L_coh", "L_cons", "L_cplx", "D_agg", "prune_loss"} <= set(v.keys())
+        assert "final_supernodes" in v
+        assert 0.0 <= float(v["L"]) <= 1.0
+    # best_k must minimize L.
+    best_L = float(results[best_k]["L"])
+    assert best_L == min(float(v["L"]) for v in results.values())
+
+
+def test_find_best_k_respects_custom_lambdas() -> None:
+    prune_graph = _build_test_graph()
+    # All weight on L_cplx -> argmin should pick the smallest k (fewer middle supernodes).
+    _, results_cplx = find_best_k(
+        prune_graph,
+        k_min_override=2,
+        k_max_override=3,
+        max_sn=None,
+        enforce_dag=False,
+        lambdas=(0.0, 0.0, 1.0),
+    )
+    assert results_cplx[2]["L"] <= results_cplx[3]["L"]
+
+
+def test_find_best_k_for_clusterer_picks_argmin_L() -> None:
+    prune_graph = _build_test_graph()
+    middle_ids = ["1_0_0", "1_1_0", "2_0_0", "2_1_0"]
+
+    def clusterer(k: int) -> list[list[str]]:
+        # Deterministic: split middle ids into k contiguous chunks.
+        if k <= 0:
+            return []
+        chunks: list[list[str]] = [[] for _ in range(k)]
+        for i, nid in enumerate(middle_ids):
+            chunks[i % k].append(nid)
+        return [c for c in chunks if c]
+
+    best_k, results = find_best_k_for_clusterer(
+        prune_graph=prune_graph,
+        clusterer=clusterer,
+        k_min_override=2,
+        k_max_override=3,
+    )
+    assert best_k in results
+    for v in results.values():
+        assert "L" in v
+        assert "final_supernodes" in v
+    assert float(results[best_k]["L"]) == min(float(v["L"]) for v in results.values())

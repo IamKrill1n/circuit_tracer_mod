@@ -37,7 +37,7 @@ def test_heuristic_classify_output_when_next_token_dominates():
     out = heuristic_classify(
         clerp="animal concept",
         top_tokens=["dog", "cat", "bird", "fish"],
-        top_next_tokens=["the", "the", "the", "the", "the", "the", "x", "y", "z", "w", "v"],
+        top_next_tokens=["the", "the", "the", "the", "the", "the", "the", "the", "the", "x", "y"],
         top_logits=["l1", "l2"],
     )
     assert out == "output"

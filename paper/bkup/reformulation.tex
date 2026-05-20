@@ -153,30 +153,6 @@ $G$ is replaced by $G_{SN}$---measures (D2).
 summarization graph---measures (D3).
 \end{description}
 
-\paragraph{Why scalar, not multi-objective.}
-A vector-valued formulation $(L_{\text{coh}}, L_{\text{cons}},
-L_{\text{cplx}})$ with Pareto dominance lets two trivial partitions sit
-on the Pareto front by construction. Singletons (every feature its own
-supernode) score $L_{\text{coh}} = 0$ and $D_{\text{agg}} = 0$ while
-maxing out $L_{\text{cplx}}$; full collapse into one supernode does the
-reverse. Neither extreme is a useful summary, but Pareto comparison
-cannot prefer a balanced partition over them. The weighted
-sum~\eqref{eq:Lsum} penalises the maxed-out axis of each trivial
-partition directly. The individual $L_\ast$ are still reported in
-evaluation (Section~\ref{sec:eval}) for diagnostic purposes; ranking
-uses the scalar $L$. Section~\ref{sec:attr-instance} fixes the closed
-form of each $L_\ast$.
-
-\section{Instantiation for the Transcoder Attribution Graph}\label{sec:attr-instance}
-
-The losses of Section~\ref{sec:objective} are abstract. We now define each
-one concretely for the transcoder attribution graph, where feature nodes
-correspond to transcoder features and edge weights $W_{uv}$ encode the
-linear causal contribution of $u$ to $v$ under the cross-layer
-transcoder linearization. The point of this section is to pin down
-\emph{what} is being measured; the survey of solvers and their surrogate
-forms is the subject of Section~\ref{sec:solution}.
-
 \subsection{Coherence}\label{sec:attr-coh}
 
 The \emph{role} of a feature $u \in V'_{\text{mid}}$ is its pair of

@@ -349,6 +349,82 @@ def compute_clt_graph_scores(attr_graph: AttrGraph, prune_graph: PruneGraph) -> 
     return replacement, completeness
 
 
+def compute_clt_graph_completeness_relevance(
+    attr_graph: AttrGraph,
+    prune_graph: PruneGraph,
+) -> float:
+    """Forward-direction analog of completeness in `compute_clt_graph_scores`.
+
+    Pruned features are merged into their error node (same merge as the backward
+    version). Then we run forward relevance from uniformly-seeded embeddings and
+    measure, weighted by each node's forward relevance, the fraction of its
+    outgoing flow going to non-error targets.
+    """
+    full_nodes = attr_graph.nodes
+    n_full = len(full_nodes)
+
+    error_lookup: dict[tuple[str, int], int] = {
+        (node.layer, node.ctx_idx): i
+        for i, node in enumerate(full_nodes)
+        if node.feature_type == "mlp reconstruction error"
+    }
+
+    kept_ids = {nd.node_id for nd in prune_graph.nodes}
+
+    # adj[target, source]; merge pruned features into error nodes in-place
+    adj = attr_graph.adj.to(dtype=torch.float32).clone()
+    for i, node in enumerate(full_nodes):
+        if node.feature_type != "cross layer transcoder" or node.node_id in kept_ids:
+            continue
+        err_i = error_lookup.get((node.layer, node.ctx_idx))
+        if err_i is None:
+            continue
+        adj[err_i, :] += adj[i, :]
+        adj[i, :] = 0.0
+        adj[:, err_i] += adj[:, i]
+        adj[:, i] = 0.0
+
+    full_idx = _build_index_sets(full_nodes)
+    error_idx = full_idx["error"]
+    emb_idx = full_idx["embedding"]
+    if not emb_idx:
+        return float("nan")
+
+    emb_w = torch.zeros(n_full, dtype=torch.float32, device=adj.device)
+    for i in emb_idx:
+        emb_w[i] = 1.0
+
+    # A_fwd[s, t] = fraction of source s's outgoing weight to target t (row-sum = 1)
+    A_fwd = normalize_matrix(adj.T)
+    node_rel = compute_relevance(A_fwd, emb_w)
+
+    if error_idx:
+        non_error = 1.0 - A_fwd[:, error_idx].sum(dim=-1)
+    else:
+        non_error = torch.ones(n_full, dtype=A_fwd.dtype, device=A_fwd.device)
+    denom = float(node_rel.sum())
+    return float((non_error * node_rel).sum()) / denom if denom > 0 else float("nan")
+
+
+def compute_clt_graph_completeness_combined(
+    attr_graph: AttrGraph,
+    prune_graph: PruneGraph,
+) -> float:
+    """Geometric mean of backward (influence) and forward (relevance) completeness.
+
+    Penalizes asymmetry: a high score requires error nodes to be unimportant in
+    *both* the upstream and downstream directions.
+    """
+    _, c_back = compute_clt_graph_scores(attr_graph, prune_graph)
+    c_fwd = compute_clt_graph_completeness_relevance(attr_graph, prune_graph)
+    # NaN propagation: either direction undefined → combined undefined
+    if c_back != c_back or c_fwd != c_fwd:
+        return float("nan")
+    if c_back <= 0 or c_fwd <= 0:
+        return 0.0
+    return float((c_back * c_fwd) ** 0.5)
+
+
 def influence_relevance_agreement(prune_graph: PruneGraph) -> float | None:
     if prune_graph.node_influence is None or prune_graph.node_relevance is None:
         return None

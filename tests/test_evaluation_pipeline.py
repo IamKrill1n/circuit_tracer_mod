@@ -5,7 +5,7 @@ import json
 
 import torch
 
-from evaluation_pipeline import run_evaluation
+from eval.eval_cluster import run_evaluation
 from summarization.prune import PruneGraph, save_prune_graph
 from summarization.utils import _node_from_json_dict
 
@@ -48,7 +48,8 @@ def _build_test_graph() -> PruneGraph:
     )
 
 
-def test_evaluation_pipeline_writes_summary_and_runs_all_methods(tmp_path) -> None:
+def test_evaluation_pipeline_writes_summary_and_runs_all_solvers(tmp_path) -> None:
+    # eval.eval_cluster discovers files matching *_prune_graph.pt.
     graph_path = tmp_path / "toy_prune_graph.pt"
     save_prune_graph(_build_test_graph(), str(graph_path))
 
@@ -57,35 +58,43 @@ def test_evaluation_pipeline_writes_summary_and_runs_all_methods(tmp_path) -> No
         input_path=[str(graph_path)],
         output_dir=str(output_dir),
         map_location="cpu",
-        k_min=2,
-        k_max=3,
+        node_threshold=None,
         max_layer_span=4,
         enforce_dag=False,
         random_state=42,
         n_init=5,
-        w_intra=0.30,
-        w_dag=0.25,
-        w_attr=0.25,
-        w_size=0.20,
+        lambda_coh=1.0 / 3.0,
+        lambda_cons=1.0 / 3.0,
     )
 
     result = run_evaluation(args)
 
     assert result["n_graphs"] == 1
-    assert result["n_runs"] == 6
+    assert result["n_runs"] == 6  # six solvers per graph
     assert (output_dir / "summary.csv").exists()
     assert (output_dir / "results.json").exists()
     assert (output_dir / "manifest.json").exists()
 
     rows = json.loads((output_dir / "results.json").read_text(encoding="utf-8"))
     assert len(rows) == 6
-    methods = {row["method"] for row in rows}
-    assert "baseline-kmeans-node-profile" in methods
-    assert "baseline-spectral-adjacency" in methods
-    assert "ours-harm-node" in methods
-    assert "ours-arith-edge" in methods
+    solvers = {row["solver"] for row in rows}
+    assert {
+        "ours-spectral-arith",
+        "ours-spectral-harm",
+        "ours-spectral-geo",
+        "baseline-modularity",
+        "baseline-spectral-cosine",
+        "baseline-kmeans",
+    } <= solvers
 
     for row in rows:
-        assert "within_cluster_weighted_edge_cosine_mean" in row
-        assert "F_phi" in row
+        # Every solver row should carry the closed-form objective terms from objective.py.
+        for key in ("L", "L_coh", "L_cons", "L_cplx", "D_agg", "prune_loss"):
+            assert key in row, f"missing {key} in solver row {row.get('solver')}"
         assert row["result_path"]
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    lambdas = manifest["lambdas"]
+    assert abs(lambdas["lambda_coh"] - 1.0 / 3.0) < 1e-9
+    assert abs(lambdas["lambda_cons"] - 1.0 / 3.0) < 1e-9
+    assert abs(lambdas["lambda_cplx"] - 1.0 / 3.0) < 1e-9
