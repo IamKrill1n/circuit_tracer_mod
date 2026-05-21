@@ -1,0 +1,174 @@
+{
+  "input_paths": [
+    "eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02"
+  ],
+  "node_threshold": null,
+  "graph_paths": [
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/000_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/001_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/002_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/003_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/004_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/005_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/006_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/007_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/008_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/009_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/010_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/011_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/012_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/013_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/014_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/015_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/016_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/017_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/018_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/019_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/020_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/021_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/022_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/023_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/024_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/025_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/026_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/027_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/028_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/029_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/030_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/031_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/032_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/033_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/034_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/035_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/036_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/037_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/038_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/039_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/040_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/041_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/042_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/043_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/044_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/045_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/046_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/047_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/048_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/049_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/050_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/051_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/052_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/053_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/054_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/055_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/056_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/057_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/058_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/059_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/060_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/061_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/062_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/063_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/064_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/065_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/066_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/067_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/068_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/069_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/070_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/071_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/072_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/073_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/074_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/075_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/076_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/077_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/078_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/079_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/080_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/081_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/082_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/083_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/084_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/085_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/086_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/087_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/088_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/089_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/090_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/091_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/092_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/093_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/094_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/095_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/096_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/097_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/098_prune_graph.pt",
+    "/home/tu/circuit_tracer_mod/eval_outputs/analogies/analogies/softmax/alpha_0.50/node_0.02/099_prune_graph.pt"
+  ],
+  "output_dir": "/home/tu/circuit_tracer_mod/eval_outputs/cluster_eval/analogies_softmax_alpha0.50_node0.02",
+  "objective": "L = lambda_coh L_coh + lambda_cons L_cons + lambda_cplx L_cplx, simplex weights (default 1/3 each) per paper/reformulation.tex Section 3.4. L_cons = 0.5 (prune_loss + D_agg) where prune_loss = 1 - token_attribution_faithfulness from eval/eval_prune.py. Each per-axis loss is in [0, 1], so L is in [0, 1].",
+  "selection_protocol": "Each solver sweeps its hyperparameter grid x the shared eigengap-bounded K candidate set; the (config, K) minimizing L is reported as that solver's row. K candidates come from auto_grouping.eigengap_analysis on the symmetrized phi cosine.",
+  "method_grid": [
+    {
+      "decay_rate": 0.0
+    },
+    {
+      "decay_rate": 0.1
+    },
+    {
+      "decay_rate": 0.2
+    },
+    {
+      "decay_rate": 0.3
+    },
+    {
+      "decay_rate": 0.4
+    },
+    {
+      "decay_rate": 0.5
+    },
+    {
+      "decay_rate": 0.6
+    },
+    {
+      "decay_rate": 0.7
+    },
+    {
+      "decay_rate": 0.8
+    },
+    {
+      "decay_rate": 0.9
+    },
+    {
+      "decay_rate": 1.0
+    }
+  ],
+  "lambdas": {
+    "lambda_coh": 0.3333333333333333,
+    "lambda_cons": 0.3333333333333333,
+    "lambda_cplx": 0.3333333333333334
+  },
+  "solvers": [
+    "ours-spectral-arith",
+    "ours-spectral-harm",
+    "ours-spectral-geo",
+    "baseline-modularity",
+    "baseline-spectral-cosine",
+    "baseline-kmeans"
+  ],
+  "summary_csv": "/home/tu/circuit_tracer_mod/eval_outputs/cluster_eval/analogies_softmax_alpha0.50_node0.02/summary.csv",
+  "results_json": "/home/tu/circuit_tracer_mod/eval_outputs/cluster_eval/analogies_softmax_alpha0.50_node0.02/results.json",
+  "n_graphs": 100,
+  "n_runs": 600,
+  "config": {
+    "node_threshold": null,
+    "max_layer_span": 4,
+    "enforce_dag": true,
+    "map_location": "cpu",
+    "random_state": 42,
+    "n_init": 20,
+    "lambda_coh": 0.3333333333333333,
+    "lambda_cons": 0.3333333333333333,
+    "lambda_cplx": 0.3333333333333334
+  }
+}

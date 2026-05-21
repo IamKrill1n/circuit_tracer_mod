@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
 import torch
 from entmax import entmax15, entmax_bisect, sparsemax  # type: ignore[import-not-found]
 
@@ -140,10 +141,46 @@ def _apply_shap_notebook_generation_defaults(model: Any) -> None:
         }
 
 
+def _make_chat_template_masker(tokenizer):
+    """Subclass of `shap.maskers.Text` that pins added/special tokens.
+
+    Special-token positions are returned as invariant (so `MaskedModel` skips
+    redundant evaluations) *and* are OR-ed into the mask in `__call__` so the
+    chat scaffold (`<bos>`, `<|im_start|>`, `<|im_end|>`, `<think>`, …) is
+    physically preserved in every perturbed input.
+    """
+    from shap.maskers import Text
+
+    class _ChatTemplateText(Text):
+        def invariants(self, s):
+            base = super().invariants(s)  # (1, n) — keep_prefix/suffix/sep already pinned
+            self._update_s_cache(s)
+            ids = list(self._tokenized_s)
+            pinned_ids = set(getattr(self.tokenizer, "all_special_ids", []) or [])
+            pinned_ids |= set((getattr(self.tokenizer, "added_tokens_decoder", {}) or {}).keys())
+            special_pos = np.array([tid in pinned_ids for tid in ids], dtype=bool)
+            regex_pos = np.array(
+                [bool(SPECIAL_TOKEN_RE.fullmatch(seg.strip())) for seg in self._segments_s],
+                dtype=bool,
+            )
+            return (base[0] | special_pos | regex_pos).reshape(1, -1)
+
+        def __call__(self, mask, s):
+            inv = self.invariants(s)[0]
+            mask_arr = np.asarray(mask)
+            # Force-keep invariant positions so chat scaffold survives perturbation.
+            if mask_arr.shape[-1] == inv.shape[0]:
+                mask_arr = mask_arr | inv
+            return super().__call__(mask_arr, s)
+
+    return _ChatTemplateText(tokenizer, mask_token="...", collapse_mask_token=True)
+
+
 def _build_shap_lm_explainer(
     model_name: str,
     device: str,
     keep_prefix: int | None = None,
+    pin_special_tokens: bool = False,
 ):
     """Same construction as ``shap.Explainer(hf_causal_lm, hf_tokenizer)`` for LMs.
 
@@ -155,6 +192,9 @@ def _build_shap_lm_explainer(
 
     This matches the notebook's scoring path: **log-odds** of producing the generated
     continuation, not a fixed vocab-id logit from circuit-tracer graphs.
+
+    When ``pin_special_tokens=True``, the ``Text`` masker is replaced with a
+    chat-template-aware subclass that never perturbs special/added tokens.
     """
     import shap
     from shap.maskers import Text
@@ -163,7 +203,10 @@ def _build_shap_lm_explainer(
     _apply_shap_notebook_generation_defaults(model)
     tokenizer = _cached_tokenizer(model_name)
 
-    masker = Text(tokenizer, mask_token="...", collapse_mask_token=True)
+    if pin_special_tokens:
+        masker = _make_chat_template_masker(tokenizer)
+    else:
+        masker = Text(tokenizer, mask_token="...", collapse_mask_token=True)
     if keep_prefix is not None:
         if keep_prefix < 0:
             raise ValueError(f"keep_prefix must be >= 0, got {keep_prefix}")
@@ -196,16 +239,15 @@ def _cached_prompt_payload_from_graph(graph_path: str) -> tuple[str, tuple[str, 
 
 
 def _extract_shap_values(raw_explanation: Any) -> torch.Tensor:
-    """Extract per-input-token SHAP contributions, dropping the leading '' segment.
+    """Extract per-input-token SHAP contributions.
 
     The high-level Text + TeacherForcing pipeline returns values of shape
     (n_input_segments, n_output_tokens). We sum across output tokens so each
     input segment gets a single scalar log-odds contribution toward the full
-    generated target sentence. The leading segment is the empty '' slot that
-    SHAP's Text masker prepends; we drop it to align with `prompt_tokens`.
+    generated target sentence. The caller aligns this 1D vector against
+    `prompt_tokens` (dropping a leading '' segment only if SHAP prepended one).
     """
     explanation = raw_explanation
-    # print("explanation:", explanation)
     if isinstance(explanation, list):
         if not explanation:
             raise ValueError("SHAP explainer returned an empty explanation list.")
@@ -218,7 +260,7 @@ def _extract_shap_values(raw_explanation: Any) -> torch.Tensor:
         tensor_values = tensor_values.sum(dim=-1)
     elif tensor_values.ndim != 1:
         tensor_values = tensor_values.reshape(-1)
-    return tensor_values[1:]
+    return tensor_values
 
 
 def get_token_attribution(
@@ -230,6 +272,7 @@ def get_token_attribution(
     *,
     masker_keep_prefix: int | None = None,
     entmax_alpha: float | None = None,
+    pin_special_tokens: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Same pipeline as ``shap.Explainer(model, tokenizer)`` on an HF causal LM.
 
@@ -252,14 +295,21 @@ def get_token_attribution(
     """
     device_str = str(device)
     tokenizer = _cached_tokenizer(model_name)
-    work_prompt, work_tokens, n_prefix_tokens_dropped = _strip_leading_bos_for_shap(
-        prompt, list(prompt_tokens), tokenizer
-    )
+    if pin_special_tokens:
+        # Chat-aware masker pins BOS itself; no need to strip it pre-SHAP.
+        work_prompt = prompt
+        work_tokens = list(prompt_tokens)
+        n_prefix_tokens_dropped = 0
+    else:
+        work_prompt, work_tokens, n_prefix_tokens_dropped = _strip_leading_bos_for_shap(
+            prompt, list(prompt_tokens), tokenizer
+        )
 
     explainer = _build_shap_lm_explainer(
         model_name=model_name,
         device=device_str,
         keep_prefix=masker_keep_prefix,
+        pin_special_tokens=pin_special_tokens,
     )
     try:
         shap_values = explainer([work_prompt], batch_size=1)
@@ -273,12 +323,17 @@ def get_token_attribution(
             model_name=model_name,
             device=device_str,
             keep_prefix=None,
+            pin_special_tokens=pin_special_tokens,
         )
         shap_values = explainer([work_prompt], batch_size=1)
     values = _extract_shap_values(shap_values)
-    if values.shape[0] != len(work_tokens):
+    expected = len(work_tokens)
+    if values.shape[0] == expected + 1:
+        # SHAP's Text masker prepends an empty '' segment in some configurations.
+        values = values[1:]
+    if values.shape[0] != expected:
         raise ValueError(
-            f"SHAP token length mismatch: got {values.shape[0]}, expected {len(work_tokens)} from prompt_tokens."
+            f"SHAP token length mismatch: got {values.shape[0]}, expected {expected} from prompt_tokens."
         )
 
     special_mask = _special_token_mask(work_tokens)
@@ -312,6 +367,7 @@ def get_token_attribution_from_graph(
     device: str | torch.device = "cpu",
     masker_keep_prefix: int | None = None,
     entmax_alpha: float | None = None,
+    pin_special_tokens: bool = False,
 ) -> torch.Tensor:
     """Compute normalized SHAP token weights from a graph's prompt metadata.
 
@@ -326,20 +382,32 @@ def get_token_attribution_from_graph(
         device=device,
         masker_keep_prefix=masker_keep_prefix,
         entmax_alpha=entmax_alpha,
+        pin_special_tokens=pin_special_tokens,
     )
     return normalized
 
 if __name__ == "__main__":
-    _gp = "demos/temp_graph_files/clt-hp/clt-hp-p05-fact-the-language-spoken-20260424-171104-257980.json"
-    _prompt, _ptok, _ = _cached_prompt_payload_from_graph(_gp)
+    from attribute_utils import format_qwen
+
+    _model = "Qwen/Qwen3-4B"
+    _tok = _cached_tokenizer(_model)
+    _prompt = format_qwen(
+        [{"role": "user", "content": "The capital of France is"}],
+        add_generation_prompt=True,
+        enable_thinking=False,
+    )
+    _ids = _tok(_prompt, add_special_tokens=False)["input_ids"]
+    _ptok = _tok.convert_ids_to_tokens(_ids)
+    print("prompt:", repr(_prompt))
+    print("tokens:", _ptok)
     raw, normalized = get_token_attribution(
         prompt=_prompt,
         prompt_tokens=list(_ptok),
-        model_name="google/gemma-2-2b",
+        model_name=_model,
         normalize_method="entmax",
         entmax_alpha=1.3,
         device="cuda",
-        masker_keep_prefix=2,
+        pin_special_tokens=True,
     )
     print("raw:", raw)
     print("normalized:", normalized)

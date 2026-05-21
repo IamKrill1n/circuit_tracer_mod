@@ -131,6 +131,18 @@ backward from the sinks through $P^{\text{in}}$ accumulates a per-node
 \end{equation}
 with the same nilpotence argument.
 
+\paragraph{Edge-level analogues.} The pruning score in
+Section~\ref{sec:solution-prune} reweights each surviving edge by the
+flow values at its endpoints,
+\begin{equation}
+\mathrm{Inf}_{uv} \;=\; \mathrm{Inf}_v \, P^{\text{in}}_{uv}, \qquad
+\mathrm{Rel}_{uv} \;=\; \mathrm{Rel}_u \, P^{\text{out}}_{uv},
+\label{eq:inf-rel-edge}
+\end{equation}
+so that $\mathrm{Inf}_{uv}$ (resp.\ $\mathrm{Rel}_{uv}$) measures the
+share of backward influence (resp.\ forward relevance) that traverses
+edge $(u, v)$.
+
 \begin{lemma}[Conservation]\label{lem:conservation}
 \textit{TODO.}
 \end{lemma}

@@ -110,7 +110,7 @@ def compute_L(
     prune_graph: PruneGraph,
     *,
     prune_loss: float = 0.0,
-    lambdas: tuple[float, float, float] = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+    lambdas: tuple[float, float, float] = (1.0 / 4.0, 1.0 / 4.0, 1.0 / 2.0),
 ) -> dict[str, float | int]:
     """Bundle the per-axis losses + simplex-weighted scalar L for one partition.
 

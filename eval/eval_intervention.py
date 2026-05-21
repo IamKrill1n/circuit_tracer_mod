@@ -28,14 +28,14 @@ from eval.eval_cluster import (
     _kmeans_middle_labels,
     _middle_indices,
     _modularity_middle_labels,
-    _node_features_bidir,
-    _spectral_rbf_middle_labels,
+    _spectral_cosine_middle_labels,
 )
 from summarization.auto_grouping import find_best_k, find_best_k_for_clusterer
 from summarization.cluster import (
     cluster_graph_agglomerative,
     cluster_graph_spectral,
     clusters_to_supernodes,
+    compute_phi_vectors,
     compute_similarity,
     labels_to_supernodes,
 )
@@ -141,21 +141,21 @@ def _build_sngs(
     mid_idx = _middle_indices(prune_graph)
     middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
     adjacency_mid = _adjacency_affinity(prune_graph)[np.ix_(mid_idx, mid_idx)]
-    features_bidir = _node_features_bidir(prune_graph, mid_idx)
+    phi_mid = compute_phi_vectors(prune_graph).detach().cpu().numpy()[mid_idx]
 
     modularity_labels = _modularity_middle_labels(adjacency_mid, best_k_s)
     modularity_sng = _sng_from_clusters(
         prune_graph, labels_to_supernodes(prune_graph, middle_ids, modularity_labels)
     )
 
-    spectral_rbf_labels = _spectral_rbf_middle_labels(
-        features_bidir, best_k_s, random_state, n_init
+    spectral_cos_labels = _spectral_cosine_middle_labels(
+        phi_mid, best_k_s, random_state, n_init
     )
-    spectral_rbf_sng = _sng_from_clusters(
-        prune_graph, labels_to_supernodes(prune_graph, middle_ids, spectral_rbf_labels)
+    spectral_cos_sng = _sng_from_clusters(
+        prune_graph, labels_to_supernodes(prune_graph, middle_ids, spectral_cos_labels)
     )
 
-    kmeans_labels = _kmeans_middle_labels(features_bidir, best_k_s, random_state, n_init)
+    kmeans_labels = _kmeans_middle_labels(phi_mid, best_k_s, random_state, n_init)
     kmeans_sng = _sng_from_clusters(
         prune_graph, labels_to_supernodes(prune_graph, middle_ids, kmeans_labels)
     )
@@ -164,7 +164,7 @@ def _build_sngs(
         "spectral": spectral_sng,
         "agglomerative": agg_sng,
         "baseline-modularity": modularity_sng,
-        "baseline-spectral-rbf": spectral_rbf_sng,
+        "baseline-spectral-cosine": spectral_cos_sng,
         "baseline-kmeans": kmeans_sng,
     }
 
