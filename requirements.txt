@@ -3,6 +3,7 @@ networkx
 transformers
 shap
 google-genai
+openai
 pytest
 plotly
 streamlit
