@@ -1,27 +1,112 @@
 import requests
 from typing import Tuple, List, Optional, Any
+from pathlib import Path
+import zlib
 from config import NEURONPEDIA_API_KEY
 import json
 
+from circuit_tracer.frontend.feature_models import Model as FeatureDashboard
+
 BASE_URL = "https://www.neuronpedia.org"
+CLOUDFRONT_FEATURES = "https://d1fk9w8oratjix.cloudfront.net/features"
+HF_BASE = "https://huggingface.co"
 
 
 def get_feature(modelId: str, layer: str, index: int) -> Tuple[int, str]:
     """Fetch a feature from the Neuronpedia API.
-    
+
     Args:
         modelId: Model identifier (e.g., "gemma-2-2b")
         layer: Layer identifier (e.g., "10-clt-hp")
         index: Feature index
-        
+
     Returns:
         Tuple of (status_code, response_body)
     """
     url = f"{BASE_URL}/api/feature/{modelId}/{layer}/{index}"
     headers = {"x-api-key": NEURONPEDIA_API_KEY}
-    
+
     resp = requests.get(url, headers=headers, timeout=30)
     return resp.status_code, resp.text
+
+
+def _cantor_pair(x: int, y: int) -> int:
+    # Matches Node.feature_node in circuit_tracer/frontend/graph_models.py
+    return (x + y) * (x + y + 1) // 2 + y
+
+
+def _hf_features_url(scan: str, path: str) -> str:
+    # Mirrors featureUrl() in circuit_tracer/frontend/assets/feature_examples/init-feature-examples.js
+    # scan formats: "repo/id", "repo/id@rev", "repo/id//subdir", "repo/id//subdir@rev"
+    if "//" in scan:
+        repo_part, rest = scan.split("//", 1)
+        if "@" in rest:
+            file_path, revision = rest.split("@", 1)
+        else:
+            file_path, revision = rest, "main"
+        repo_id = repo_part.split("@")[0]
+    else:
+        if "@" in scan:
+            repo_id, revision = scan.split("@", 1)
+        else:
+            repo_id, revision = scan, "main"
+        file_path = ""
+    prefix = f"{file_path.rstrip('/')}/" if file_path else ""
+    return f"{HF_BASE}/{repo_id}/resolve/{revision}/{prefix}features/{path}"
+
+
+def _parse_bin_payload(raw: bytes) -> bytes:
+    # First 4 bytes = little-endian payload length; rest is zlib/gzip-deflated JSON.
+    # Mirrors the 'bin' branch of getFile() in circuit_tracer/frontend/assets/util.js
+    data_len = int.from_bytes(raw[:4], "little")
+    payload = raw[4:4 + data_len]
+    return zlib.decompress(payload, wbits=zlib.MAX_WBITS | 32)  # auto-detect zlib/gzip
+
+
+def get_feature_dashboard(
+    scan: str,
+    layer: int,
+    feat_idx: int,
+    features_dir: str | Path | None = None,
+) -> FeatureDashboard:
+    """Fetch a feature dashboard JSON. Tries local dir → HuggingFace binary → Cloudfront.
+
+    Args:
+        scan: Transcoder scan id from the graph's metadata (e.g., "mntss/clt-gemma-2-2b-2.5M").
+        layer: Layer index.
+        feat_idx: Feature index within the layer.
+        features_dir: Optional local directory of feature JSONs. Layout: {features_dir}/{scan}/{cantor_index}.json.
+    """
+    feature_index = _cantor_pair(layer, feat_idx)
+
+    # 1) Local
+    if features_dir is not None:
+        local_path = Path(features_dir) / scan / f"{feature_index}.json"
+        if local_path.exists():
+            return FeatureDashboard.model_validate_json(local_path.read_text())
+
+    # 2) HuggingFace binary chunks (preferred for HF-hosted scans like mntss/clt-gemma-2-2b-2.5M)
+    index_url = _hf_features_url(scan, "index.json.gz")
+    head = requests.head(index_url, timeout=10, allow_redirects=True)
+    if head.status_code == 200:
+        index_bytes = requests.get(index_url, timeout=30).content
+        index_data = json.loads(zlib.decompress(index_bytes, wbits=zlib.MAX_WBITS | 32))
+        # index may be a list (indexed by layer) or dict (string-keyed)
+        entry = index_data[layer] if isinstance(index_data, list) else index_data[str(layer)]
+        offsets = entry["offsets"]
+        bin_filename = entry["filename"]
+        start, end = offsets[feat_idx], offsets[feat_idx + 1]
+        bin_url = _hf_features_url(scan, bin_filename)
+        resp = requests.get(bin_url, headers={"Range": f"bytes={start}-{end}"}, timeout=30)
+        resp.raise_for_status()
+        decoded = _parse_bin_payload(resp.content)
+        return FeatureDashboard.model_validate_json(decoded)
+
+    # 3) Cloudfront fallback (Anthropic-hosted scans)
+    cf_url = f"{CLOUDFRONT_FEATURES}/{scan}/{feature_index}.json"
+    resp = requests.get(cf_url, timeout=30)
+    resp.raise_for_status()
+    return FeatureDashboard.model_validate_json(resp.text)
 
 
 def generate_autointerp(
