@@ -127,6 +127,21 @@ def _attr_graph_to_viewer(pt_path: Path, slug: str, scan: str) -> Path:
     return viewer_dir
 
 
+@st.cache_data(show_spinner=False)
+def _graph_model_and_scan(pt_path: str) -> tuple[str, str]:
+    """HF model id + transcoder scan a graph .pt was built with.
+
+    Uses cfg.tokenizer_name (HF-loadable), not cfg.model_name, which may be a
+    TransformerLens alias (e.g. 'gemma-2-2b') that AutoModel/AutoTokenizer can't load.
+    """
+    import torch
+
+    d = torch.load(pt_path, map_location="cpu", weights_only=False)
+    scan = d.get("scan")
+    scan_str = "-".join(scan) if isinstance(scan, list) else (scan or "")
+    return d["cfg"].tokenizer_name, scan_str
+
+
 @st.cache_resource(show_spinner=False)
 def _serve(viewer_dir_str: str, port: int):
     from circuit_tracer.frontend.local_server import serve
@@ -391,6 +406,11 @@ else:
         if candidate.exists():
             existing_pt_path = candidate
             input_slug = _slugify(candidate.stem)
+            # Mirror the graph's own model/transcoder so SHAP tokenizes with the matching
+            # tokenizer and the viewer JSON carries the right scan (overrides sidebar).
+            model_name, transcoder = _graph_model_and_scan(str(candidate))
+            qwen_mode = _is_qwen(model_name)
+            st.info(f"From graph — model_name=`{model_name}`, transcoder_set=`{transcoder}`")
         else:
             st.error(f"Path does not exist: {candidate}")
 
