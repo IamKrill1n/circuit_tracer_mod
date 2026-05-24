@@ -242,10 +242,10 @@ def _extract_shap_values(raw_explanation: Any) -> torch.Tensor:
     """Extract per-input-token SHAP contributions.
 
     The high-level Text + TeacherForcing pipeline returns values of shape
-    (n_input_segments, n_output_tokens). We sum across output tokens so each
-    input segment gets a single scalar log-odds contribution toward the full
-    generated target sentence. The caller aligns this 1D vector against
-    `prompt_tokens` (dropping a leading '' segment only if SHAP prepended one).
+    (n_input_segments, n_output_tokens); we sum across output tokens so each
+    input segment gets a single scalar log-odds contribution. Some Qwen
+    generations come back transposed — we resolve the axis by matching against
+    `explanation.feature_names`, which always corresponds to input segments.
     """
     explanation = raw_explanation
     if isinstance(explanation, list):
@@ -255,9 +255,19 @@ def _extract_shap_values(raw_explanation: Any) -> torch.Tensor:
     values = getattr(explanation, "values", None)
     if values is None:
         raise ValueError("SHAP explanation does not include values.")
+
+    feature_names = getattr(explanation, "feature_names", None)
+    n_input: int | None = None
+    if isinstance(feature_names, list) and feature_names:
+        head = feature_names[0]
+        n_input = len(head) if isinstance(head, (list, tuple)) else len(feature_names)
+
     tensor_values = torch.as_tensor(values, dtype=torch.float32).squeeze()
     if tensor_values.ndim == 2:
-        tensor_values = tensor_values.sum(dim=-1)
+        if n_input is not None and tensor_values.shape[1] == n_input and tensor_values.shape[0] != n_input:
+            tensor_values = tensor_values.sum(dim=0)
+        else:
+            tensor_values = tensor_values.sum(dim=-1)
     elif tensor_values.ndim != 1:
         tensor_values = tensor_values.reshape(-1)
     return tensor_values
@@ -267,7 +277,7 @@ def get_token_attribution(
     prompt: str,
     prompt_tokens: list[str],
     model_name: str,
-    normalize_method: NormalizeMethod = "sparsemax",
+    normalize_method: NormalizeMethod = "softmax",
     device: str | torch.device = "cpu",
     *,
     masker_keep_prefix: int | None = None,
@@ -363,7 +373,7 @@ def get_token_attribution(
 def get_token_attribution_from_graph(
     graph_path: str | Path,
     model_name: str,
-    normalize_method: NormalizeMethod = "sparsemax",
+    normalize_method: NormalizeMethod = "softmax",
     device: str | torch.device = "cpu",
     masker_keep_prefix: int | None = None,
     entmax_alpha: float | None = None,
@@ -392,7 +402,7 @@ if __name__ == "__main__":
     _model = "Qwen/Qwen3-4B"
     _tok = _cached_tokenizer(_model)
     _prompt = format_qwen(
-        [{"role": "user", "content": "The capital of France is"}],
+        [{"role" : "system", "content": "Answer in one word and no more"},{"role": "user", "content": "The capital of France is"}],
         add_generation_prompt=True,
         enable_thinking=False,
     )

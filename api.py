@@ -215,31 +215,31 @@ def steer_logits(
 
 
 if __name__ == "__main__":
-    features = [
-        {
-            "layer": 20,
-            "index": 15589,
-            "token_active_position": 9,
-            "steer_position": 9,
-            "steer_generated_tokens": False,
-            "delta": -1.0,
-            "ablate": False,
-        }
-    ]
-    status, data = steer_logits(
-        modelId="gemma-2-2b",
-        prompt="Fact: The capital of the state containing Dallas is",
-        features=features,
-        sourceSetName="clt-hp",
-        nTokens=1,
-        topK=5,
-    )
-    print(f"Status: {status}")
-    print(data)
+    # features = [
+    #     {
+    #         "layer": 20,
+    #         "index": 15589,
+    #         "token_active_position": 9,
+    #         "steer_position": 9,
+    #         "steer_generated_tokens": False,
+    #         "delta": -1.0,
+    #         "ablate": False,
+    #     }
+    # ]
+    # status, data = steer_logits(
+    #     modelId="gemma-2-2b",
+    #     prompt="Fact: The capital of the state containing Dallas is",
+    #     features=features,
+    #     sourceSetName="clt-hp",
+    #     nTokens=1,
+    #     topK=5,
+    # )
+    # print(f"Status: {status}")
+    # print(data)
     # print(_get_api_key())
     # Example: get feature
-    # status, data = get_feature("gemma-2-2b", "1-clt-hp", 89326)
-    # print(f"Status: {status}")
+    status, data = get_feature("gemma-2-2b", "1-clt-hp", 89326)
+    print(f"Status: {status}")
     # dict_data = json.loads(data)
     # print(dict_data['explanations'])
     # print(dict_data['vector'])

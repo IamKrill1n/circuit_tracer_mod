@@ -317,6 +317,8 @@ def prune_attr_graph(
     filter_act_density: bool = False,
     act_density_lb: float = 2e-5,
     act_density_ub: float = 0.1,
+    neuronpedia_model_id: str | None = None,
+    neuronpedia_source_set: str | None = None,
 ) -> PruneGraph:
     """
     Prune from a canonical ``AttrGraph``.
@@ -350,11 +352,20 @@ def prune_attr_graph(
     kept_indices = node_mask.nonzero(as_tuple=True)[0]
 
     if filter_act_density:
-        model_id = metadata.get("model_name") or metadata.get("scan", "")
+        raw_model_id = metadata.get("model_name") or metadata.get("scan", "")
+        # Strip HF "<org>/" prefix (e.g. "google/gemma-2-2b" -> "gemma-2-2b") so it matches Neuronpedia.
+        model_id = neuronpedia_model_id or (raw_model_id.split("/", 1)[-1] if raw_model_id else "")
         info = metadata.get("info", {})
-        source_set = info.get("neuronpedia_source_set") or (
-            info.get("source_urls", [""])[0].split("/")[-1] if info.get("source_urls") else ""
+        source_set = (
+            neuronpedia_source_set
+            or info.get("neuronpedia_source_set")
+            or (info.get("source_urls", [""])[0].split("/")[-1] if info.get("source_urls") else "")
         )
+        if not source_set:
+            raise ValueError(
+                "filter_act_density requires a Neuronpedia source_set. "
+                "Pass neuronpedia_source_set=... (e.g. 'clt-hp') when pruning a .pt-derived AttrGraph."
+            )
         for i in kept_indices.tolist():
             node = nodes[i]
             nid = node.node_id
@@ -513,6 +524,11 @@ def prune_pt_graph(
     normalization: NormalizationMethod = "rank",
     alpha: float = 0.5,
     keep_all_tokens_and_logits: bool = True,
+    filter_act_density: bool = False,
+    act_density_lb: float = 2e-5,
+    act_density_ub: float = 0.1,
+    neuronpedia_model_id: str | None = None,
+    neuronpedia_source_set: str | None = None,
 ) -> PruneGraph:
     """Prune a circuit_tracer Graph (.pt) directly to a PruneGraph."""
     from summarization.attr_graph import AttrGraph
@@ -527,6 +543,11 @@ def prune_pt_graph(
         normalization=normalization,
         alpha=alpha,
         keep_all_tokens_and_logits=keep_all_tokens_and_logits,
+        filter_act_density=filter_act_density,
+        act_density_lb=act_density_lb,
+        act_density_ub=act_density_ub,
+        neuronpedia_model_id=neuronpedia_model_id,
+        neuronpedia_source_set=neuronpedia_source_set,
     )
 
 

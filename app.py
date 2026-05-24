@@ -10,6 +10,7 @@ from typing import Literal
 import numpy as np
 import streamlit as st
 
+from api import save_subgraph
 from attribute_utils import format_qwen_with_tokenizer
 from summarization.attr_graph import AttrGraph
 from summarization.cluster import (
@@ -141,9 +142,6 @@ def _generate_shap_weights(
     device: str,
 ) -> list[float]:
     """On-the-fly SHAP for the AttrGraph's prompt; projects to embedding nodes."""
-    import torch
-    from transformers import AutoTokenizer
-
     from eval.prune_graphs import _token_weights_for_embeddings
     from summarization.token_attribution import get_token_attribution
     from summarization.utils import _build_index_sets
@@ -154,52 +152,22 @@ def _generate_shap_weights(
     if not prompt or not prompt_tokens:
         raise ValueError("AttrGraph metadata lacks prompt / prompt_tokens for SHAP.")
 
-    # Strip a leading BOS-style token if the prompt string doesn't contain it
-    # literally. SHAP tokenizes the bare prompt and would otherwise return
-    # len(prompt_tokens) - 1 segments and trip the length check.
-    bos_offset = 0
-    try:
-        bos_tok = getattr(AutoTokenizer.from_pretrained(model_name), "bos_token", None)
-    except Exception:
-        bos_tok = None
-    first = prompt_tokens[0]
-    looks_like_bos = first == bos_tok or (
-        len(first) > 2 and first.startswith("<") and first.endswith(">")
+    # pin_special_tokens=True uses the chat-template-aware masker that pins
+    # BOS / <|im_start|> / <|im_end|> / etc. so SHAP segments align 1:1 with
+    # prompt_tokens — works for both plain prompts and chat-formatted ones.
+    _raw, normalized = get_token_attribution(
+        prompt=prompt,
+        prompt_tokens=prompt_tokens,
+        model_name=model_name,
+        normalize_method=normalize_method,  # type: ignore[arg-type]
+        device=device,
+        entmax_alpha=entmax_alpha,
+        pin_special_tokens=True,
     )
-    if looks_like_bos and not (
-        prompt.startswith(first) or (bos_tok and prompt.startswith(bos_tok))
-    ):
-        bos_offset = 1
-
-    shap_tokens = prompt_tokens[bos_offset:]
-
-    try:
-        _raw, normalized = get_token_attribution(
-            prompt=prompt,
-            prompt_tokens=shap_tokens,
-            model_name=model_name,
-            normalize_method=normalize_method,  # type: ignore[arg-type]
-            device=device,
-            entmax_alpha=entmax_alpha,
-        )
-    except ValueError as exc:
-        if "SHAP token length mismatch" in str(exc):
-            raise ValueError(
-                f"{exc}. On-the-fly SHAP can't align with prompts that contain "
-                "special-token markup (e.g. Qwen chat templates with "
-                "<|im_start|> / <|im_end|>). Use `uniform` or `load shap file` "
-                "for this graph."
-            ) from exc
-        raise
-    normalized = normalized.detach().cpu()
-    if bos_offset:
-        normalized = torch.cat(
-            [torch.zeros(bos_offset, dtype=normalized.dtype), normalized], dim=0
-        )
 
     emb_idx = _build_index_sets(ag.nodes)["embedding"]
     node_ids = [n.node_id for n in ag.nodes]
-    return _token_weights_for_embeddings(normalized, node_ids, emb_idx)
+    return _token_weights_for_embeddings(normalized.detach().cpu(), node_ids, emb_idx)
 
 
 def _shap_weights_from_file(
@@ -680,3 +648,47 @@ if "sng" in st.session_state:
 
     with st.expander("Supernode mapping (JSON)"):
         st.json(supernode_map)
+
+
+# 6. Upload to Neuronpedia ---------------------------------------------------
+if "sng" in st.session_state and "prune_graph" in st.session_state:
+    st.header("6. Upload to Neuronpedia")
+    prune_graph = st.session_state["prune_graph"]
+    clusters = st.session_state.get("clusters", [])
+
+    u_c1, u_c2 = st.columns(2)
+    up_model_id = u_c1.text_input("model_id", value="gemma-2-2b", key="up_model_id")
+    up_slug = u_c2.text_input("slug", value=st.session_state.get("graph_slug", ""), key="up_slug")
+    up_display_name = st.text_input("display_name", value="", key="up_display")
+    u_c3, u_c4 = st.columns(2)
+    up_prune_thresh = u_c3.slider("pruning_threshold", 0.0, 1.0, 0.8, step=0.01, key="up_prune")
+    up_density_thresh = u_c4.slider("density_threshold", 0.0, 1.0, 0.99, step=0.01, key="up_density")
+
+    if st.button("Upload to Neuronpedia", type="primary"):
+        if not up_slug:
+            st.error("slug is required for upload.")
+        elif not up_display_name:
+            st.error("display_name is required for upload.")
+        else:
+            labelled = [
+                [f"cluster_{i}", *members]
+                for i, members in enumerate(clusters)
+                if len(members) > 1
+            ]
+            # log labelled supernodes for debugging; Neuronpedia will re-derive them from the pinnedIds
+            st.write("Labelled supernodes (for debugging; Neuronpedia will re-derive these from the pinnedIds):")
+            st.json(labelled)
+            with st.spinner("Uploading…"):
+                status, body = save_subgraph(
+                    modelId=up_model_id,
+                    slug=up_slug,
+                    displayName=up_display_name,
+                    pinnedIds=prune_graph.node_ids,
+                    supernodes=labelled,
+                    pruningThreshold=up_prune_thresh,
+                    densityThreshold=up_density_thresh,
+                )
+            if status == 200:
+                st.success(f"Uploaded! status={status}")
+            else:
+                st.error(f"Upload failed (status={status}): {body[:300]}")
