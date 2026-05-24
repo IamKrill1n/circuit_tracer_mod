@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 
 from summarization.prune import PruneGraph
-from summarization.supernode_graph import Supernode, compute_sn_adj
+from summarization.supernode_graph import SummarizationGraph
 from summarization.utils import node_is_fixed
 
 
@@ -49,26 +49,23 @@ def compute_L_coh(
     return float(np.mean(distances)) if distances else 0.0
 
 
-def compute_D_agg(
-    supernodes: list[Supernode], prune_graph: PruneGraph
-) -> float:
-    """Aggregation loss per paper Eq. 12.
+def compute_D_agg(sng: SummarizationGraph) -> float:
+    """Aggregation loss per paper Eq. 12, evaluated on the post-π adjacency.
 
-    D_agg = 1 - (sum over S != T of |W^SN_ST|) / (sum over (u,v) in E' of |W_uv|).
+    D_agg = 1 - (sum over S != T of |W^SN_ST|) / (sum over (u,v) in E' of |W_uv|),
+    where W^SN is ``sng.sn_adj`` (post-π). The metric therefore captures, in a
+    single number, the loss from cluster aggregation + Stage A (antiparallel
+    collapse) + Stage B (back-edge removal).
     """
-    adj = prune_graph.pruned_adj.detach().cpu().numpy().astype(np.float64)
+    adj = sng.pruned_adj.detach().cpu().numpy().astype(np.float64)
     total_mag = float(np.abs(adj).sum())
     if total_mag <= 0.0:
         return 0.0
-    index_lists = [[n.node_idx for n in sn.features] for sn in supernodes]
-    block = compute_sn_adj(index_lists, prune_graph.pruned_adj)
-    retained_mag = float(np.abs(block).sum())
+    retained_mag = float(np.abs(sng.sn_adj).sum())
     return 1.0 - retained_mag / total_mag
 
 
-def compute_L_cplx(
-    supernodes: list[Supernode], prune_graph: PruneGraph
-) -> float:
+def compute_L_cplx(sng: SummarizationGraph, prune_graph: PruneGraph) -> float:
     """Number of feature supernodes / |V'_mid|, per paper Eq. (Lcplx).
 
     Embedding and logit supernodes are forced singletons by (F2) and excluded
@@ -76,7 +73,7 @@ def compute_L_cplx(
     graph with no mid-graph features.
     """
     n_feature_supernodes = sum(
-        1 for sn in supernodes if sn.type in ("features", "feature")
+        1 for sn in sng.supernodes if sn.type in ("features", "feature")
     )
     n_middle = sum(1 for node in prune_graph.nodes if not node_is_fixed(node))
     if n_middle == 0:
@@ -85,14 +82,14 @@ def compute_L_cplx(
 
 
 def _supernode_labels_for_middle(
-    supernodes: list[Supernode],
+    sng: SummarizationGraph,
     middle_node_id_to_local: dict[str, int],
     n_middle: int,
 ) -> np.ndarray:
     """Per-middle-feature cluster label. -1 for middle features not in any feature-type supernode."""
     labels = np.full(n_middle, -1, dtype=np.int64)
     next_label = 0
-    for sn in supernodes:
+    for sn in sng.supernodes:
         if sn.type != "features" and sn.type != "feature":
             continue
         for node in sn.features:
@@ -104,7 +101,7 @@ def _supernode_labels_for_middle(
 
 
 def compute_L(
-    supernodes: list[Supernode],
+    sng: SummarizationGraph,
     role_vectors_middle: np.ndarray,
     middle_node_id_to_local: dict[str, int],
     prune_graph: PruneGraph,
@@ -119,14 +116,14 @@ def compute_L(
     probability simplex (sum to 1, each in [0, 1]).
     """
     n_middle = role_vectors_middle.shape[0]
-    labels = _supernode_labels_for_middle(supernodes, middle_node_id_to_local, n_middle)
+    labels = _supernode_labels_for_middle(sng, middle_node_id_to_local, n_middle)
     L_coh = compute_L_coh(role_vectors_middle, labels)
-    D_agg = compute_D_agg(supernodes, prune_graph)
-    L_cplx = compute_L_cplx(supernodes, prune_graph)
+    D_agg = compute_D_agg(sng)
+    L_cplx = compute_L_cplx(sng, prune_graph)
     L_cons = 0.5 * (float(prune_loss) + D_agg)
     lam_coh, lam_cons, lam_cplx = lambdas
     L = lam_coh * L_coh + lam_cons * L_cons + lam_cplx * L_cplx
-    n_middle_supernodes = sum(1 for sn in supernodes if sn.type in ("features", "feature"))
+    n_middle_supernodes = sum(1 for sn in sng.supernodes if sn.type in ("features", "feature"))
     return {
         "L_coh": float(L_coh),
         "D_agg": float(D_agg),
@@ -135,6 +132,8 @@ def compute_L(
         "L_cplx": float(L_cplx),
         "L": float(L),
         "L_total": float(L_coh + D_agg + L_cplx),  # back-compat
-        "n_supernodes": int(len(supernodes)),
+        "n_supernodes": int(len(sng.supernodes)),
         "n_middle_supernodes": int(n_middle_supernodes),
+        "l_collapse": float(sng.l_collapse),
+        "l_back": float(sng.l_back),
     }

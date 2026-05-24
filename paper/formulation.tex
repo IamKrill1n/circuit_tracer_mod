@@ -7,7 +7,7 @@ $W \in \mathbb{R}^{N \times N}$ on $N := |V|$ nodes, with $W_{ij}$ the
 linear influence of source node $j$ on target node $i$~\citep{ameisen2024scaling}.
 Embedding and error nodes are sources (no incoming edges), logit nodes
 are sinks (no outgoing edges), and each intermediate node carries signal
-between them, indexed by a transformer (layer, position) pair.
+between them, indexed by a transformer (layer, position) pair. A node has edges to every other nodes of higher layer.
 The reader also supplies a token weight $\tau \in \mathbb{R}^N$ with
 $\sum_e \tau_e = 1$ marking the input tokens of interest, and a logit
 weight $\ell \in \mathbb{R}^N$ marking the output positions of interest;
@@ -25,29 +25,6 @@ $v \in (V_{\text{emb}} \cup V_{\text{logit}}) \cap V'$ is a singleton
 supernode; only the feature nodes
 $V'_{\text{mid}} := V' \cap V_{\text{inter}}$ are free to be grouped.
 \end{itemize}
-The summary induces the \emph{summarization graph}
-$G_{SN} = (\pi(\varphi),\, E^{SN},\, W^{SN})$. For each ordered pair
-$(S, T)$ of distinct supernodes, the signed block sum
-\begin{equation}
-B_{ST} \;=\; \sum_{(u, v) \in E'} W_{uv}\,
-\mathbf{1}[u \in S]\,\mathbf{1}[v \in T]
-\label{eq:block-sum}
-\end{equation}
-aggregates the surviving edges from $T$ to $S$. We keep at most one
-direction per unordered pair by retaining the dominant signed mass,
-\begin{equation}
-W^{SN}_{ST} \;=\;
-\begin{cases}
-B_{ST} & \text{if } |B_{ST}| > |B_{TS}|, \\
-0      & \text{otherwise},
-\end{cases}
-\qquad S \ne T,
-\label{eq:wsn}
-\end{equation}
-with $E^{SN} = \{(S, T) : W^{SN}_{ST} \ne 0\}$. The tie case
-$|B_{ST}| = |B_{TS}|$ emits no edge, so length-2 cycles are eliminated
-by construction; longer cycles are addressed by the DAG cleanup step
-(Section~\ref{sec:solution-cluster}).
 
 
 \subsection{Desiderata}
@@ -58,13 +35,11 @@ summary serves that goal:
 \item[(D1) Coherence.] Members of each supernode share a mechanistic
 role---similar influential downstream targets and similar relevant
 upstream sources---so the supernode reads as a single concept.
-\item[(D2) Conservation.] $G_{SN}$ preserves the causal mass flowing
+\item[(D2) Conservation.] $G_{SN}$ preserves the flow of information
 from $V_{\text{emb}}$ to $V_{\text{logit}}$ in the original graph, so
 the summary is not an artefact of what was discarded.
 \item[(D3) Complexity.] $G_{SN}$ is small enough to read in one sitting.
-\item[(F1) DAG integrity.] $G_{SN}$ is acyclic.
-\item[(F2) Partition well-formedness.] $\varphi$ is a function on $V'$,
-and embedding and logit nodes are singleton supernodes.
+\item[(F1) DAG integrity.] $G_{SN}$ is acyclic. We can't interpret cycles.
 \end{description}
 
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Literal
 
 import logging
-import networkx as nx
 import numpy as np
 import torch
 from sklearn.cluster import SpectralClustering
@@ -14,7 +13,6 @@ from summarization.supernode_graph import (
     Node,
     Supernode,
     cluster_kind_to_supernode_type,
-    compute_sn_adj,
     node_from_prune_graph,
 )
 from summarization.utils import (
@@ -166,116 +164,6 @@ def compute_similarity(
     return s
 
 
-def _layer_span_nodes(cluster: list[str], nodes_by_id: dict[str, Node]) -> int:
-    lv = [_layer_numeric(n, nodes_by_id) for n in cluster]
-    return max(lv) - min(lv)
-
-
-def _split_cluster_at_median_layer(
-    cluster: list[str], nodes_by_id: dict[str, Node]
-) -> list[list[str]]:
-    """Split a cluster at its median distinct layer. Returns ``[cluster]`` when not splittable (single layer)."""
-    distinct_layers = sorted({_layer_numeric(n, nodes_by_id) for n in cluster})
-    if len(distinct_layers) < 2:
-        return [cluster]
-    cut = distinct_layers[len(distinct_layers) // 2]
-    left = [n for n in cluster if _layer_numeric(n, nodes_by_id) < cut]
-    right = [n for n in cluster if _layer_numeric(n, nodes_by_id) >= cut]
-    if not left or not right:
-        return [cluster]
-    return [left, right]
-
-
-def _supernode_edges(
-    clusters: list[list[str]],
-    pruned_adj: torch.Tensor,
-    id_to_idx: dict[str, int],
-) -> list[tuple[int, int]]:
-    """Directed edges (source_cluster -> target_cluster) from `compute_sn_adj`'s
-    dominant-direction tie-break. Eliminates 2-cycles by construction; longer
-    SCCs are handled by the caller.
-    """
-    index_lists = [
-        [id_to_idx[nid] for nid in members if nid in id_to_idx] for members in clusters
-    ]
-    M = compute_sn_adj(index_lists, pruned_adj)  # M[t, s] = mass s -> t
-    tgts, srcs = np.where(M != 0.0)
-    return [(int(s), int(t)) for s, t in zip(srcs, tgts)]
-
-
-def _resolve_cycles_only(
-    clusters: list[list[str]],
-    pruned_adj: torch.Tensor,
-    nodes_by_id: dict[str, Node],
-    id_to_idx: dict[str, int],
-    max_iter: int = 50,
-) -> list[list[str]]:
-    """Split clusters that participate in a supernode-level cycle, until the cluster digraph is acyclic.
-
-    Each iteration: find non-trivial strongly-connected components; in each one,
-    split the cluster with the widest layer span (tiebreak: largest size) at its
-    median distinct layer. Stops when no cycles remain, when no progress is
-    possible (all SCC members are single-layer), or at ``max_iter``.
-    """
-    for iteration in range(max_iter):
-        edges = _supernode_edges(clusters, pruned_adj, id_to_idx)
-        graph = nx.DiGraph()
-        graph.add_nodes_from(range(len(clusters)))
-        graph.add_edges_from(edges)
-        nontrivial_sccs = [c for c in nx.strongly_connected_components(graph) if len(c) >= 2]
-        if not nontrivial_sccs:
-            return clusters
-
-        to_split: set[int] = set()
-        for scc in nontrivial_sccs:
-            chosen = max(
-                scc,
-                key=lambda ci: (
-                    _layer_span_nodes(clusters[ci], nodes_by_id),
-                    len(clusters[ci]),
-                ),
-            )
-            to_split.add(chosen)
-
-        new_clusters: list[list[str]] = []
-        progressed = False
-        for ci, cluster in enumerate(clusters):
-            if ci in to_split:
-                parts = _split_cluster_at_median_layer(cluster, nodes_by_id)
-                if len(parts) > 1:
-                    progressed = True
-                new_clusters.extend(parts)
-            else:
-                new_clusters.append(cluster)
-
-        if not progressed:
-            logger.warning(
-                "Cycle remains after iter %d but no chosen cluster could be split (single-layer SCC members). Returning as-is.",
-                iteration,
-            )
-            return new_clusters
-        clusters = new_clusters
-
-    logger.warning("Cycle resolution hit max_iter=%d; returning current clusters.", max_iter)
-    return clusters
-
-
-def resolve_cluster_cycles(
-    clusters: list[list[str]],
-    prune_graph: PruneGraph,
-) -> list[list[str]]:
-    """Split clusters until the induced supernode graph is a DAG.
-
-    Embedding/logit singletons cannot participate in cycles (emb=source, logit=sink),
-    so this is safe to call on a mixed middle+emb+logit cluster list.
-    """
-    nodes_by_id = _nodes_by_id(prune_graph)
-    id_to_idx = {nid: i for i, nid in enumerate(prune_graph.node_ids)}
-    return _resolve_cycles_only(
-        clusters, prune_graph.pruned_adj, nodes_by_id, id_to_idx,
-    )
-
-
 def _merge_to_budget(
     clusters: list[list[str]], nodes_by_id: dict[str, Node], max_sn: int
 ) -> list[list[str]]:
@@ -376,6 +264,7 @@ def cluster_graph_spectral(
         List of supernodes where each supernode is a list of node ids.
         Embedding/logit nodes are returned as singleton supernodes.
     """
+    del enforce_dag  # legacy: π in SummarizationGraph is always on; partition is preserved
     logger.info("Starting cluster_graph_spectral (target_k=%d, max_layer_span=%s)", target_k, max_layer_span)
     kept_ids = prune_graph.node_ids
     nodes_by_id = _nodes_by_id(prune_graph)
@@ -426,11 +315,7 @@ def cluster_graph_spectral(
         grouped.setdefault(int(lbl), []).append(nid)
     middle_clusters = list(grouped.values())
 
-    if enforce_dag:
-        logger.info("Resolving cycles in %d initial clusters...", len(middle_clusters))
-        middle_clusters = resolve_cluster_cycles(middle_clusters, prune_graph)
-
-    if max_sn is not None and enforce_dag:
+    if max_sn is not None:
         logger.info("Merging to budget of %d supernodes...", max_sn)
         middle_clusters = _merge_to_budget(middle_clusters, nodes_by_id, max_sn=max_sn)
 
@@ -640,11 +525,11 @@ def clusters_to_supernodes(
 ) -> list[Supernode]:
     """Convert `cluster_graph_spectral` member lists into named `Supernode` rows (middle + emb + logit).
 
-    If `enforce_dag=True` (default), split clusters until the induced supernode graph is acyclic
-    (idempotent — safe to set even if the caller already resolved cycles upstream).
+    The legacy ``enforce_dag`` parameter is ignored — π in ``SummarizationGraph`` is
+    always on and operates at the edge level, so the clusterer's partition is
+    preserved exactly as given.
     """
-    if enforce_dag:
-        supernodes = resolve_cluster_cycles(supernodes, prune_graph)
+    del enforce_dag
     nodes_by_id = _nodes_by_id(prune_graph)
     middle: list[list[str]] = []
     emb: list[list[str]] = []

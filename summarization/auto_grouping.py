@@ -16,6 +16,7 @@ from summarization.cluster_scoring import (
 )
 from summarization.objective import compute_L
 from summarization.prune import PruneGraph
+from summarization.supernode_graph import SummarizationGraph
 
 
 def eigengap_analysis(
@@ -121,8 +122,9 @@ def find_best_k(
             n_init=n_init,
         )
         rows = clusters_to_supernodes(prune_graph, supernodes)
+        sng = SummarizationGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
         sc: dict[str, Any] = dict(compute_L(
-            rows,
+            sng,
             role_vectors_middle,
             middle_id_to_local,
             prune_graph,
@@ -166,8 +168,9 @@ def find_best_k_for_clusterer(
         fallback_k = max(0, n_middle)
         clusters = clusterer(fallback_k)
         rows = clusters_to_supernodes(prune_graph, clusters)
+        sng = SummarizationGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
         result: dict[str, Any] = dict(compute_L(
-            rows,
+            sng,
             role_vectors_middle,
             middle_id_to_local,
             prune_graph,
@@ -187,8 +190,9 @@ def find_best_k_for_clusterer(
     for target_k in range(k_min, k_max + 1):
         clusters = clusterer(target_k)
         rows = clusters_to_supernodes(prune_graph, clusters)
+        sng = SummarizationGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
         result = dict(compute_L(
-            rows,
+            sng,
             role_vectors_middle,
             middle_id_to_local,
             prune_graph,

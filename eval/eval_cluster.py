@@ -26,6 +26,7 @@ from summarization.cluster import (
 from summarization.cluster_scoring import _cosine_similarity
 from summarization.objective import compute_L
 from summarization.prune import PruneGraph, load_prune_graph
+from summarization.supernode_graph import SummarizationGraph
 from summarization.utils import node_is_fixed
 
 logger = logging.getLogger(__name__)
@@ -436,8 +437,9 @@ def _evaluate_solver(
                 rows = clusters_to_supernodes(
                     prune_graph, clusters, enforce_dag=enforce_dag
                 )
+                sng = SummarizationGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
                 metrics = compute_L(
-                    rows,
+                    sng,
                     role_vectors_middle,
                     middle_id_to_local,
                     prune_graph,
