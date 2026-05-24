@@ -1,4 +1,4 @@
-"""Tests for the π force-DAG operator built into SummarizationGraph."""
+"""Tests for the π force-DAG operator (``get_adj``) behind SummarizationGraph.adj_matrix."""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ def _logit_node(node_id: str, node_idx: int, ctx_idx: int = 0) -> Node:
 def _sng_from_blocks(
     sns: list[Supernode], adj_block: np.ndarray
 ) -> SummarizationGraph:
-    """Build a SummarizationGraph whose ``sn_adj_raw`` is exactly ``adj_block``.
+    """Build a SummarizationGraph whose pre-π block-sum is exactly ``adj_block``.
 
     Each Supernode is given a single member with a unique ``node_idx``, so the
     block-aggregation collapses to the supernode-level matrix we pass in.
@@ -94,10 +94,8 @@ def test_pi_collapses_2cycle() -> None:
     block = np.array([[0.0, 1.0], [3.0, 0.0]])
     sng = _sng_from_blocks([a, b], block)
 
-    assert sng.sn_adj[1, 0] == pytest.approx(2.0)  # forward survives with net magnitude
-    assert sng.sn_adj[0, 1] == 0.0
-    assert sng.l_collapse == pytest.approx(2.0)    # 2 * min(1, 3)
-    assert sng.l_back == 0.0
+    assert sng.adj_matrix[1, 0] == pytest.approx(2.0)  # forward survives with net magnitude
+    assert sng.adj_matrix[0, 1] == 0.0
 
 
 def test_pi_collapse_preserves_dominant_sign() -> None:
@@ -107,9 +105,8 @@ def test_pi_collapse_preserves_dominant_sign() -> None:
     block = np.array([[0.0, 2.0], [-5.0, 0.0]])
     sng = _sng_from_blocks([a, b], block)
 
-    assert sng.sn_adj[1, 0] == pytest.approx(-3.0)  # sign(-5) * (5-2)
-    assert sng.sn_adj[0, 1] == 0.0
-    assert sng.l_collapse == pytest.approx(4.0)
+    assert sng.adj_matrix[1, 0] == pytest.approx(-3.0)  # sign(-5) * (5-2)
+    assert sng.adj_matrix[0, 1] == 0.0
 
 
 def test_pi_collapse_zeros_on_tie() -> None:
@@ -118,9 +115,8 @@ def test_pi_collapse_zeros_on_tie() -> None:
     block = np.array([[0.0, 4.0], [4.0, 0.0]])
     sng = _sng_from_blocks([a, b], block)
 
-    assert sng.sn_adj[0, 1] == 0.0
-    assert sng.sn_adj[1, 0] == 0.0
-    assert sng.l_collapse == pytest.approx(8.0)
+    assert sng.adj_matrix[0, 1] == 0.0
+    assert sng.adj_matrix[1, 0] == 0.0
 
 
 # --- Stage B: back-edge removal ----------------------------------------------
@@ -137,12 +133,10 @@ def test_pi_breaks_3cycle_at_same_depth() -> None:
     block[0, 2] = 1.0  # C→A (back-edge)
     sng = _sng_from_blocks([a, b, c], block)
 
-    assert sng.l_collapse == 0.0
-    assert sng.l_back == pytest.approx(1.0)
-    assert sng.sn_adj[0, 2] == 0.0  # back-edge removed
-    assert sng.sn_adj[1, 0] == 1.0
-    assert sng.sn_adj[2, 1] == 1.0
-    assert _is_dag(sng.sn_adj)
+    assert sng.adj_matrix[0, 2] == 0.0  # back-edge removed
+    assert sng.adj_matrix[1, 0] == 1.0
+    assert sng.adj_matrix[2, 1] == 1.0
+    assert _is_dag(sng.adj_matrix)
 
 
 def test_pi_idempotent_on_acyclic_input() -> None:
@@ -155,24 +149,9 @@ def test_pi_idempotent_on_acyclic_input() -> None:
     block[2, 0] = 0.5  # A→C (forward)
     sng = _sng_from_blocks([a, b, c], block)
 
-    assert sng.l_collapse == 0.0
-    assert sng.l_back == 0.0
-    np.testing.assert_array_equal(sng.sn_adj, sng.sn_adj_raw)
-
-
-def test_pi_cache_returns_stable_values() -> None:
-    a = Supernode("A", [_feat_node("a", 0, layer=1)], "features", 1, 1)
-    b = Supernode("B", [_feat_node("b", 1, layer=2)], "features", 2, 2)
-    block = np.array([[0.0, 1.0], [3.0, 0.0]])
-    sng = _sng_from_blocks([a, b], block)
-
-    first_adj = sng.sn_adj.copy()
-    first_collapse = sng.l_collapse
-    first_back = sng.l_back
-    # Multiple accesses must return identical cached values.
-    np.testing.assert_array_equal(sng.sn_adj, first_adj)
-    assert sng.l_collapse == first_collapse
-    assert sng.l_back == first_back
+    # Acyclic input → π is the identity: adj_matrix equals the plain block-sum.
+    raw = compute_sn_adj([[0], [1], [2]], sng.pruned_adj)
+    np.testing.assert_array_equal(sng.adj_matrix, raw)
 
 
 # --- Emb / logit invariants --------------------------------------------------
@@ -183,14 +162,14 @@ def test_pi_emb_is_source_only() -> None:
     emb = Supernode("EMB", [_emb_node("E_0_0", 0)], "emb", -1, -1)
     a = Supernode("A", [_feat_node("a", 1, layer=2)], "features", 2, 2)
     block = np.zeros((2, 2))
-    block[0, 1] = 0.7  # A → EMB (should be removed: emb is forced source, depth=-inf)
+    block[0, 1] = 0.7  # A → EMB (removed: emb is forced source, depth=-inf)
     block[1, 0] = 1.0  # EMB → A (forward)
     sng = _sng_from_blocks([emb, a], block)
 
-    assert sng.sn_adj[0, 1] == 0.0  # incoming to emb removed
-    assert sng.sn_adj[1, 0] == 1.0  # outgoing from emb preserved
-    assert sng.l_back == pytest.approx(0.7)
-    assert sng.depths[0] == -np.inf
+    assert sng.adj_matrix[0, 1] == 0.0  # incoming to emb removed
+    # Stage A collapses the antiparallel {EMB, A} pair before Stage B, so the
+    # surviving EMB→A edge carries net magnitude 1.0 - 0.7 = 0.3.
+    assert sng.adj_matrix[1, 0] == pytest.approx(0.3)  # outgoing from emb survives
 
 
 def test_pi_logit_is_sink_only() -> None:
@@ -199,35 +178,15 @@ def test_pi_logit_is_sink_only() -> None:
     log = Supernode("LOG", [_logit_node("27_0_0", 1)], "logit", 27, 27)
     block = np.zeros((2, 2))
     block[1, 0] = 0.9  # A → LOG (forward)
-    block[0, 1] = 0.4  # LOG → A (should be removed: logit is forced sink, depth=+inf)
+    block[0, 1] = 0.4  # LOG → A (removed: logit is forced sink, depth=+inf)
     sng = _sng_from_blocks([a, log], block)
 
-    assert sng.sn_adj[1, 0] == 0.9
-    assert sng.sn_adj[0, 1] == 0.0
-    assert sng.l_back == pytest.approx(0.4)
-    assert sng.depths[1] == np.inf
+    assert sng.adj_matrix[0, 1] == 0.0  # outgoing from logit removed
+    # Antiparallel collapse runs first: surviving A→LOG carries 0.9 - 0.4 = 0.5.
+    assert sng.adj_matrix[1, 0] == pytest.approx(0.5)
 
 
 # --- Aggregate properties ----------------------------------------------------
-
-
-def test_pi_mass_conservation() -> None:
-    """l_collapse + l_back + |sn_adj| equals |sn_adj_raw| in the unsigned case."""
-    a = Supernode("A", [_feat_node("a", 0, layer=1)], "features", 1, 1)
-    b = Supernode("B", [_feat_node("b", 1, layer=2)], "features", 2, 2)
-    c = Supernode("C", [_feat_node("c", 2, layer=3)], "features", 3, 3)
-    block = np.zeros((3, 3))
-    # Forward edges and one antiparallel pair (A↔B).
-    block[1, 0] = 5.0  # A→B
-    block[0, 1] = 2.0  # B→A (antiparallel: cancels 4 mass, leaves 3 on A→B)
-    block[2, 1] = 1.0  # B→C
-    block[1, 2] = 0.0  # (no antiparallel here)
-    block[0, 2] = 0.5  # C→A (back-edge under ordering A<B<C: removed)
-    sng = _sng_from_blocks([a, b, c], block)
-
-    raw_mass = float(np.abs(sng.sn_adj_raw).sum())
-    surviving = float(np.abs(sng.sn_adj).sum())
-    assert raw_mass == pytest.approx(surviving + sng.l_collapse + sng.l_back)
 
 
 def test_pi_is_dag_on_complex_input() -> None:
@@ -243,7 +202,7 @@ def test_pi_is_dag_on_complex_input() -> None:
         ]
     )
     sng = _sng_from_blocks([a, b, c], block)
-    assert _is_dag(sng.sn_adj)
+    assert _is_dag(sng.adj_matrix)
 
 
 # --- compute_D_agg integration ----------------------------------------------
@@ -258,7 +217,7 @@ def test_compute_D_agg_uses_post_pi_mass() -> None:
     sng = _sng_from_blocks([a, b], block)
 
     total_pruned_mass = float(np.abs(sng.pruned_adj.numpy()).sum())  # 4.0
-    surviving_sn_mass = float(np.abs(sng.sn_adj).sum())              # 2.0 (post-π)
+    surviving_sn_mass = float(np.abs(sng.adj_matrix).sum())          # 2.0 (post-π)
     expected = 1.0 - surviving_sn_mass / total_pruned_mass
 
     assert compute_D_agg(sng) == pytest.approx(expected)

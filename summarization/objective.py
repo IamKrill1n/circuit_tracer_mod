@@ -53,7 +53,7 @@ def compute_D_agg(sng: SummarizationGraph) -> float:
     """Aggregation loss per paper Eq. 12, evaluated on the post-π adjacency.
 
     D_agg = 1 - (sum over S != T of |W^SN_ST|) / (sum over (u,v) in E' of |W_uv|),
-    where W^SN is ``sng.sn_adj`` (post-π). The metric therefore captures, in a
+    where W^SN is ``sng.adj_matrix`` (post-π). The metric therefore captures, in a
     single number, the loss from cluster aggregation + Stage A (antiparallel
     collapse) + Stage B (back-edge removal).
     """
@@ -61,7 +61,7 @@ def compute_D_agg(sng: SummarizationGraph) -> float:
     total_mag = float(np.abs(adj).sum())
     if total_mag <= 0.0:
         return 0.0
-    retained_mag = float(np.abs(sng.sn_adj).sum())
+    retained_mag = float(np.abs(sng.adj_matrix).sum())
     return 1.0 - retained_mag / total_mag
 
 
@@ -134,6 +134,4 @@ def compute_L(
         "L_total": float(L_coh + D_agg + L_cplx),  # back-compat
         "n_supernodes": int(len(sng.supernodes)),
         "n_middle_supernodes": int(n_middle_supernodes),
-        "l_collapse": float(sng.l_collapse),
-        "l_back": float(sng.l_back),
     }

@@ -11,7 +11,7 @@ def _unwrap_sng(
     sng: SummarizationGraph | dict[str, Any],
 ) -> tuple[list[str], np.ndarray, dict]:
     if isinstance(sng, SummarizationGraph):
-        return sng.sn_names, sng.sn_adj, sng.node_by_name()
+        return sng.sn_names, sng.adj_matrix, sng.node_by_name()
     return list(sng["sn_names"]), np.asarray(sng["sn_adj"], dtype=np.float64), {}
 
 

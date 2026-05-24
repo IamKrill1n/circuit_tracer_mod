@@ -182,7 +182,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         args.supernode_flow_out,
         {
             "sn_names": sng.sn_names,
-            "sn_adj": sng.sn_adj,
+            "sn_adj": sng.adj_matrix,
             "supernodes": sng.to_mapping(),
         },
     )

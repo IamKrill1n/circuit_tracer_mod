@@ -220,7 +220,7 @@ def _evaluate_sng(
 
     # Exp B: edge knockout — for each S_A → S_B edge, measure activation drop in S_B
     # after ablating S_A. sn_adj[target, source] same convention as pruned_adj.
-    sn_adj = sng.sn_adj
+    sn_adj = sng.adj_matrix
     for i, target_sn in enumerate(sng.supernodes):
         for j, source_sn in enumerate(sng.supernodes):
             if i == j:

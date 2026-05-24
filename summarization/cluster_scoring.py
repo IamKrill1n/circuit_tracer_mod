@@ -373,7 +373,7 @@ def score_clusters(
         supernode_rows,
         prune_graph,
         similarity,
-        np.asarray(sng.sn_adj, dtype=np.float64),
+        np.asarray(sng.adj_matrix, dtype=np.float64),
         list(sng.sn_names),
     )
 
@@ -392,7 +392,7 @@ def score_summarization_graph(
         sng.supernodes,
         prune_graph,
         similarity,
-        np.asarray(sng.sn_adj, dtype=np.float64),
+        np.asarray(sng.adj_matrix, dtype=np.float64),
         list(sng.sn_names),
     )
 
