@@ -204,18 +204,22 @@ def _validate_inputs(
 def remove_dangling_nodes(
     node_mask: torch.Tensor,
     edge_mask: torch.Tensor,
-    feature_idx: torch.Tensor,
-    non_boundary: torch.Tensor,
+    require_in: torch.Tensor,
+    require_out: torch.Tensor,
 ) -> torch.Tensor:
-    old = node_mask.clone()
+    # edge_mask[target, source] — same convention as adj. A node dangles when it loses all
+    # edges in the direction its role requires: sources (embedding/error) need an outgoing
+    # edge, the logit needs an incoming edge, features need both. old starts != node_mask so
+    # the fixed-point loop runs at least once.
+    old = torch.zeros_like(node_mask)
     while not torch.all(node_mask == old):
         old[:] = node_mask
         edge_mask[~node_mask] = False
         edge_mask[:, ~node_mask] = False
-        if non_boundary.numel() > 0:
-            node_mask[non_boundary] &= edge_mask[:, non_boundary].any(0)
-        if feature_idx.numel() > 0:
-            node_mask[feature_idx] &= edge_mask[feature_idx].any(1)
+        if require_out.numel() > 0:
+            node_mask[require_out] &= edge_mask[:, require_out].any(0)
+        if require_in.numel() > 0:
+            node_mask[require_in] &= edge_mask[require_in].any(1)
     return node_mask
 
 
@@ -294,9 +298,11 @@ def prune_combined(
     edge_score = edge_score_flat.reshape(edge_inf.shape)
     edge_mask = (edge_score >= find_threshold(edge_score_flat, edge_threshold)).bool()
 
-    feature_idx = torch.tensor(idx["feature"], dtype=torch.long, device=adj.device)
-    non_boundary = torch.tensor(idx["feature"] + idx["error"], dtype=torch.long, device=adj.device)
-    node_mask = remove_dangling_nodes(node_mask, edge_mask, feature_idx, non_boundary)
+    # require_in: must keep an incoming edge (features + logits); require_out: must keep an
+    # outgoing edge (features + errors + embeddings). Boundary nodes are pruned when dangling.
+    require_in = torch.tensor(idx["feature"] + idx["logit"], dtype=torch.long, device=adj.device)
+    require_out = torch.tensor(idx["feature"] + idx["error"] + idx["embedding"], dtype=torch.long, device=adj.device)
+    node_mask = remove_dangling_nodes(node_mask, edge_mask, require_in, require_out)
 
     return node_mask, edge_mask, node_inf, node_rel, edge_inf, edge_rel
 
