@@ -166,7 +166,7 @@ def _stable_argsort(supernodes: list[Supernode], depths: np.ndarray) -> np.ndarr
 
 
 def get_adj(supernodes: list[Supernode], pruned_adj: torch.Tensor) -> np.ndarray:
-    """Post-π supernode adjacency (acyclic). Canonical view used by all evals.
+    """Pack supernodes into a DAG
 
     Block-sums ``pruned_adj`` over the supernode partition, then applies π:
     Stage A collapses each antiparallel pair to its dominant direction (magnitude

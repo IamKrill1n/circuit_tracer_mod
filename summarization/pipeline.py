@@ -180,32 +180,44 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
     # Stage 2: cluster (auto-k captures the per-k sweep for reporting).
     sweep: dict[int, dict[str, Any]] = {}
-    resolved_k = args.target_k
-    if args.auto_k:
-        resolved_k, sweep = find_best_k(
+    if args.method == "ilp":
+        # ILP picks K endogenously via the opening cost; no auto-k sweep.
+        rows = cluster(
             prune_graph,
+            method="ilp",
             max_layer_span=args.max_layer_span,
-            k_min_override=args.k_min,
-            k_max_override=args.k_max,
+            max_sn=args.max_sn,
+            gamma=args.ilp_gamma,
+            ilp_time_limit=args.ilp_time_limit,
+        )
+        resolved_k = sum(1 for s in rows if s.type == "features")
+    else:
+        resolved_k = args.target_k
+        if args.auto_k:
+            resolved_k, sweep = find_best_k(
+                prune_graph,
+                max_layer_span=args.max_layer_span,
+                k_min_override=args.k_min,
+                k_max_override=args.k_max,
+                max_sn=args.max_sn,
+                mean_method=args.mean_method,
+                random_state=args.random_state,
+                n_init=args.n_init,
+                lambdas=(args.lambda_coh, args.lambda_cons, args.lambda_cplx),
+            )
+        if resolved_k is None:
+            resolved_k = 7
+
+        rows = cluster(
+            prune_graph,
+            num_clusters=resolved_k,
+            method=args.method,
+            max_layer_span=args.max_layer_span,
             max_sn=args.max_sn,
             mean_method=args.mean_method,
             random_state=args.random_state,
             n_init=args.n_init,
-            lambdas=(args.lambda_coh, args.lambda_cons, args.lambda_cplx),
         )
-    if resolved_k is None:
-        resolved_k = 7
-
-    rows = cluster(
-        prune_graph,
-        num_clusters=resolved_k,
-        method="spectral",
-        max_layer_span=args.max_layer_span,
-        max_sn=args.max_sn,
-        mean_method=args.mean_method,
-        random_state=args.random_state,
-        n_init=args.n_init,
-    )
     supernode_map = {s.name: s.member_node_ids() for s in rows}
 
     # Stage 3: summarize.

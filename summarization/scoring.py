@@ -1,11 +1,3 @@
-"""Scoring for summarization graphs: closed-form objective L + cluster-quality metrics.
-
-Merges the former ``objective.py`` (closed-form L_coh / L_cons / L_cplx from
-paper/reformulation.tex; each term in [0, 1], lower is better) and
-``cluster_scoring.py`` (silhouette / independence / DAG metrics). All public
-entry points key on a ``SummarizationGraph`` (+ ``PruneGraph`` for the middle-node
-role vectors), so this module imports nothing from ``cluster``.
-"""
 
 from __future__ import annotations
 

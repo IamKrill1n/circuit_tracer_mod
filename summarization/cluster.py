@@ -242,7 +242,6 @@ def cluster_graph_spectral(
     prune_graph: PruneGraph,
     target_k: int = 7,
     max_layer_span: int = 4,
-    max_sn: int | None = None,
     mean_method: Literal["geo", "harm", "arith"] = "arith",
     normalize_weights: bool = False,
     decay_rate: float | None = 1.0,
@@ -257,7 +256,6 @@ def cluster_graph_spectral(
         prune_graph: Output of `prune`.
         target_k: Target number of middle supernodes.
         max_layer_span: Maximum allowed layer span within a middle supernode.
-        max_sn: Optional hard cap on number of middle supernodes.
         mean_method: Mean used to combine output/input cosine similarities.
         normalize_weights: If True, min-max normalize influence/relevance weights before computing similarity.
         random_state: Random seed for spectral clustering k-means init.
@@ -317,10 +315,6 @@ def cluster_graph_spectral(
     for nid, lbl in zip(middle_ids, labels):
         grouped.setdefault(int(lbl), []).append(nid)
     middle_clusters = list(grouped.values())
-
-    if max_sn is not None:
-        logger.info("Merging to budget of %d supernodes...", max_sn)
-        middle_clusters = _merge_to_budget(middle_clusters, nodes_by_id, max_sn=max_sn)
 
     # Keep deterministic naming order for middle SNs, but return member lists only.
     named_middle = _name_middle_supernodes(middle_clusters, nodes_by_id)
@@ -672,6 +666,8 @@ def find_best_k(
     eg = eigengap_analysis(sim_phi, prune_graph, max_k=min(20, n_middle - 1))
     k_min = k_min_override if k_min_override is not None else int(eg["search_range"][0])
     k_max = k_max_override if k_max_override is not None else int(eg["search_range"][1])
+    if max_sn is not None:
+        k_max = min(k_max, max_sn)  # budget caps candidate k instead of post-merging
     k_min = max(2, k_min)
     k_max = min(n_middle - 1, k_max)
     if k_min > k_max:
@@ -683,7 +679,6 @@ def find_best_k(
             prune_graph,
             target_k=k,
             max_layer_span=max_layer_span,
-            max_sn=max_sn,
             mean_method=mean_method,
             decay_rate=decay_rate,
             random_state=random_state,
@@ -770,7 +765,7 @@ def cluster(
     prune_graph: PruneGraph,
     *,
     num_clusters: int | Literal["auto"] = "auto",
-    method: Literal["spectral", "agglomerative"] = "spectral",
+    method: Literal["spectral", "agglomerative", "ilp"] = "spectral",
     max_layer_span: int = 4,
     max_sn: int | None = None,
     mean_method: Literal["geo", "harm", "arith"] = "arith",
@@ -778,14 +773,30 @@ def cluster(
     decay_rate: float | None = 1.0,
     random_state: int = 42,
     n_init: int = 20,
+    gamma: float | None = None,
+    ilp_time_limit: float = 30.0,
     lambdas: tuple[float, float, float] = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
 ) -> list[Supernode]:
     """Stage 2: cluster a ``PruneGraph`` into typed ``Supernode`` rows.
 
     ``num_clusters="auto"`` picks k by minimizing the closed-form L objective
     (``find_best_k`` for spectral, ``find_best_k_for_clusterer`` for agglomerative);
-    an int clusters at exactly that k.
+    an int clusters at exactly that k. ``method="ilp"`` chooses K endogenously via the
+    opening-cost ``gamma`` and ignores ``num_clusters``.
     """
+    if method == "ilp":
+        # K is endogenous (facility-location opening cost), so skip the k-resolution path.
+        from summarization.ilp_cluster import cluster_graph_ilp  # local: avoids import cycle
+
+        clusters = cluster_graph_ilp(
+            prune_graph,
+            max_layer_span=max_layer_span,
+            gamma=gamma,
+            max_sn=max_sn,
+            time_limit=ilp_time_limit,
+        )
+        return clusters_to_supernodes(prune_graph, clusters)
+
     if num_clusters == "auto":
         if method == "spectral":
             k, _ = find_best_k(
@@ -819,7 +830,6 @@ def cluster(
             prune_graph,
             target_k=k,
             max_layer_span=max_layer_span,
-            max_sn=max_sn,
             mean_method=mean_method,
             normalize_weights=normalize_weights,
             decay_rate=decay_rate,

@@ -58,12 +58,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--act-density-ub", type=float, default=0.1)
 
     # Cluster.
+    parser.add_argument(
+        "--method",
+        type=str,
+        choices=["spectral", "agglomerative", "ilp"],
+        default="spectral",
+        help="Clustering method. 'ilp' chooses K endogenously via --ilp-gamma (no auto-k).",
+    )
     parser.add_argument("--target-k", type=int, default=7)
     parser.add_argument("--auto-k", action="store_true")
     parser.add_argument("--k-min", type=int, default=None)
     parser.add_argument("--k-max", type=int, default=None)
     parser.add_argument("--max-layer-span", type=int, default=4)
     parser.add_argument("--max-sn", type=int, default=None)
+    parser.add_argument(
+        "--ilp-gamma",
+        type=float,
+        default=None,
+        help="ILP per-supernode opening cost (dissimilarity units). None = median allowed distance.",
+    )
+    parser.add_argument("--ilp-time-limit", type=float, default=30.0, help="HiGHS time limit (s) for --method ilp.")
     parser.add_argument(
         "--mean-method",
         type=str,

@@ -108,9 +108,9 @@ def filter_act_density(
             edge_mask[:, i] = False
 
     idx = _build_index_sets(nodes)
-    feature_idx = torch.tensor(idx["feature"], dtype=torch.long, device=adj.device)
-    non_boundary = torch.tensor(idx["feature"] + idx["error"], dtype=torch.long, device=adj.device)
-    node_mask = remove_dangling_nodes(node_mask, edge_mask, feature_idx, non_boundary)
+    require_in = torch.tensor(idx["feature"] + idx["logit"], dtype=torch.long, device=adj.device)
+    require_out = torch.tensor(idx["feature"] + idx["error"] + idx["embedding"], dtype=torch.long, device=adj.device)
+    node_mask = remove_dangling_nodes(node_mask, edge_mask, require_in, require_out)
 
     kept = node_mask.nonzero(as_tuple=True)[0]
     return _subset_prune_graph(prune_graph, nodes, kept)

@@ -278,7 +278,6 @@ def _cluster_dispatch(
             prune_graph,
             target_k=target_k,
             max_layer_span=max_layer_span,
-            max_sn=max_sn,
             mean_method=mean_method,
             normalize_weights=normalize_weights,
             decay_rate=decay_rate,

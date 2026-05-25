@@ -58,7 +58,6 @@ def test_cluster_graph_spectral_output_shape() -> None:
         prune_graph,
         target_k=2,
         max_layer_span=4,
-        max_sn=None,
         enforce_dag=False,
     )
 
