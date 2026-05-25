@@ -281,9 +281,6 @@ def run_prune_sweep(args: argparse.Namespace) -> None:
                                     normalization=score_normalization,  # type: ignore[arg-type]
                                     alpha=alpha,
                                     keep_all_tokens_and_logits=args.keep_all_tokens_and_logits,
-                                    filter_act_density=args.filter_act_density,
-                                    act_density_lb=args.act_density_lb,
-                                    act_density_ub=args.act_density_ub,
                                 )
                                 thr_dir.mkdir(parents=True, exist_ok=True)
                                 save_prune_graph(prune_graph, str(prune_graph_path))
@@ -304,9 +301,6 @@ def run_prune_sweep(args: argparse.Namespace) -> None:
                                     "alpha": alpha,
                                     "logit_weights": args.logit_weights,
                                     "keep_all_tokens_and_logits": bool(args.keep_all_tokens_and_logits),
-                                    "filter_act_density": bool(args.filter_act_density),
-                                    "act_density_lb": float(args.act_density_lb),
-                                    "act_density_ub": float(args.act_density_ub),
                                     "token_weights": [float(w) for w in token_weights],
                                     "num_nodes": prune_graph.num_nodes,
                                     "num_edges": prune_graph.num_edges,
@@ -363,9 +357,6 @@ def run_prune_sweep(args: argparse.Namespace) -> None:
         "alphas": alphas,
         "logit_weights": args.logit_weights,
         "keep_all_tokens_and_logits": bool(args.keep_all_tokens_and_logits),
-        "filter_act_density": bool(args.filter_act_density),
-        "act_density_lb": float(args.act_density_lb),
-        "act_density_ub": float(args.act_density_ub),
         "limit": args.limit,
         "total_grid_cells_attempted": total_runs,
         "successful_runs": ok_runs,
@@ -448,9 +439,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="If set, sweep alpha across these values (overrides --alpha).",
     )
     parser.add_argument("--keep-all-tokens-and-logits", action="store_true")
-    parser.add_argument("--filter-act-density", action="store_true")
-    parser.add_argument("--act-density-lb", type=float, default=2e-5)
-    parser.add_argument("--act-density-ub", type=float, default=0.1)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
         "--device",

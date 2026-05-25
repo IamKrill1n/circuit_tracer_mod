@@ -30,17 +30,17 @@ from eval.eval_cluster import (
     _modularity_middle_labels,
     _spectral_cosine_middle_labels,
 )
-from summarization.auto_grouping import find_best_k, find_best_k_for_clusterer
 from summarization.cluster import (
     cluster_graph_agglomerative,
     cluster_graph_spectral,
     clusters_to_supernodes,
     compute_phi_vectors,
-    compute_similarity,
+    find_best_k,
+    find_best_k_for_clusterer,
     labels_to_supernodes,
 )
 from summarization.prune import PruneGraph, load_prune_graph
-from summarization.supernode_graph import Supernode, SummarizationGraph
+from summarization.summarize import Supernode, SummarizationGraph
 
 logger = logging.getLogger(__name__)
 
@@ -121,16 +121,14 @@ def _build_sngs(
     random_state: int = 42,
     n_init: int = 20,
 ) -> dict[str, SummarizationGraph]:
-    sim = compute_similarity(prune_graph)
-
-    best_k_s, _ = find_best_k(prune_graph, similarity=sim)
+    best_k_s, _ = find_best_k(prune_graph)
     spectral_sng = _sng_from_clusters(
         prune_graph, cluster_graph_spectral(prune_graph, target_k=best_k_s)
     )
 
     agg_clusterer = partial(cluster_graph_agglomerative, prune_graph)
     best_k_a, _ = find_best_k_for_clusterer(
-        prune_graph=prune_graph, similarity=sim, clusterer=agg_clusterer
+        prune_graph=prune_graph, clusterer=agg_clusterer
     )
     agg_sng = _sng_from_clusters(
         prune_graph, cluster_graph_agglomerative(prune_graph, target_k=best_k_a)

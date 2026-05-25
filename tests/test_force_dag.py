@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from summarization.supernode_graph import (
+from summarization.summarize import (
     Node,
     SummarizationGraph,
     Supernode,
@@ -209,7 +209,7 @@ def test_pi_is_dag_on_complex_input() -> None:
 
 
 def test_compute_D_agg_uses_post_pi_mass() -> None:
-    from summarization.objective import compute_D_agg
+    from summarization.scoring import compute_D_agg
 
     a = Supernode("A", [_feat_node("a", 0, layer=1)], "features", 1, 1)
     b = Supernode("B", [_feat_node("b", 1, layer=2)], "features", 2, 2)

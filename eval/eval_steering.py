@@ -28,10 +28,9 @@ import torch
 import torch.nn.functional as F
 
 from circuit_tracer import ReplacementModel
-from summarization.auto_grouping import find_best_k
-from summarization.cluster import cluster_graph_spectral, clusters_to_supernodes
+from summarization.cluster import cluster_graph_spectral, clusters_to_supernodes, find_best_k
 from summarization.prune import PruneGraph, load_prune_graph
-from summarization.supernode_graph import Supernode, SummarizationGraph
+from summarization.summarize import Supernode, SummarizationGraph
 
 logger = logging.getLogger(__name__)
 

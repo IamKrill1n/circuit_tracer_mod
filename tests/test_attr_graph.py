@@ -8,7 +8,7 @@ from circuit_tracer.attribution.targets import LogitTarget
 from circuit_tracer.graph import Graph
 from circuit_tracer.utils.tl_nnsight_mapping import UnifiedConfig
 from summarization.attr_graph import AttrGraph
-from summarization.prune import prune_attr_graph, prune_masks_from_attr_graph
+from summarization.prune import PruneGraph, prune, prune_attr_graph, prune_masks_from_attr_graph
 
 
 def _tiny_config() -> UnifiedConfig:
@@ -66,6 +66,41 @@ def test_attr_graph_from_graph_matches_expected_order_and_adjacency() -> None:
     assert by_id["E_101_0"].feature_type == "embedding"
     layer_log = str(cfg.n_layers + 1)
     assert by_id[f"{layer_log}_201_0"].is_target_logit is True
+
+
+def test_prune_consumes_graph_directly() -> None:
+    cfg = _tiny_config()
+    n_pos = 2
+    n_feat = 2
+    n_err = n_pos * cfg.n_layers
+    n_log = 2
+    n_total = n_feat + n_err + n_pos + n_log
+
+    # Edges (adj[target, source]): tok0 -> feat0 -> target logit, so feat0 survives pruning.
+    adj = torch.zeros(n_total, n_total)
+    tok0 = n_feat + n_err
+    logit0 = n_total - n_log
+    adj[0, tok0] = 1.0
+    adj[logit0, 0] = 1.0
+
+    graph = Graph(
+        input_string="ab",
+        input_tokens=torch.tensor([101, 102], dtype=torch.long),
+        active_features=torch.tensor([[0, 0, 10], [1, 1, 11]], dtype=torch.long),
+        adjacency_matrix=adj,
+        cfg=cfg,
+        logit_targets=[LogitTarget(token_str="", vocab_idx=201), LogitTarget(token_str="", vocab_idx=202)],
+        logit_probabilities=torch.tensor([1.0, 0.0], dtype=torch.float32),
+        selected_features=torch.tensor([0, 1], dtype=torch.long),
+        activation_values=torch.tensor([0.5, 0.25], dtype=torch.float32),
+        scan="test-scan",
+    )
+
+    pg = prune(graph, logit_weights="target", node_threshold=1.0, edge_threshold=1.0)
+    assert isinstance(pg, PruneGraph)
+    assert pg.pruned_adj.ndim == 2
+    assert pg.pruned_adj.shape[0] == len(pg.nodes)
+    assert pg.metadata.get("scan") == "test-scan"
 
 
 def test_prune_masks_from_attr_graph_accepts_native_seeds(tmp_path) -> None:

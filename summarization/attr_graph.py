@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
-from summarization.supernode_graph import Node
+from summarization.summarize import Node
 from summarization.utils import get_data_from_json
 from circuit_tracer.graph import Graph
 

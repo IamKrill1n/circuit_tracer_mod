@@ -5,7 +5,7 @@ from api import get_feature, generate_autointerp
 import networkx as nx
 from typing import Any, Literal, NamedTuple
 
-from summarization.supernode_graph import Node
+from summarization.summarize import Node
 
 
 def _node_from_json_dict(raw: dict) -> Node:

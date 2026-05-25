@@ -1,11 +1,15 @@
 import json
 import pytest
+import torch
 
 from summarization.classify import (
     normalize_text,
     heuristic_classify,
     classify_features,
+    filter_act_density,
 )
+from summarization.prune import PruneGraph
+from summarization.utils import _node_from_json_dict
 
 
 def test_normalize_text_basic():
@@ -137,3 +141,64 @@ def test_classify_features_skip_on_non_200(monkeypatch):
 
     out = classify_features(node_ids=node_ids, attr=attr, metadata=metadata)
     assert "1_2_3" not in out
+
+
+def test_filter_act_density_drops_out_of_band_and_sets_clerp(monkeypatch):
+    def fake_get_feature(modelId, layer, index):
+        # index 10 -> in band (keep); index 20 -> too frequent (drop)
+        desc = "in band" if index == 10 else "too frequent"
+        frac = 0.01 if index == 10 else 0.5
+        return 200, json.dumps({"explanations": [{"description": desc}], "frac_nonzero": frac})
+
+    monkeypatch.setattr("summarization.classify.get_feature", fake_get_feature)
+
+    node_ids = ["E_0_0", "0_10_0", "1_20_0", "L_1"]
+    raw = {
+        "E_0_0": {"feature_type": "embedding", "ctx_idx": 1},
+        "0_10_0": {"feature_type": "cross layer transcoder", "layer": 0, "ctx_idx": 0},
+        "1_20_0": {"feature_type": "cross layer transcoder", "layer": 1, "ctx_idx": 0},
+        "L_1": {"feature_type": "logit", "is_target_logit": True, "token_prob": 0.9},
+    }
+    nodes = [
+        _node_from_json_dict({"node_id": nid, "node_idx": i, **raw[nid]})
+        for i, nid in enumerate(node_ids)
+    ]
+    # adj[target, source]: E->feat1, E->feat2, feat1->L, feat2->L
+    adj = torch.tensor(
+        [
+            [0.0, 0.0, 0.0, 0.0],
+            [0.5, 0.0, 0.0, 0.0],
+            [0.5, 0.0, 0.0, 0.0],
+            [0.0, 0.8, 0.3, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    pg = PruneGraph(
+        nodes=nodes,
+        pruned_adj=adj,
+        metadata={
+            "scan": "gemma-2-2b",
+            "info": {"neuronpedia_source_set": "clt-hp"},
+            "prompt_tokens": ["<bos>", "hi"],
+        },
+    )
+
+    out = filter_act_density(pg)
+    ids = {n.node_id for n in out.nodes}
+    assert "1_20_0" not in ids  # out-of-band density dropped
+    assert "0_10_0" in ids  # in-band feature kept
+    assert {"E_0_0", "L_1"}.issubset(ids)  # boundary nodes always kept
+
+    by_id = {n.node_id: n for n in out.nodes}
+    assert by_id["0_10_0"].clerp == "in band"  # clerp from Neuronpedia explanation
+    assert by_id["E_0_0"].clerp == "Emb: hi"  # embedding clerp from prompt_tokens[ctx_idx]
+    assert out.pruned_adj.shape[0] == len(out.nodes)
+
+
+def test_filter_act_density_requires_source_set():
+    node = _node_from_json_dict(
+        {"node_id": "0_10_0", "node_idx": 0, "feature_type": "cross layer transcoder", "layer": 0, "ctx_idx": 0}
+    )
+    pg = PruneGraph(nodes=[node], pruned_adj=torch.zeros((1, 1)), metadata={})
+    with pytest.raises(ValueError, match="source_set"):
+        filter_act_density(pg)

@@ -1,8 +1,120 @@
 from api import get_feature
 from config import get_env
+from dataclasses import replace
 from typing import List, Dict, Any
 import json
 import re
+
+import torch
+
+from summarization.prune import PruneGraph, remove_dangling_nodes
+from summarization.utils import _build_index_sets
+
+
+def _fetch_feature_json(model_id: str, source_set: str, node_id: str) -> dict | None:
+    """Fetch a CLT feature's Neuronpedia payload; None if the request fails.
+
+    node_id format is ``{layer}_{index}_{ctx_idx}``; the Neuronpedia layer key is
+    ``{layer}-{source_set}``.
+    """
+    layer, index = node_id.split("_")[:2]
+    layer_key = layer + "-" + source_set
+    status, data = get_feature(modelId=model_id, layer=layer_key, index=int(index))
+    if status != 200:
+        print(f"Failed node={node_id} modelId={model_id} layer={layer_key} status={status} body={data[:200]}")
+        return None
+    return json.loads(data)
+
+
+def _resolve_neuronpedia_ids(
+    metadata: dict[str, Any], model_id: str | None, source_set: str | None
+) -> tuple[str, str]:
+    """Derive the Neuronpedia modelId + source_set from graph metadata (args win)."""
+    raw_model_id = metadata.get("model_name") or metadata.get("scan", "")
+    # Strip HF "<org>/" prefix (e.g. "google/gemma-2-2b" -> "gemma-2-2b") to match Neuronpedia.
+    model_id = model_id or (raw_model_id.split("/", 1)[-1] if raw_model_id else "")
+    info = metadata.get("info", {})
+    source_set = (
+        source_set
+        or info.get("neuronpedia_source_set")
+        or (info.get("source_urls", [""])[0].split("/")[-1] if info.get("source_urls") else "")
+    )
+    return model_id or "", source_set or ""
+
+
+def _subset_prune_graph(prune_graph: PruneGraph, nodes: list, kept: torch.Tensor) -> PruneGraph:
+    """Re-subset a PruneGraph to ``kept`` local indices, carrying over (possibly edited) nodes."""
+    adj = prune_graph.pruned_adj
+    sub_vec = lambda t: t[kept] if t is not None else None  # noqa: E731
+    sub_mat = lambda t: t[kept][:, kept] if t is not None else None  # noqa: E731
+    kept_nodes = [replace(nodes[int(j)], node_idx=i) for i, j in enumerate(kept.tolist())]
+    return PruneGraph(
+        kept_nodes,
+        adj[kept][:, kept].clone(),
+        prune_graph.metadata,
+        sub_vec(prune_graph.node_influence),
+        sub_vec(prune_graph.node_relevance),
+        sub_mat(prune_graph.edge_influence),
+        sub_mat(prune_graph.edge_relevance),
+    )
+
+
+def filter_act_density(
+    prune_graph: PruneGraph,
+    *,
+    source_set: str | None = None,
+    model_id: str | None = None,
+    act_density_lb: float = 2e-5,
+    act_density_ub: float = 0.1,
+) -> PruneGraph:
+    """Annotate clerps from Neuronpedia and drop features with out-of-band activation density.
+
+    Returns a new ``PruneGraph``. Embedding/logit nodes are always kept; dangling
+    feature/error nodes left after dropping are pruned. Requires a Neuronpedia
+    source_set (from ``prune_graph.metadata`` or passed explicitly).
+    """
+    model_id, source_set = _resolve_neuronpedia_ids(prune_graph.metadata, model_id, source_set)
+    if not source_set:
+        raise ValueError(
+            "filter_act_density requires a Neuronpedia source_set. "
+            "Pass source_set=... (e.g. 'clt-hp') when the graph metadata lacks one."
+        )
+
+    nodes = [replace(n) for n in prune_graph.nodes]
+    adj = prune_graph.pruned_adj
+    node_mask = torch.ones(len(nodes), dtype=torch.bool, device=adj.device)
+    edge_mask = adj != 0  # input pruned_adj already drops below-threshold edges
+    prompt_tokens = prune_graph.metadata.get("prompt_tokens", [])
+
+    for i, node in enumerate(nodes):
+        if node.feature_type == "embedding":
+            cidx = int(node.ctx_idx) if str(node.ctx_idx).lstrip("-").isdigit() else 0
+            if cidx < len(prompt_tokens):
+                nodes[i] = replace(node, clerp=f"Emb: {prompt_tokens[cidx]}")
+            continue
+        if node.feature_type != "cross layer transcoder":
+            continue
+        info = _fetch_feature_json(model_id, source_set, node.node_id)
+        if info is None:
+            continue
+        explanations = info.get("explanations", [])
+        clerp = explanations[0].get("description", "") if explanations else ""
+        act_density = info.get("frac_nonzero", 0)
+        if nodes[i].clerp == "":
+            nodes[i] = replace(nodes[i], clerp=clerp)
+        if act_density > act_density_ub or act_density < act_density_lb:
+            node_mask[i] = False
+            edge_mask[i, :] = False
+            edge_mask[:, i] = False
+
+    idx = _build_index_sets(nodes)
+    feature_idx = torch.tensor(idx["feature"], dtype=torch.long, device=adj.device)
+    non_boundary = torch.tensor(idx["feature"] + idx["error"], dtype=torch.long, device=adj.device)
+    node_mask = remove_dangling_nodes(node_mask, edge_mask, feature_idx, non_boundary)
+
+    kept = node_mask.nonzero(as_tuple=True)[0]
+    return _subset_prune_graph(prune_graph, nodes, kept)
+
 
 def normalize_text(text):
     """Normalize text by lowercasting and remove special characters.
@@ -102,17 +214,9 @@ def classify_features(
             feature_type[node] = "logit"
             continue
 
-        # node_ids are in the format {layer}_{node_id}_{ctx_id}
-        layer, index = node.split("_")[:2]
-        index = int(index)
-        layer = layer + "-" + source_set
-        # print(layer)
-        status, data = get_feature(modelId=modelId, layer=layer, index=index)
-        if status != 200:
-            print(f"Failed node={node} modelId={modelId} layer={layer} status={status} body={data[:200]}")
+        json_data = _fetch_feature_json(modelId, source_set, node)
+        if json_data is None:
             continue
-
-        json_data = json.loads(data)
         explanations = json_data.get("explanations", [])
         clerp = ""
         if isinstance(explanations, list) and explanations:
@@ -276,14 +380,9 @@ def classify_features_with_llm(
     features = []
     llm_ids = []
     for nid in clt_ids:
-        layer, index = nid.split("_")[:2]
-        layer_str = layer + "-" + source_set
-        status, data = get_feature(modelId=modelId, layer=layer_str, index=int(index))
-        if status != 200:
-            print(f"Failed node={nid} modelId={modelId} layer={layer_str} status={status} body={data[:200]}")
+        json_data = _fetch_feature_json(modelId, source_set, nid)
+        if json_data is None:
             continue
-
-        json_data = json.loads(data)
         act_density = json_data.get("frac_nonzero", 0)
         if act_density > 0.1:
             result[nid] = "trash"

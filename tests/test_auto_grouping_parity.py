@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import torch
 
-from summarization.auto_grouping import eigengap_analysis, find_best_k, find_best_k_for_clusterer
-from summarization.cluster import compute_similarity
+from summarization.cluster import (
+    compute_similarity,
+    eigengap_analysis,
+    find_best_k,
+    find_best_k_for_clusterer,
+)
 from summarization.prune import PruneGraph
 from summarization.utils import _node_from_json_dict
 
@@ -62,7 +66,6 @@ def test_find_best_k_returns_L_metrics_and_picks_argmin() -> None:
         k_min_override=2,
         k_max_override=3,
         max_sn=None,
-        enforce_dag=False,
     )
     assert best_k in results
     # Each entry should carry the closed-form objective terms and the partition.
@@ -83,7 +86,6 @@ def test_find_best_k_respects_custom_lambdas() -> None:
         k_min_override=2,
         k_max_override=3,
         max_sn=None,
-        enforce_dag=False,
         lambdas=(0.0, 0.0, 1.0),
     )
     assert results_cplx[2]["L"] <= results_cplx[3]["L"]

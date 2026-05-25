@@ -13,6 +13,7 @@ import streamlit as st
 from api import save_subgraph
 from attribute_utils import format_qwen_with_tokenizer
 from summarization.attr_graph import AttrGraph
+from summarization.classify import filter_act_density
 from summarization.cluster import (
     cluster_graph_agglomerative,
     cluster_graph_spectral,
@@ -20,7 +21,7 @@ from summarization.cluster import (
     labels_to_supernodes,
 )
 from summarization.cluster_viz import supernode_graph_figure
-from summarization.supernode_graph import SummarizationGraph
+from summarization.summarize import SummarizationGraph
 
 REPO = Path(__file__).parent
 GEN_DIR = REPO / "generated_graphs"
@@ -241,9 +242,6 @@ def _run_prune(
     normalization: str,
     alpha: float,
     keep_all: bool,
-    filter_act_density: bool,
-    act_density_lb: float,
-    act_density_ub: float,
 ):
     from summarization.prune import prune_attr_graph
 
@@ -257,9 +255,6 @@ def _run_prune(
         normalization=normalization,
         alpha=alpha,
         keep_all_tokens_and_logits=keep_all,
-        filter_act_density=filter_act_density,
-        act_density_lb=act_density_lb,
-        act_density_ub=act_density_ub,
     )
 
 
@@ -518,10 +513,17 @@ if "attr_graph" in st.session_state:
     normalization = p_c6.selectbox("normalization", ["rank", "min_max"], key="pr_norm")
     alpha = st.slider("alpha", 0.0, 1.0, 0.5, step=0.05, key="pr_alpha")
     keep_all = st.checkbox("keep_all_tokens_and_logits", value=True, key="pr_keep")
-    filter_act = st.checkbox("filter_act_density", value=False, key="pr_filter")
+    filter_act = st.checkbox(
+        "filter_act_density (Neuronpedia clerp + density filter, post-prune)", value=False, key="pr_filter"
+    )
     f_c1, f_c2 = st.columns(2)
     act_lb = f_c1.number_input("act_density_lb", value=2e-5, format="%.2e", key="pr_lb")
     act_ub = f_c2.number_input("act_density_ub", value=0.1, format="%.4f", key="pr_ub")
+    f_c3, f_c4 = st.columns(2)
+    act_model_id = f_c3.text_input("neuronpedia model_id", value="gemma-2-2b", key="pr_np_model")
+    act_source_set = f_c4.text_input(
+        "neuronpedia source_set", value="", key="pr_np_source", help="e.g. clt-hp; required when filter_act_density is on"
+    )
 
     if st.button("Run prune", type="primary"):
         try:
@@ -562,10 +564,16 @@ if "attr_graph" in st.session_state:
                     normalization=normalization,
                     alpha=float(alpha),
                     keep_all=keep_all,
-                    filter_act_density=filter_act,
-                    act_density_lb=float(act_lb),
-                    act_density_ub=float(act_ub),
                 )
+            if filter_act:
+                with st.spinner("Annotating + filtering by activation density (Neuronpedia)…"):
+                    pg = filter_act_density(
+                        pg,
+                        source_set=act_source_set or None,
+                        model_id=act_model_id or None,
+                        act_density_lb=float(act_lb),
+                        act_density_ub=float(act_ub),
+                    )
             st.session_state["prune_graph"] = pg
             st.session_state.pop("sng", None)
             st.success(f"Pruned: {pg.num_nodes} nodes, {pg.num_edges} edges.")

@@ -12,7 +12,7 @@ from google.genai import types as genai_types
 
 from api import get_feature
 from config import get_env
-from summarization.supernode_graph import Supernode, SummarizationGraph
+from summarization.summarize import Supernode, SummarizationGraph
 
 
 # ---------------------------------------------------------------------------

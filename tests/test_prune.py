@@ -7,9 +7,9 @@ from summarization.prune import (
     _validate_threshold,
     _validate_inputs,
     prune_combined,
-    prune_graph_pipeline,
+    prune_from_json,
 )
-from summarization.supernode_graph import Node
+from summarization.summarize import Node
 from summarization.utils import _build_index_sets, _node_from_json_dict
 
 
@@ -158,7 +158,7 @@ def test_prune_combined_token_weights_len_mismatch_raises(tiny_graph):
         )
 
 
-def test_prune_graph_pipeline_returns_prunegraph(monkeypatch, tiny_graph):
+def test_prune_from_json_returns_prunegraph(monkeypatch, tiny_graph):
     adj, nodes = tiny_graph
 
     def fake_loader(_json_path):
@@ -166,7 +166,7 @@ def test_prune_graph_pipeline_returns_prunegraph(monkeypatch, tiny_graph):
 
     monkeypatch.setattr("summarization.attr_graph.get_data_from_json", fake_loader)
 
-    out = prune_graph_pipeline(
+    out = prune_from_json(
         json_path="dummy.json",
         logit_weights="target",
         token_weights=[1.0],
@@ -188,7 +188,7 @@ def test_prune_graph_pipeline_returns_prunegraph(monkeypatch, tiny_graph):
     assert out.num_edges == int((out.pruned_adj != 0).sum().item())
 
 
-def test_prune_graph_pipeline_threshold_validation(monkeypatch, tiny_graph):
+def test_prune_from_json_threshold_validation(monkeypatch, tiny_graph):
     adj, nodes = tiny_graph
 
     def fake_loader(_json_path):
@@ -197,7 +197,7 @@ def test_prune_graph_pipeline_threshold_validation(monkeypatch, tiny_graph):
     monkeypatch.setattr("summarization.attr_graph.get_data_from_json", fake_loader)
 
     with pytest.raises(ValueError, match="node_threshold"):
-        prune_graph_pipeline(
+        prune_from_json(
             json_path="dummy.json",
             logit_weights="target",
             node_threshold=1.5,

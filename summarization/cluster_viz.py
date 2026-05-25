@@ -9,7 +9,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from summarization.utils import layer_index_from_node_id
-from summarization.supernode_graph import SummarizationGraph, Supernode
+from summarization.summarize import SummarizationGraph, Supernode
 
 
 def _sn_kind(sn_name: str, node_by_name: dict[str, Supernode]) -> str:

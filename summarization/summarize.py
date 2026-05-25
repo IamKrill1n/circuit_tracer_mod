@@ -1,4 +1,4 @@
-"""First-class supernode and summarization (cluster) graph types."""
+"""Supernode / summarization-graph types and the summarize stage (clusters -> SummarizationGraph)."""
 
 from __future__ import annotations
 
@@ -237,3 +237,8 @@ class SummarizationGraph:
 
     def node_by_name(self) -> dict[str, Supernode]:
         return {n.name: n for n in self.supernodes}
+
+
+def summarize(supernodes: list[Supernode], pruned_adj: torch.Tensor) -> SummarizationGraph:
+    """Stage 3: assemble grouped supernodes into the post-π summarization graph."""
+    return SummarizationGraph(supernodes=supernodes, pruned_adj=pruned_adj)

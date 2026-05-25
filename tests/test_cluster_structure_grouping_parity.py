@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import torch
 
-from summarization.cluster import cluster_graph_spectral, compute_similarity
+from summarization.cluster import cluster, cluster_graph_spectral, compute_similarity
 from summarization.prune import PruneGraph
+from summarization.summarize import Supernode
 from summarization.utils import _node_from_json_dict
 
 
@@ -65,3 +66,14 @@ def test_cluster_graph_spectral_output_shape() -> None:
     fixed = [sn for sn in supernodes if sn[0].startswith("E") or sn[0].startswith("27")]
     assert len(middle) == 2
     assert len(fixed) == 2  # one embedding and one logit singleton in this fixture
+
+
+def test_cluster_returns_non_overlapping_supernodes() -> None:
+    prune_graph = _build_test_graph()
+    rows = cluster(prune_graph, num_clusters=2)
+
+    assert all(isinstance(r, Supernode) for r in rows)
+    members = [nid for r in rows for nid in r.member_node_ids()]
+    assert len(members) == len(set(members))  # no node in two supernodes
+    assert set(members) == set(prune_graph.node_ids)  # full cover
+    assert len([r for r in rows if r.type == "features"]) == 2  # 2 middle supernodes

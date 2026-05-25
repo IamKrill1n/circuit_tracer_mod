@@ -1,12 +1,10 @@
-# Unified pruning: AttrGraph -> PruneGraph
-import json
+# Unified pruning: Graph/AttrGraph -> PruneGraph (pure tensor math; no Neuronpedia)
 import logging
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal
 
 import torch
 
-from api import get_feature
 from summarization.graph_utils import (
     combine_scores_geometric,
     combined_scores_arithmetic,
@@ -19,8 +17,9 @@ from summarization.graph_utils import (
     normalize_matrix,
 )
 from summarization.attr_graph import AttrGraph
-from summarization.supernode_graph import Node
+from summarization.summarize import Node
 from summarization.utils import _build_index_sets, _node_from_json_dict
+from circuit_tracer.graph import Graph
 
 logger = logging.getLogger(__name__)
 
@@ -314,21 +313,16 @@ def prune_attr_graph(
     normalization: NormalizationMethod = "rank",
     alpha: float = 0.5,
     keep_all_tokens_and_logits: bool = True,
-    filter_act_density: bool = False,
-    act_density_lb: float = 2e-5,
-    act_density_ub: float = 0.1,
-    neuronpedia_model_id: str | None = None,
-    neuronpedia_source_set: str | None = None,
 ) -> PruneGraph:
-    """
-    Prune from a canonical ``AttrGraph``.
+    """Prune from a canonical ``AttrGraph`` (pure tensor math).
+
+    Neuronpedia-dependent annotation/activation-density filtering lives in
+    ``summarization.classify.filter_act_density`` and runs as a separate stage.
     """
     _validate_threshold("node_threshold", node_threshold)
     _validate_threshold("edge_threshold", edge_threshold)
 
     nodes = [replace(n) for n in attr_graph.nodes]
-    node_ids = [n.node_id for n in nodes]
-    id_index = {nid: i for i, nid in enumerate(node_ids)}
     adj = attr_graph.adj
     metadata = attr_graph.metadata
 
@@ -350,73 +344,6 @@ def prune_attr_graph(
     )
 
     kept_indices = node_mask.nonzero(as_tuple=True)[0]
-
-    if filter_act_density:
-        raw_model_id = metadata.get("model_name") or metadata.get("scan", "")
-        # Strip HF "<org>/" prefix (e.g. "google/gemma-2-2b" -> "gemma-2-2b") so it matches Neuronpedia.
-        model_id = neuronpedia_model_id or (raw_model_id.split("/", 1)[-1] if raw_model_id else "")
-        info = metadata.get("info", {})
-        source_set = (
-            neuronpedia_source_set
-            or info.get("neuronpedia_source_set")
-            or (info.get("source_urls", [""])[0].split("/")[-1] if info.get("source_urls") else "")
-        )
-        if not source_set:
-            raise ValueError(
-                "filter_act_density requires a Neuronpedia source_set. "
-                "Pass neuronpedia_source_set=... (e.g. 'clt-hp') when pruning a .pt-derived AttrGraph."
-            )
-        for i in kept_indices.tolist():
-            node = nodes[i]
-            nid = node.node_id
-            if node.feature_type == "embedding":
-                ptoks = metadata.get("prompt_tokens", [])
-                cidx = node.ctx_idx
-                try:
-                    cidx = int(cidx)
-                except (TypeError, ValueError):
-                    cidx = 0
-                if cidx < len(ptoks):
-                    nodes[i] = replace(node, clerp=f"Emb: {ptoks[cidx]}")
-                continue
-            if node.feature_type != "cross layer transcoder":
-                continue
-
-            layer, index = nid.split("_")[:2]
-            index = int(index)
-            layer = layer + "-" + source_set
-            status, data = get_feature(modelId=model_id, layer=layer, index=index)
-            if status != 200:
-                logger.warning(
-                    "Failed node=%s modelId=%s layer=%s status=%s",
-                    nid,
-                    model_id,
-                    layer,
-                    status,
-                )
-                continue
-
-            json_data = json.loads(data)
-            explanations = json_data.get("explanations", [])
-            clerp = ""
-            if explanations:
-                clerp = explanations[0].get("description", "")
-            act_density = json_data.get("frac_nonzero", 0)
-            cur = nodes[i]
-            if cur.clerp == "":
-                nodes[i] = replace(cur, clerp=clerp)
-            if act_density > act_density_ub or act_density < act_density_lb:
-                idx_local = id_index[nid]
-                node_mask[idx_local] = False
-                edge_mask[idx_local, :] = False
-                edge_mask[:, idx_local] = False
-
-        idx2 = _build_index_sets(nodes)
-        feature_idx = torch.tensor(idx2["feature"], dtype=torch.long, device=adj.device)
-        non_boundary = torch.tensor(idx2["feature"] + idx2["error"], dtype=torch.long, device=adj.device)
-        node_mask = remove_dangling_nodes(node_mask, edge_mask, feature_idx, non_boundary)
-
-        kept_indices = node_mask.nonzero(as_tuple=True)[0]
 
     pruned_adj = adj[kept_indices][:, kept_indices].clone()
     kept_edge_mask = edge_mask[kept_indices][:, kept_indices]
@@ -442,9 +369,9 @@ def prune_attr_graph(
     )
 
 
-def prune_graph_pipeline(
+def prune_from_json(
     json_path: str,
-    logit_weights: LogitWeightMode,
+    logit_weights: LogitWeightMode = "target",
     token_weights: list[float] | None = None,
     node_threshold: float = 0.8,
     edge_threshold: float = 0.98,
@@ -452,10 +379,8 @@ def prune_graph_pipeline(
     normalization: NormalizationMethod = "rank",
     alpha: float = 0.5,
     keep_all_tokens_and_logits: bool = True,
-    filter_act_density: bool = False,
-    act_density_lb: float = 2e-5,
-    act_density_ub: float = 0.1,
 ) -> PruneGraph:
+    """Prune from a Neuronpedia frontend graph JSON file."""
     ag = AttrGraph.from_graph_file(json_path)
     return prune_attr_graph(
         ag,
@@ -467,9 +392,6 @@ def prune_graph_pipeline(
         normalization=normalization,
         alpha=alpha,
         keep_all_tokens_and_logits=keep_all_tokens_and_logits,
-        filter_act_density=filter_act_density,
-        act_density_lb=act_density_lb,
-        act_density_ub=act_density_ub,
     )
 
 
@@ -514,9 +436,9 @@ def prune_masks_from_attr_graph(
     )
 
 
-def prune_pt_graph(
-    graph: Any,
-    logit_weights: LogitWeightMode = "probs",
+def prune(
+    graph: Graph,
+    logit_weights: LogitWeightMode = "target",
     token_weights: list[float] | None = None,
     node_threshold: float = 0.8,
     edge_threshold: float = 0.98,
@@ -524,14 +446,8 @@ def prune_pt_graph(
     normalization: NormalizationMethod = "rank",
     alpha: float = 0.5,
     keep_all_tokens_and_logits: bool = True,
-    filter_act_density: bool = False,
-    act_density_lb: float = 2e-5,
-    act_density_ub: float = 0.1,
-    neuronpedia_model_id: str | None = None,
-    neuronpedia_source_set: str | None = None,
 ) -> PruneGraph:
-    """Prune a circuit_tracer Graph (.pt) directly to a PruneGraph."""
-    from summarization.attr_graph import AttrGraph
+    """Stage 1: prune a ``circuit_tracer.Graph`` directly to a ``PruneGraph``."""
     attr_graph = AttrGraph.from_graph(graph)
     return prune_attr_graph(
         attr_graph,
@@ -543,16 +459,11 @@ def prune_pt_graph(
         normalization=normalization,
         alpha=alpha,
         keep_all_tokens_and_logits=keep_all_tokens_and_logits,
-        filter_act_density=filter_act_density,
-        act_density_lb=act_density_lb,
-        act_density_ub=act_density_ub,
-        neuronpedia_model_id=neuronpedia_model_id,
-        neuronpedia_source_set=neuronpedia_source_set,
     )
 
 
 if __name__ == "__main__":
-    prune_graph = prune_graph_pipeline(
+    prune_graph = prune_from_json(
         json_path="demos/temp_graph_files/austin_clt.json",
         logit_weights="target",
         token_weights=[0, 0, 0, 0, 1 / 3, 0, 0, 1 / 3, 0, 1 / 3, 0],

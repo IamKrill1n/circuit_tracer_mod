@@ -1,4 +1,11 @@
-"""Cluster quality metrics and composite scores for summarization / auto-k."""
+"""Scoring for summarization graphs: closed-form objective L + cluster-quality metrics.
+
+Merges the former ``objective.py`` (closed-form L_coh / L_cons / L_cplx from
+paper/reformulation.tex; each term in [0, 1], lower is better) and
+``cluster_scoring.py`` (silhouette / independence / DAG metrics). All public
+entry points key on a ``SummarizationGraph`` (+ ``PruneGraph`` for the middle-node
+role vectors), so this module imports nothing from ``cluster``.
+"""
 
 from __future__ import annotations
 
@@ -8,10 +15,140 @@ import numpy as np
 import torch
 from sklearn.metrics import silhouette_score
 
-from summarization.cluster import mapping_dict_to_supernodes
 from summarization.prune import PruneGraph
-from summarization.supernode_graph import Supernode, SummarizationGraph
+from summarization.summarize import Supernode, SummarizationGraph
 from summarization.utils import node_is_fixed, node_is_logit
+
+
+# ---------------------------------------------------------------------------
+# Closed-form objective terms (paper/reformulation.tex)
+# ---------------------------------------------------------------------------
+
+
+def compute_L_coh(role_vectors_middle: np.ndarray, labels: np.ndarray) -> float:
+    """Mean (1 - cos(r(u), centroid_of_cluster(u))) over middle features.
+
+    role_vectors_middle: [n_middle, d] feature role vectors.
+    labels: [n_middle] integer cluster assignment per middle feature. Label -1 marks
+    features with no assigned cluster; they are dropped from the mean.
+    """
+    if role_vectors_middle.size == 0:
+        return 0.0
+    valid_mask = labels >= 0
+    if not np.any(valid_mask):
+        return 0.0
+    vecs = role_vectors_middle[valid_mask]
+    lbls = labels[valid_mask]
+    norms = np.linalg.norm(vecs, axis=1)
+
+    distances: list[float] = []
+    for cluster in np.unique(lbls):
+        members = vecs[lbls == cluster]
+        member_norms = norms[lbls == cluster]
+        centroid = members.mean(axis=0)
+        c_norm = float(np.linalg.norm(centroid))
+        if c_norm < 1e-12:
+            # Degenerate centroid (e.g., features cancel). Treat as fully unaligned.
+            distances.extend([1.0] * len(members))
+            continue
+        safe_member = np.where(member_norms > 1e-12, member_norms, 1.0)
+        cosines = (members @ centroid) / (safe_member * c_norm)
+        cosines = np.where(member_norms > 1e-12, cosines, 0.0)
+        distances.extend((1.0 - cosines).tolist())
+    return float(np.mean(distances)) if distances else 0.0
+
+
+def compute_D_agg(sng: SummarizationGraph) -> float:
+    """Aggregation loss per paper Eq. 12, evaluated on the post-π adjacency.
+
+    D_agg = 1 - (sum over S != T of |W^SN_ST|) / (sum over (u,v) in E' of |W_uv|),
+    where W^SN is ``sng.adj_matrix`` (post-π). The metric therefore captures, in a
+    single number, the loss from cluster aggregation + Stage A (antiparallel
+    collapse) + Stage B (back-edge removal).
+    """
+    adj = sng.pruned_adj.detach().cpu().numpy().astype(np.float64)
+    total_mag = float(np.abs(adj).sum())
+    if total_mag <= 0.0:
+        return 0.0
+    retained_mag = float(np.abs(sng.adj_matrix).sum())
+    return 1.0 - retained_mag / total_mag
+
+
+def compute_L_cplx(sng: SummarizationGraph, prune_graph: PruneGraph) -> float:
+    """Number of feature supernodes / |V'_mid|, per paper Eq. (Lcplx).
+
+    Embedding and logit supernodes are forced singletons by (F2) and excluded
+    from both numerator and denominator. Returns 0 on a degenerate pruned
+    graph with no mid-graph features.
+    """
+    n_feature_supernodes = sum(
+        1 for sn in sng.supernodes if sn.type in ("features", "feature")
+    )
+    n_middle = sum(1 for node in prune_graph.nodes if not node_is_fixed(node))
+    if n_middle == 0:
+        return 0.0
+    return float(n_feature_supernodes / n_middle)
+
+
+def _supernode_labels_for_middle(
+    sng: SummarizationGraph,
+    middle_node_id_to_local: dict[str, int],
+    n_middle: int,
+) -> np.ndarray:
+    """Per-middle-feature cluster label. -1 for middle features not in any feature-type supernode."""
+    labels = np.full(n_middle, -1, dtype=np.int64)
+    next_label = 0
+    for sn in sng.supernodes:
+        if sn.type != "features" and sn.type != "feature":
+            continue
+        for node in sn.features:
+            local = middle_node_id_to_local.get(node.node_id)
+            if local is not None:
+                labels[local] = next_label
+        next_label += 1
+    return labels
+
+
+def compute_L(
+    sng: SummarizationGraph,
+    role_vectors_middle: np.ndarray,
+    middle_node_id_to_local: dict[str, int],
+    prune_graph: PruneGraph,
+    *,
+    prune_loss: float = 0.0,
+    lambdas: tuple[float, float, float] = (1.0 / 4.0, 1.0 / 4.0, 1.0 / 2.0),
+) -> dict[str, float | int]:
+    """Bundle the per-axis losses + simplex-weighted scalar L for one partition.
+
+    prune_loss is partition-invariant within a pruned graph; pass it in once per
+    PruneGraph. lambdas = (lambda_coh, lambda_cons, lambda_cplx) must sit on the
+    probability simplex (sum to 1, each in [0, 1]).
+    """
+    n_middle = role_vectors_middle.shape[0]
+    labels = _supernode_labels_for_middle(sng, middle_node_id_to_local, n_middle)
+    L_coh = compute_L_coh(role_vectors_middle, labels)
+    D_agg = compute_D_agg(sng)
+    L_cplx = compute_L_cplx(sng, prune_graph)
+    L_cons = 0.5 * (float(prune_loss) + D_agg)
+    lam_coh, lam_cons, lam_cplx = lambdas
+    L = lam_coh * L_coh + lam_cons * L_cons + lam_cplx * L_cplx
+    n_middle_supernodes = sum(1 for sn in sng.supernodes if sn.type in ("features", "feature"))
+    return {
+        "L_coh": float(L_coh),
+        "D_agg": float(D_agg),
+        "prune_loss": float(prune_loss),
+        "L_cons": float(L_cons),
+        "L_cplx": float(L_cplx),
+        "L": float(L),
+        "L_total": float(L_coh + D_agg + L_cplx),  # back-compat
+        "n_supernodes": int(len(sng.supernodes)),
+        "n_middle_supernodes": int(n_middle_supernodes),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Cluster-quality metrics
+# ---------------------------------------------------------------------------
 
 
 def _middle_indices(prune_graph: PruneGraph) -> list[int]:
@@ -351,7 +488,6 @@ def score_clusters(
     supernode_rows: list[Supernode],
     prune_graph: PruneGraph,
     similarity: Any,
-    enforce_dag: bool = False,
 ) -> dict[str, Any]:
     """
     Score a clustering using two complementary metrics:
@@ -361,13 +497,7 @@ def score_clusters(
     where:
       - silhouette_norm = (mean silhouette over middle nodes + 1) / 2, in [0, 1].
       - internal_independence = 1 - (internal edge mass ratio), in [0, 1].
-
-    The legacy components (intra_sim, attr_balance, size_score, dag_safety) are no
-    longer computed. Legacy weight kwargs (`w_intra`, `w_dag`, `w_attr`, `w_size`)
-    are accepted for backward compatibility but ignored.
     """
-
-    del enforce_dag
     sng = SummarizationGraph(supernodes=supernode_rows, pruned_adj=prune_graph.pruned_adj)
     return _cluster_metrics_from_parts(
         supernode_rows,
@@ -395,15 +525,3 @@ def score_summarization_graph(
         np.asarray(sng.adj_matrix, dtype=np.float64),
         list(sng.sn_names),
     )
-
-
-def score_k(
-    final_supernodes: dict[str, list[str]],
-    prune_graph: PruneGraph,
-    similarity: Any,
-    enforce_dag: bool = False,
-    **_: Any,
-) -> dict[str, Any]:
-    """Boundary helper: score a supernode mapping dict (used by eval pipelines)."""
-    rows = mapping_dict_to_supernodes(prune_graph, final_supernodes)
-    return score_clusters(rows, prune_graph, similarity, enforce_dag=enforce_dag)

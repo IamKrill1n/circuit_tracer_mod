@@ -16,17 +16,16 @@ from sklearn.cluster import KMeans, SpectralClustering
 
 from eval.eval_prune import compute_prune_loss
 from summarization.attr_graph import AttrGraph
-from summarization.auto_grouping import eigengap_analysis
 from summarization.cluster import (
     cluster_graph_spectral,
     clusters_to_supernodes,
     compute_phi_vectors,
+    eigengap_analysis,
     labels_to_supernodes,
 )
-from summarization.cluster_scoring import _cosine_similarity
-from summarization.objective import compute_L
+from summarization.scoring import _cosine_similarity, compute_L
 from summarization.prune import PruneGraph, load_prune_graph
-from summarization.supernode_graph import SummarizationGraph
+from summarization.summarize import SummarizationGraph
 from summarization.utils import node_is_fixed
 
 logger = logging.getLogger(__name__)

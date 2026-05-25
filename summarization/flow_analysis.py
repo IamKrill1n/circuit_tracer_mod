@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 
-from summarization.supernode_graph import SummarizationGraph
+from summarization.summarize import SummarizationGraph
 
 
 def _unwrap_sng(
