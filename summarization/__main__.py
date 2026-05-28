@@ -63,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         choices=["spectral", "agglomerative", "ilp"],
         default="spectral",
-        help="Clustering method. 'ilp' chooses K endogenously via --ilp-gamma (no auto-k).",
+        help="Clustering method. 'ilp' chooses K endogenously via the --lambda-* weights (no auto-k).",
     )
     parser.add_argument("--target-k", type=int, default=7)
     parser.add_argument("--auto-k", action="store_true")
@@ -71,12 +71,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--k-max", type=int, default=None)
     parser.add_argument("--max-layer-span", type=int, default=4)
     parser.add_argument("--max-sn", type=int, default=None)
-    parser.add_argument(
-        "--ilp-gamma",
-        type=float,
-        default=None,
-        help="ILP per-supernode opening cost (dissimilarity units). None = median allowed distance.",
-    )
     parser.add_argument("--ilp-time-limit", type=float, default=30.0, help="HiGHS time limit (s) for --method ilp.")
     parser.add_argument(
         "--mean-method",
@@ -88,10 +82,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--n-init", type=int, default=20)
 
-    # Auto-k objective weights (lambda_coh, lambda_cons, lambda_cplx); should sum to 1.
-    parser.add_argument("--lambda-coh", type=float, default=1.0 / 3.0)
-    parser.add_argument("--lambda-cons", type=float, default=1.0 / 3.0)
+    # Objective weights (lambda_cplx, lambda_atom, lambda_causal); must sum to 1.
     parser.add_argument("--lambda-cplx", type=float, default=1.0 / 3.0)
+    parser.add_argument("--lambda-atom", type=float, default=1.0 / 3.0)
+    parser.add_argument("--lambda-causal", type=float, default=1.0 / 3.0)
 
     # Outputs.
     parser.add_argument("--supernodes-out", type=str, default="temp_graph_files/supernodes.json")

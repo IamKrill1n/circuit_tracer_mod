@@ -63,8 +63,8 @@ def test_evaluation_pipeline_writes_summary_and_runs_all_solvers(tmp_path) -> No
         enforce_dag=False,
         random_state=42,
         n_init=5,
-        lambda_coh=1.0 / 3.0,
-        lambda_cons=1.0 / 3.0,
+        lambda_cplx=1.0 / 3.0,
+        lambda_atom=1.0 / 3.0,
     )
 
     result = run_evaluation(args)
@@ -89,12 +89,12 @@ def test_evaluation_pipeline_writes_summary_and_runs_all_solvers(tmp_path) -> No
 
     for row in rows:
         # Every solver row should carry the closed-form objective terms from objective.py.
-        for key in ("L", "L_coh", "L_cons", "L_cplx", "D_agg", "prune_loss"):
+        for key in ("L", "L_cplx", "L_atom", "L_causal", "prune_loss"):
             assert key in row, f"missing {key} in solver row {row.get('solver')}"
         assert row["result_path"]
 
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
     lambdas = manifest["lambdas"]
-    assert abs(lambdas["lambda_coh"] - 1.0 / 3.0) < 1e-9
-    assert abs(lambdas["lambda_cons"] - 1.0 / 3.0) < 1e-9
     assert abs(lambdas["lambda_cplx"] - 1.0 / 3.0) < 1e-9
+    assert abs(lambdas["lambda_atom"] - 1.0 / 3.0) < 1e-9
+    assert abs(lambdas["lambda_causal"] - 1.0 / 3.0) < 1e-9

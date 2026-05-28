@@ -70,7 +70,7 @@ def test_find_best_k_returns_L_metrics_and_picks_argmin() -> None:
     assert best_k in results
     # Each entry should carry the closed-form objective terms and the partition.
     for v in results.values():
-        assert {"L", "L_coh", "L_cons", "L_cplx", "D_agg", "prune_loss"} <= set(v.keys())
+        assert {"L", "L_cplx", "L_atom", "L_causal", "prune_loss"} <= set(v.keys())
         assert "final_supernodes" in v
         assert 0.0 <= float(v["L"]) <= 1.0
     # best_k must minimize L.
@@ -86,7 +86,7 @@ def test_find_best_k_respects_custom_lambdas() -> None:
         k_min_override=2,
         k_max_override=3,
         max_sn=None,
-        lambdas=(0.0, 0.0, 1.0),
+        lambdas=(1.0, 0.0, 0.0),
     )
     assert results_cplx[2]["L"] <= results_cplx[3]["L"]
 

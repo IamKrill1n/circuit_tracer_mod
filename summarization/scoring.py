@@ -17,46 +17,56 @@ from summarization.utils import node_is_fixed, node_is_logit
 # ---------------------------------------------------------------------------
 
 
-def compute_L_coh(role_vectors_middle: np.ndarray, labels: np.ndarray) -> float:
-    """Mean (1 - cos(r(u), centroid_of_cluster(u))) over middle features.
+def compute_L_atom(role_vectors_middle: np.ndarray, labels: np.ndarray) -> float:
+    """Atomicity loss = (1 - mean_silhouette) / 2 over middle features, paper Eq. (Latom).
 
-    role_vectors_middle: [n_middle, d] feature role vectors.
-    labels: [n_middle] integer cluster assignment per middle feature. Label -1 marks
-    features with no assigned cluster; they are dropped from the mean.
+    Uses rectified-cosine distance d(u, v) = 1 - max(0, cos(r(u), r(v))) on role
+    vectors. Per the paper convention, s(u) = -1 for singleton-cluster members
+    (and unassigned middle features, label == -1), maximally penalising
+    unconsolidated nodes.
     """
-    if role_vectors_middle.size == 0:
+    n = role_vectors_middle.shape[0] if role_vectors_middle.size else 0
+    if n == 0 or labels.size == 0:
         return 0.0
-    valid_mask = labels >= 0
-    if not np.any(valid_mask):
-        return 0.0
-    vecs = role_vectors_middle[valid_mask]
-    lbls = labels[valid_mask]
-    norms = np.linalg.norm(vecs, axis=1)
 
-    distances: list[float] = []
-    for cluster in np.unique(lbls):
-        members = vecs[lbls == cluster]
-        member_norms = norms[lbls == cluster]
-        centroid = members.mean(axis=0)
-        c_norm = float(np.linalg.norm(centroid))
-        if c_norm < 1e-12:
-            # Degenerate centroid (e.g., features cancel). Treat as fully unaligned.
-            distances.extend([1.0] * len(members))
+    norms = np.linalg.norm(role_vectors_middle, axis=1, keepdims=True)
+    safe_norms = np.where(norms > 1e-12, norms, 1.0)
+    unit = role_vectors_middle / safe_norms
+    cos = np.clip(unit @ unit.T, -1.0, 1.0)
+    dist = 1.0 - np.maximum(0.0, cos)  # rectified-cosine distance, paper's cos_+
+    np.fill_diagonal(dist, 0.0)
+
+    unique = [int(c) for c in np.unique(labels) if c >= 0]
+    members_of = {c: np.where(labels == c)[0] for c in unique}
+
+    s = np.empty(n, dtype=np.float64)
+    for u in range(n):
+        c_u = int(labels[u])
+        same = members_of.get(c_u, np.empty(0, dtype=np.int64))
+        if same.size <= 1:
+            s[u] = -1.0  # singleton convention
             continue
-        safe_member = np.where(member_norms > 1e-12, member_norms, 1.0)
-        cosines = (members @ centroid) / (safe_member * c_norm)
-        cosines = np.where(member_norms > 1e-12, cosines, 0.0)
-        distances.extend((1.0 - cosines).tolist())
-    return float(np.mean(distances)) if distances else 0.0
+        a_u = float(dist[u, same].sum() / (same.size - 1))
+        b_u = np.inf
+        for c in unique:
+            if c == c_u:
+                continue
+            b_u = min(b_u, float(dist[u, members_of[c]].mean()))
+        if not np.isfinite(b_u):
+            s[u] = -1.0  # only one non-singleton cluster
+            continue
+        denom = max(a_u, b_u)
+        s[u] = 0.0 if denom < 1e-12 else (b_u - a_u) / denom
+
+    return float((1.0 - s.mean()) / 2.0)
 
 
-def compute_D_agg(sng: SummarizationGraph) -> float:
-    """Aggregation loss per paper Eq. 12, evaluated on the post-π adjacency.
+def compute_L_causal(sng: SummarizationGraph) -> float:
+    """Causal-preservation loss = 1 - sum(|W^SN_ST|) / sum(|W_vu|), paper Eq. (Lcausal).
 
-    D_agg = 1 - (sum over S != T of |W^SN_ST|) / (sum over (u,v) in E' of |W_uv|),
-    where W^SN is ``sng.adj_matrix`` (post-π). The metric therefore captures, in a
-    single number, the loss from cluster aggregation + Stage A (antiparallel
-    collapse) + Stage B (back-edge removal).
+    A single ratio over the three mechanisms that remove pruned-graph edge
+    weight from G_SN: intra-supernode absorption, dominant-direction
+    projection drop, and within-direction sign cancellation.
     """
     adj = sng.pruned_adj.detach().cpu().numpy().astype(np.float64)
     total_mag = float(np.abs(adj).sum())
@@ -67,19 +77,16 @@ def compute_D_agg(sng: SummarizationGraph) -> float:
 
 
 def compute_L_cplx(sng: SummarizationGraph, prune_graph: PruneGraph) -> float:
-    """Number of feature supernodes / |V'_mid|, per paper Eq. (Lcplx).
+    """Complexity loss = |pi(phi)| / |V'|, paper Eq. (Lcplx).
 
-    Embedding and logit supernodes are forced singletons by (F2) and excluded
-    from both numerator and denominator. Returns 0 on a degenerate pruned
-    graph with no mid-graph features.
+    Total number of supernodes divided by the total pruned-node count.
+    Embedding, error, and logit nodes are forced singletons by construction.
     """
-    n_feature_supernodes = sum(
-        1 for sn in sng.supernodes if sn.type in ("features", "feature")
-    )
-    n_middle = sum(1 for node in prune_graph.nodes if not node_is_fixed(node))
-    if n_middle == 0:
+    n_supernodes = len(sng.supernodes)
+    n_pruned = len(prune_graph.node_ids)
+    if n_pruned == 0:
         return 0.0
-    return float(n_feature_supernodes / n_middle)
+    return float(n_supernodes / n_pruned)
 
 
 def _supernode_labels_for_middle(
@@ -108,33 +115,30 @@ def compute_L(
     prune_graph: PruneGraph,
     *,
     prune_loss: float = 0.0,
-    lambdas: tuple[float, float, float] = (1.0 / 4.0, 1.0 / 4.0, 1.0 / 2.0),
+    lambdas: tuple[float, float, float] = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
 ) -> dict[str, float | int]:
-    """Bundle the per-axis losses + simplex-weighted scalar L for one partition.
+    """Bundle the three paper losses + simplex-weighted scalar L for one partition.
 
-    prune_loss is partition-invariant within a pruned graph; pass it in once per
-    PruneGraph. lambdas = (lambda_coh, lambda_cons, lambda_cplx) must sit on the
-    probability simplex (sum to 1, each in [0, 1]).
+    L = lam_cplx * L_cplx + lam_atom * L_atom + lam_causal * L_causal, per paper
+    Eq. (Lsum). ``lambdas = (lam_cplx, lam_atom, lam_causal)`` must lie on the
+    probability simplex (non-negative, sum to 1). ``prune_loss`` is
+    partition-invariant within a pruned graph and is reported alongside but NOT
+    included in L (paper: "Pruning is scored separately").
     """
     n_middle = role_vectors_middle.shape[0]
     labels = _supernode_labels_for_middle(sng, middle_node_id_to_local, n_middle)
-    L_coh = compute_L_coh(role_vectors_middle, labels)
-    D_agg = compute_D_agg(sng)
     L_cplx = compute_L_cplx(sng, prune_graph)
-    L_cons = 0.5 * (float(prune_loss) + D_agg)
-    lam_coh, lam_cons, lam_cplx = lambdas
-    L = lam_coh * L_coh + lam_cons * L_cons + lam_cplx * L_cplx
-    n_middle_supernodes = sum(1 for sn in sng.supernodes if sn.type in ("features", "feature"))
+    L_atom = compute_L_atom(role_vectors_middle, labels)
+    L_causal = compute_L_causal(sng)
+    lam_cplx, lam_atom, lam_causal = lambdas
+    L = lam_cplx * L_cplx + lam_atom * L_atom + lam_causal * L_causal
     return {
-        "L_coh": float(L_coh),
-        "D_agg": float(D_agg),
-        "prune_loss": float(prune_loss),
-        "L_cons": float(L_cons),
         "L_cplx": float(L_cplx),
+        "L_atom": float(L_atom),
+        "L_causal": float(L_causal),
         "L": float(L),
-        "L_total": float(L_coh + D_agg + L_cplx),  # back-compat
+        "prune_loss": float(prune_loss),
         "n_supernodes": int(len(sng.supernodes)),
-        "n_middle_supernodes": int(n_middle_supernodes),
     }
 
 

@@ -56,7 +56,7 @@ def _span(cluster_ids: list[str], nodes_by_id: dict) -> int:
 def test_ilp_respects_layer_span(max_span: int) -> None:
     pg = _build_test_graph()
     nodes_by_id = {n.node_id: n for n in pg.nodes}
-    clusters = cluster_graph_ilp(pg, max_layer_span=max_span, gamma=0.1)
+    clusters = cluster_graph_ilp(pg, max_layer_span=max_span)
     for c in clusters:
         assert _span(c, nodes_by_id) <= max_span
 
@@ -76,16 +76,16 @@ def test_ilp_emb_logit_singletons() -> None:
     assert ["27_0_0"] in clusters
 
 
-def test_ilp_gamma_monotonic() -> None:
-    # Larger opening cost => same-or-fewer middle supernodes.
+def test_ilp_cplx_weight_monotonic() -> None:
+    # Larger lambda_cplx (per-supernode opening cost) => same-or-fewer middle supernodes.
     pg = _build_test_graph()
     nodes_by_id = {n.node_id: n for n in pg.nodes}
 
     def n_middle(clusters: list[list[str]]) -> int:
         return sum(1 for c in clusters if not node_is_fixed(nodes_by_id[c[0]]))
 
-    few = n_middle(cluster_graph_ilp(pg, max_layer_span=4, gamma=10.0))
-    many = n_middle(cluster_graph_ilp(pg, max_layer_span=4, gamma=0.001))
+    few = n_middle(cluster_graph_ilp(pg, max_layer_span=4, lambdas=(0.9, 0.1, 0.0)))
+    many = n_middle(cluster_graph_ilp(pg, max_layer_span=4, lambdas=(0.01, 0.99, 0.0)))
     assert few <= many
     assert few == 1  # one medoid can cover layers 1..2 under span=4
     assert many == 4  # tiny opening cost => every node is its own supernode
@@ -93,8 +93,8 @@ def test_ilp_gamma_monotonic() -> None:
 
 def test_ilp_deterministic() -> None:
     pg = _build_test_graph()
-    a = cluster_graph_ilp(pg, max_layer_span=4, gamma=0.3)
-    b = cluster_graph_ilp(pg, max_layer_span=4, gamma=0.3)
+    a = cluster_graph_ilp(pg, max_layer_span=4)
+    b = cluster_graph_ilp(pg, max_layer_span=4)
     assert _cluster_set(a) == _cluster_set(b)
 
 

@@ -47,13 +47,11 @@ SUMMARY_COLUMNS = [
     "best_k",
     "k_candidates",
     "n_supernodes",
-    "n_middle_supernodes",
     "L",
-    "L_coh",
-    "L_cons",
     "L_cplx",
+    "L_atom",
+    "L_causal",
     "prune_loss",
-    "D_agg",
     "sweep_path",
     "best_dir",
     "supernode_map_path",
@@ -319,7 +317,7 @@ def _kmeans_middle_labels(
     if k == n:
         return np.arange(n, dtype=np.int64)
     # Spherical K-means: unit-normalise r(u) so Euclidean distance = cosine distance,
-    # making this a direct surrogate of L_coh.
+    # making this a direct surrogate of L_atom.
     norms = np.linalg.norm(features, axis=1, keepdims=True)
     features_normed = features / np.where(norms > 1e-12, norms, 1.0)
     return (
@@ -340,7 +338,7 @@ def _spectral_cosine_middle_labels(
         return np.zeros(n, dtype=np.int64)
     if k == n:
         return np.arange(n, dtype=np.int64)
-    # Rectified cosine affinity matches the cos+ in L_coh exactly.
+    # Rectified cosine affinity matches the cos+ in L_atom exactly.
     affinity = _cosine_similarity(features, nonnegative=True)
     return (
         SpectralClustering(
@@ -498,13 +496,11 @@ def _evaluate_solver(
         "best_k": best.get("K") if best else "",
         "k_candidates": json.dumps(list(map(int, k_candidates))),
         "n_supernodes": best.get("n_supernodes") if best else "",
-        "n_middle_supernodes": best.get("n_middle_supernodes") if best else "",
         "L": best.get("L") if best else math.nan,
-        "L_coh": best.get("L_coh") if best else math.nan,
-        "L_cons": best.get("L_cons") if best else math.nan,
         "L_cplx": best.get("L_cplx") if best else math.nan,
+        "L_atom": best.get("L_atom") if best else math.nan,
+        "L_causal": best.get("L_causal") if best else math.nan,
         "prune_loss": best.get("prune_loss") if best else math.nan,
-        "D_agg": best.get("D_agg") if best else math.nan,
         "sweep_path": str(sweep_path),
         "best_dir": str(best_dir),
         "supernode_map_path": str(supernode_map_path) if best is not None else "",
@@ -644,20 +640,20 @@ def evaluate_prune_graph(
     return rows
 
 
-def _validate_lambdas(lambda_coh: float, lambda_cons: float) -> tuple[float, float, float]:
-    if not (0.0 <= lambda_coh <= 1.0 and 0.0 <= lambda_cons <= 1.0):
-        raise ValueError("--lambda-coh and --lambda-cons must each be in [0, 1].")
-    lambda_cplx = 1.0 - lambda_coh - lambda_cons
-    if lambda_cplx < -1e-9:
+def _validate_lambdas(lambda_cplx: float, lambda_atom: float) -> tuple[float, float, float]:
+    if not (0.0 <= lambda_cplx <= 1.0 and 0.0 <= lambda_atom <= 1.0):
+        raise ValueError("--lambda-cplx and --lambda-atom must each be in [0, 1].")
+    lambda_causal = 1.0 - lambda_cplx - lambda_atom
+    if lambda_causal < -1e-9:
         raise ValueError(
-            f"--lambda-coh + --lambda-cons must be <= 1; got {lambda_coh + lambda_cons:.4f}"
+            f"--lambda-cplx + --lambda-atom must be <= 1; got {lambda_cplx + lambda_atom:.4f}"
         )
-    return lambda_coh, lambda_cons, max(0.0, lambda_cplx)
+    return lambda_cplx, lambda_atom, max(0.0, lambda_causal)
 
 
 def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = Path(args.output_dir).expanduser().resolve()
-    lambdas = _validate_lambdas(args.lambda_coh, args.lambda_cons)
+    lambdas = _validate_lambdas(args.lambda_cplx, args.lambda_atom)
     graph_paths = _discover_prune_graphs(
         args.input_path,
         node_threshold=args.node_threshold,
@@ -670,7 +666,7 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     if args.node_threshold is not None:
         logger.info("Node-threshold filter: %g", args.node_threshold)
     logger.info(
-        "lambdas: (coh=%.4f, cons=%.4f, cplx=%.4f)", lambdas[0], lambdas[1], lambdas[2]
+        "lambdas: (cplx=%.4f, atom=%.4f, causal=%.4f)", lambdas[0], lambdas[1], lambdas[2]
     )
 
     summary_rows: list[dict[str, Any]] = []
@@ -713,11 +709,10 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             "graph_paths": [str(path) for path in graph_paths],
             "output_dir": str(output_dir),
             "objective": (
-                "L = lambda_coh L_coh + lambda_cons L_cons + lambda_cplx L_cplx, "
-                "simplex weights (default 1/3 each) per paper/reformulation.tex Section 3.4. "
-                "L_cons = 0.5 (prune_loss + D_agg) where prune_loss = "
-                "1 - token_attribution_faithfulness from eval/eval_prune.py. "
-                "Each per-axis loss is in [0, 1], so L is in [0, 1]."
+                "L = lambda_cplx L_cplx + lambda_atom L_atom + lambda_causal L_causal, "
+                "simplex weights (default 1/3 each) per paper/formulation.tex Section "
+                "(Objective). prune_loss = 1 - flow_completeness is reported alongside "
+                "but NOT folded into L. Each per-axis loss is in [0, 1], so L is in [0, 1]."
             ),
             "selection_protocol": (
                 "Each solver sweeps its hyperparameter grid x the shared "
@@ -727,9 +722,9 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "method_grid": METHOD_GRID_DECAY,
             "lambdas": {
-                "lambda_coh": lambdas[0],
-                "lambda_cons": lambdas[1],
-                "lambda_cplx": lambdas[2],
+                "lambda_cplx": lambdas[0],
+                "lambda_atom": lambdas[1],
+                "lambda_causal": lambdas[2],
             },
             "solvers": [
                 "ours-spectral-arith",
@@ -750,9 +745,9 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 "map_location": args.map_location,
                 "random_state": args.random_state,
                 "n_init": args.n_init,
-                "lambda_coh": lambdas[0],
-                "lambda_cons": lambdas[1],
-                "lambda_cplx": lambdas[2],
+                "lambda_cplx": lambdas[0],
+                "lambda_atom": lambdas[1],
+                "lambda_causal": lambdas[2],
             },
         },
     )
@@ -771,8 +766,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Evaluate clustering solvers on saved prune-graph .pt files under the "
-            "simplex-weighted L = lambda_coh L_coh + lambda_cons L_cons + "
-            "lambda_cplx L_cplx objective from paper/reformulation.tex."
+            "simplex-weighted L = lambda_cplx L_cplx + lambda_atom L_atom + "
+            "lambda_causal L_causal objective from paper/formulation.tex."
         )
     )
     parser.add_argument(
@@ -815,16 +810,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--n-init", type=int, default=20)
     parser.add_argument(
-        "--lambda-coh",
+        "--lambda-cplx",
         type=float,
         default=1.0 / 3.0,
-        help="Simplex weight on L_coh (default 1/3).",
+        help="Simplex weight on L_cplx (default 1/3).",
     )
     parser.add_argument(
-        "--lambda-cons",
+        "--lambda-atom",
         type=float,
         default=1.0 / 3.0,
-        help="Simplex weight on L_cons (default 1/3). lambda_cplx = 1 - lambda_coh - lambda_cons.",
+        help="Simplex weight on L_atom (default 1/3). lambda_causal = 1 - lambda_cplx - lambda_atom.",
     )
     return parser
 
@@ -841,8 +836,8 @@ def main() -> None:
     if not args.input_path:
         args.input_path = _default_input_paths()
     logger.info(
-        "=== Clustering evaluation (simplex-weighted L = lambda_coh L_coh + "
-        "lambda_cons L_cons + lambda_cplx L_cplx; per-solver best) ==="
+        "=== Clustering evaluation (simplex-weighted L = lambda_cplx L_cplx + "
+        "lambda_atom L_atom + lambda_causal L_causal; per-solver best) ==="
     )
     result = run_evaluation(args)
     logger.info("output_dir: %s", result["output_dir"])

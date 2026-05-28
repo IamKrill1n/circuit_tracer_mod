@@ -181,13 +181,13 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     # Stage 2: cluster (auto-k captures the per-k sweep for reporting).
     sweep: dict[int, dict[str, Any]] = {}
     if args.method == "ilp":
-        # ILP picks K endogenously via the opening cost; no auto-k sweep.
+        # ILP picks K endogenously by minimising the linearised paper objective.
         rows = cluster(
             prune_graph,
             method="ilp",
             max_layer_span=args.max_layer_span,
             max_sn=args.max_sn,
-            gamma=args.ilp_gamma,
+            lambdas=(args.lambda_cplx, args.lambda_atom, args.lambda_causal),
             ilp_time_limit=args.ilp_time_limit,
         )
         resolved_k = sum(1 for s in rows if s.type == "features")
@@ -203,7 +203,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 mean_method=args.mean_method,
                 random_state=args.random_state,
                 n_init=args.n_init,
-                lambdas=(args.lambda_coh, args.lambda_cons, args.lambda_cplx),
+                lambdas=(args.lambda_cplx, args.lambda_atom, args.lambda_causal),
             )
         if resolved_k is None:
             resolved_k = 7

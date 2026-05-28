@@ -773,7 +773,6 @@ def cluster(
     decay_rate: float | None = 1.0,
     random_state: int = 42,
     n_init: int = 20,
-    gamma: float | None = None,
     ilp_time_limit: float = 30.0,
     lambdas: tuple[float, float, float] = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
 ) -> list[Supernode]:
@@ -781,17 +780,18 @@ def cluster(
 
     ``num_clusters="auto"`` picks k by minimizing the closed-form L objective
     (``find_best_k`` for spectral, ``find_best_k_for_clusterer`` for agglomerative);
-    an int clusters at exactly that k. ``method="ilp"`` chooses K endogenously via the
-    opening-cost ``gamma`` and ignores ``num_clusters``.
+    an int clusters at exactly that k. ``method="ilp"`` chooses K endogenously by
+    minimising the linearised ``L = lam_cplx L_cplx + lam_atom L_atom + lam_causal L_causal``
+    objective and ignores ``num_clusters``.
     """
     if method == "ilp":
-        # K is endogenous (facility-location opening cost), so skip the k-resolution path.
+        # K is endogenous (driven by lambdas), so skip the k-resolution path.
         from summarization.ilp_cluster import cluster_graph_ilp  # local: avoids import cycle
 
         clusters = cluster_graph_ilp(
             prune_graph,
+            lambdas=lambdas,
             max_layer_span=max_layer_span,
-            gamma=gamma,
             max_sn=max_sn,
             time_limit=ilp_time_limit,
         )

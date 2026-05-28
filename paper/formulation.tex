@@ -1,249 +1,254 @@
-\subsection{Attribution graph}
-The attribution graph is a directed acyclic graph $G = (V, E, W)$ with
-vertex set partitioned into
-$V = V_{\text{emb}} \cup V_{\text{inter}} \cup V_{\text{error}} \cup V_{\text{logit}}$
-(embedding, intermediate, error, and logit nodes) and signed weights
-$W \in \mathbb{R}^{N \times N}$ on $N := |V|$ nodes, with $W_{ij}$ the
-linear influence of source node $j$ on target node $i$~\citep{ameisen2024scaling}.
-Embedding and error nodes are sources (no incoming edges), logit nodes
-are sinks (no outgoing edges), and each intermediate node carries signal
-between them, indexed by a transformer (layer, position) pair. A node has edges to every other nodes of higher layer.
-The reader also supplies a token weight $\tau \in \mathbb{R}^N$ with
-$\sum_e \tau_e = 1$ marking the input tokens of interest, and a logit
-weight $\ell \in \mathbb{R}^N$ marking the output positions of interest;
-both enter the loss terms below.
+    \subsection{Attribution graph}
+    The attribution graph is a directed acyclic graph $G = (V, E, W)$ with
+    vertex set partitioned into
+    $V = V_{\text{emb}} \cup V_{\text{inter}} \cup V_{\text{error}} \cup V_{\text{logit}}$
+    (embedding, intermediate, error, and logit nodes) and signed weights
+    $W \in \mathbb{R}^{N \times N}$ on $N := |V|$ nodes, with $W_{ij}$ the
+    linear influence of source node $j$ on target node $i$~\citep{ameisen2024scaling}.
+    Embedding and error nodes are sources (no incoming edges), logit nodes
+    are sinks (no outgoing edges), and each intermediate node carries signal
+    between them, indexed by a transformer (layer, position) pair. A node has edges to every other nodes of higher layer.
+    The reader also supplies a token weight $\tau \in \mathbb{R}^N$ with
+    $\sum_e \tau_e = 1$ marking the input tokens of interest, and a logit
+    weight $\ell \in \mathbb{R}^N$ marking the output positions of interest;
+    both enter the loss terms below.
 
 
-\subsection{Summarization graph}
-A \emph{summary} of $G$ is a triple $(V', E', \varphi)$ comprising
-\begin{itemize}[leftmargin=*,topsep=2pt,itemsep=1pt]
-\item a pruned subgraph $V' \subseteq V$, $E' \subseteq E \cap (V' \times V')$;
-\item a partition $\varphi : V' \to \pi(\varphi)$ where
-$\pi(\varphi) := \{\varphi(v) : v \in V'\}$ is the set of nonempty
-\emph{supernodes} and $K := |\pi(\varphi)|$ their count. Every
-$v \in (V_{\text{emb}} \cup V_{\text{logit}}) \cap V'$ is a singleton
-supernode; only the feature nodes
-$V'_{\text{mid}} := V' \cap V_{\text{inter}}$ are free to be grouped.
-\end{itemize}
+    \subsection{Summarization graph}
+    A \emph{summary} of $G$ is a triple $(V', E', \varphi)$ comprising
+    \begin{itemize}[leftmargin=*,topsep=2pt,itemsep=1pt]
+    \item a pruned subgraph $V' \subseteq V$, $E' \subseteq E \cap (V' \times V')$;
+    \item a partition $\varphi : V' \to \pi(\varphi)$ where
+    $\pi(\varphi) := \{\varphi(v) : v \in V'\}$ is the set of nonempty
+    \emph{supernodes} and $K := |\pi(\varphi)|$ their count. Every
+    $v \in (V_{\text{emb}} \cup V_{\text{error}} \cup V_{\text{logit}}) \cap V'$ is a singleton
+    supernode; only the feature nodes
+    $V'_{\text{mid}} := V' \cap V_{\text{inter}}$ are free to be grouped.
+    \end{itemize}
+    The summary induces the \emph{summarization graph}
+    $G_{SN} = (\pi(\varphi),\, E^{SN},\, W^{SN})$. For each ordered pair of
+    distinct supernodes $(S, T)$, define the signed block sum
+    \begin{equation}
+    B_{S \to T}
+    \;=\;
+    \sum_{u \in S,\, v \in T} W_{vu}\,\mathbf{1}[(u, v) \in E']
+    \label{eq:block-sum}
+    \end{equation}
+    (the signed weight of all edges from members of $S$ to members of $T$;
+    $W_{vu}$ is the entry of $W$ for the edge $u \to v$, with target $v$
+    indexing the row and source $u$ the column). The supernode
+    adjacency keeps only the dominant signed direction per unordered pair:
+    \begin{equation}
+    W^{SN}_{S \to T}
+    \;=\;
+    \begin{cases}
+    B_{S \to T} & \text{if } |B_{S \to T}| > |B_{T \to S}|, \\
+    0           & \text{otherwise,}
+    \end{cases}
+    \label{eq:wsn}
+    \end{equation}
+    so $W^{SN}_{S \to T} \ne 0$ implies $W^{SN}_{T \to S} = 0$, eliminating
+    $2$-cycles in $G_{SN}$ by construction. Longer cycles are broken by
+    the projection step in Section~\ref{sec:solution-dag}, and we set
+    $E^{SN} = \{(S, T) : W^{SN}_{S \to T} \ne 0\}$.
 
 
-\subsection{Desiderata}
-A reader inspects $G_{SN}$ to recover the model's causal story. Three
-quality conditions and two structural prerequisites determine when the
-summary serves that goal:
-\begin{description}[leftmargin=2.0em,style=nextline,topsep=2pt,itemsep=2pt]
-\item[(D1) Coherence.] Members of each supernode share a mechanistic
-role---similar influential downstream targets and similar relevant
-upstream sources---so the supernode reads as a single concept.
-\item[(D2) Conservation.] $G_{SN}$ preserves the flow of information
-from $V_{\text{emb}}$ to $V_{\text{logit}}$ in the original graph, so
-the summary is not an artefact of what was discarded.
-\item[(D3) Complexity.] $G_{SN}$ is small enough to read in one sitting.
-\item[(F1) DAG integrity.] $G_{SN}$ is acyclic. We can't interpret cycles.
-\end{description}
+    \subsection{Flow quantities and role vectors}\label{sec:flow}
+    Two propagated scores quantify how strongly each node participates in
+    the $V_{\text{emb}} \to V_{\text{logit}}$ pathway. With the
+    column-normalized weight matrix
+    $W^{\text{in}}_{ij} = |W_{ij}|/\sum_k |W_{kj}|$ and the row-normalized
+    $W^{\text{out}}_{ij} = |W_{ij}|/\sum_k |W_{ik}|$, the per-node
+    \emph{influence} (downstream reach to logits) and \emph{relevance}
+    (upstream reach to input tokens) are
+    \begin{align}
+    \mathrm{Inf} &= \ell^\top \bigl(I - (W^{\text{in}})^\top\bigr)^{-1}
+    \;\in\; \mathbb{R}^N,
+    \label{eq:inf}\\
+    \mathrm{Rel} &= \tau^\top \bigl(I - W^{\text{out}}\bigr)^{-1}
+    \;\in\; \mathbb{R}^N.
+    \label{eq:rel}
+    \end{align}
+    The Neumann series converges because $G$ is a DAG. Edge-level
+    analogues weight a directed edge $u \to v$ (matrix entry $W_{vu}$)
+    by the importance of its endpoint:
+    \begin{equation}
+    \mathrm{Inf}_{u \to v}
+    \;=\;
+    \mathrm{Inf}_v \,\frac{|W_{vu}|}{\sum_k |W_{ku}|},
+    \qquad
+    \mathrm{Rel}_{u \to v}
+    \;=\;
+    \mathrm{Rel}_u \,\frac{|W_{vu}|}{\sum_k |W_{vk}|}.
+    \label{eq:inf-rel-edge}
+    \end{equation}
+    The \emph{role vector} of a feature $u \in V'_{\text{mid}}$ stacks its
+    weighted outgoing and incoming edge profiles, with each coordinate
+    scaled by the importance of the corresponding endpoint:
+    \begin{align}
+    (v_u^{\text{out}})_k &= W_{ku}\,\sqrt{\mathrm{Inf}_k},
+    \quad k \in V', \nonumber\\
+    (v_u^{\text{in}})_k  &= W_{uk}\,\sqrt{\mathrm{Rel}_k},
+    \quad k \in V', \nonumber\\
+    r(u) &= \bigl[\,v_u^{\text{out}}\,;\, v_u^{\text{in}}\,\bigr]
+    \;\in\; \mathbb{R}^{2|V'|}.
+    \label{eq:role}
+    \end{align}
+    Outgoing coordinates are weighted by the downstream importance of the
+    target ($\sqrt{\mathrm{Inf}_k}$), incoming coordinates by the upstream
+    importance of the source ($\sqrt{\mathrm{Rel}_k}$), so $r(u)$
+    concentrates on the edge dimensions that actually carry causal mass.
 
 
-\subsection{Objective}
-Each desideratum is operationalised as one loss term in $[0, 1]$; the
-overall objective is their convex combination,
-\begin{equation}
-\min_{(V', E', \varphi)}\;
-L \;=\;
-\lambda_{\text{coh}}\, L_{\text{coh}}
-\;+\;
-\lambda_{\text{cons}}\, L_{\text{cons}}
-\;+\;
-\lambda_{\text{cplx}}\, L_{\text{cplx}},
-\qquad
-\lambda_{\text{coh}} + \lambda_{\text{cons}} + \lambda_{\text{cplx}} = 1,\;
-\lambda_i \ge 0.
-\label{eq:Lsum}
-\end{equation}
-We treat $\lambda_{\text{cplx}}$ as derived from the simplex constraint
-and report the free pair $(\lambda_{\text{coh}}, \lambda_{\text{cons}})$
-alongside results.
+    \subsection{Desiderata}
+    A reader inspects $G_{SN}$ to recover the model's causal story: the
+    summary should be \emph{interpretable} (they can trace the flow of
+    information at a glance) and \emph{faithful} (perturbing a supernode
+    in $G_{SN}$ predicts the effect on other supernodes and on the
+    logits). Three quality criteria translate these requirements into
+    measurable conditions on the summary. Well-formedness of $\varphi$
+    and acyclicity of $G_{SN}$ are not desiderata but properties of the
+    construction above: the partition definition forces embedding,
+    error, and logit nodes to be singletons, the dominant-direction
+    rule of Eq.~\eqref{eq:wsn} eliminates $2$-cycles, and longer cycles
+    are broken in Section~\ref{sec:solution-dag}.
+    \begin{description}[leftmargin=2.0em,style=nextline,topsep=2pt,itemsep=2pt]
+    \item[(D1) Complexity.] $G_{SN}$ has few enough supernodes to
+    inspect in one sitting.
+    \item[(D2) Atomicity.] Members of a supernode share a single causal
+    role---similar influential downstream targets and similar relevant
+    upstream sources---so the supernode reads as one mechanism, and the
+    partition cannot be improved by further splitting or merging.
+    \item[(D3) Causal information preservation.] $G_{SN}$ retains the
+    edge weight that carries causal effect in the pruned graph. Edges
+    absorbed inside a supernode and edge mass dropped by the
+    dominant-direction rule both become invisible in $G_{SN}$: a reader
+    using $G_{SN}$ to predict the outcome of a steering intervention on
+    the underlying model has no edge to attribute the lost contribution
+    to, even though the model still produces it. The partition should
+    keep as much pruned-graph edge weight visible in $G_{SN}$ as
+    possible.
+    \end{description}
 
+    \subsection{Objective}\label{sec:objective}
+    We turn (D1)--(D3) into a constrained optimisation on the feasible
+    set already pinned down by the summary-graph definition. Three soft
+    losses---each in $[0, 1]$, one per desideratum---combine as a
+    weighted sum on the probability simplex:
+    \begin{equation}
+    \min_{(V', E', \varphi)}\;
+    L \;=\;
+    \lambda_{\text{cplx}}\, L_{\text{cplx}}
+    \;+\;
+    \lambda_{\text{atom}}\, L_{\text{atom}}
+    \;+\;
+    \lambda_{\text{causal}}\, L_{\text{causal}},
+    \quad
+    \lambda_i \ge 0,\;\; \sum_i \lambda_i = 1.
+    \label{eq:Lsum}
+    \end{equation}
+    We treat $\lambda_{\text{causal}} = 1 - \lambda_{\text{cplx}} -
+    \lambda_{\text{atom}}$ as derived and report the remaining two.
+    Each $L_i \in [0, 1]$, so $L \in [0, 1]$.
 
-\subsection{Flow on the attribution graph}
-\label{sec:flow}
-The loss terms below need two per-node summaries of how causal mass moves
-through $G$: how much each node \emph{receives} from the input tokens, and
-how much each node \emph{sends} to the output logits. We obtain both from
-the same flow construction.
+    \paragraph{Complexity loss (D1).}
+    The total number of supernodes the reader must hold, normalised by
+    the pruned graph size:
+    \begin{equation}
+    L_{\text{cplx}}
+    \;=\;
+    \frac{|\pi(\varphi)|}{|V'|}
+    \;\in\; [0, 1].
+    \label{eq:Lcplx}
+    \end{equation}
+    $L_{\text{cplx}}$ shrinks as feature nodes are merged and reaches
+    $1$ when every node is its own singleton; the embedding, error, and
+    logit nodes are always singletons by construction.
 
-Let $W_{uv}$ denote the signed edge from $u$ to $v$. Row- and
-column-normalising the unsigned adjacency yields the forward and
-backward transition matrices
-\begin{equation}
-P^{\text{out}}_{uv} \;=\; \frac{|W_{uv}|}{\sum_{w} |W_{uw}|},
-\qquad
-P^{\text{in}}_{uv} \;=\; \frac{|W_{uv}|}{\sum_{w} |W_{wv}|},
-\label{eq:flow-matrices}
-\end{equation}
-defined to be zero on rows or columns with no incident edges, so embedding
-nodes contribute no rows to $P^{\text{in}}$ and logit nodes no rows to
-$P^{\text{out}}$.
+    \paragraph{Atomicity loss (D2).}
+    With role distance $d(u, v) = 1 - \cos_{+}\!\bigl(r(u), r(v)\bigr)$ on
+    the role vectors of Eq.~\eqref{eq:role}, where
+    $\cos_{+}(x, y) = \max(0, \cos(x, y))$, the silhouette of a feature
+    $u \in V'_{\text{mid}}$ is
+    \begin{equation}
+    s(u)
+    \;=\;
+    \frac{b(u) - a(u)}{\max\bigl(a(u),\, b(u)\bigr)}
+    \;\in\; [-1, 1],
+    \label{eq:silhouette}
+    \end{equation}
+    with
+    \[
+    a(u) = \tfrac{1}{|\varphi(u)| - 1}
+    \sum_{u' \in \varphi(u),\, u' \ne u}\!\! d(u, u'),
+    \qquad
+    b(u) = \min_{S \ne \varphi(u)}\, \tfrac{1}{|S|}\!\sum_{u' \in S}\! d(u, u'),
+    \]
+    and the convention $s(u) = -1$ when $|\varphi(u)| = 1$, so unconsolidated
+    singletons are penalised maximally. The atomicity loss is the
+    mean-silhouette deficit,
+    \begin{equation}
+    L_{\text{atom}}
+    \;=\;
+    \frac{1 - \bar{s}}{2},
+    \qquad
+    \bar{s} \;=\; \frac{1}{|V'_{\text{mid}}|}
+    \sum_{u \in V'_{\text{mid}}} s(u),
+    \label{eq:Latom}
+    \end{equation}
+    in $[0, 1]$. The silhouette form encodes ``the partition cannot be
+    improved by splitting or merging'' directly: $s(u) > 0$ iff $u$ is
+    closer to its own supernode than to the nearest other, so neither
+    moving $u$ nor splitting $\varphi(u)$ would locally improve the
+    assignment. $L_{\text{atom}}$ rises when members of a supernode are
+    dissimilar (over-merging) \emph{and} when similar features sit in
+    different supernodes (under-merging).
 
-\paragraph{Relevance.} Pushing the token weight $\tau$ forward from the
-embeddings through $P^{\text{out}}$ and accumulating contributions at every
-hop yields the per-node \emph{relevance}
-\begin{equation}
-\mathrm{Rel} \;=\; \tau \,\bigl(I - P^{\text{out}}\bigr)^{-1}
-\;=\; \sum_{t \ge 0} \tau \,(P^{\text{out}})^{t}.
-\label{eq:rel}
-\end{equation}
-A topological ordering of the DAG makes $P^{\text{out}}$ strictly upper
-triangular up to a permutation, so it is nilpotent and the Neumann series
-terminates after at most $\mathrm{depth}(G)$ terms.
+    \paragraph{Causal-preservation loss (D3).}
+    Three mechanisms remove pruned-graph edge weight from $G_{SN}$:
+    (i) an edge $u \to v$ with $u, v$ in the same supernode disappears
+    entirely; (ii) on each unordered pair $\{S, T\}$ with flow in both
+    directions, the dominant-direction rule of Eq.~\eqref{eq:wsn}
+    discards the smaller of $|B_{S \to T}|, |B_{T \to S}|$;
+    (iii) opposing-sign edges from $S$ to $T$ partially cancel inside
+    $|B_{S \to T}|$. All three hide pathway weight from $G_{SN}$: a
+    reader using $G_{SN}$ to predict the result of a steering
+    intervention has no edge to attribute the lost contribution to,
+    though the underlying model still produces it. The loss is the
+    fraction of pruned edge weight not visible in $G_{SN}$:
+    \begin{equation}
+    L_{\text{causal}}
+    \;=\;
+    1 \;-\;
+    \frac{\sum_{S \ne T}\, |W^{SN}_{S \to T}|}
+         {\sum_{(u, v) \in E'} |W_{vu}|}
+    \;\in\; [0, 1].
+    \label{eq:Lcausal}
+    \end{equation}
+    $L_{\text{causal}} = 0$ when every pruned-graph edge survives intact
+    (no intra-supernode edges, no $2$-cycles between supernodes, no
+    sign cancellation within any block sum); it grows when supernodes
+    swallow direct edges or span overlapping layer ranges. Because
+    $L_{\text{atom}}$ rewards merging role-similar features even when
+    they are connected by a strong direct edge, $\lambda_{\text{causal}}$
+    provides the explicit knob for the \emph{diamond} case where keeping
+    that direct edge visible matters more than collapsing the pair.
 
-\paragraph{Influence.} Symmetrically, pushing the logit weight $\ell$
-backward from the sinks through $P^{\text{in}}$ accumulates a per-node
-\emph{influence}
-\begin{equation}
-\mathrm{Inf} \;=\; \bigl(I - P^{\text{in}}\bigr)^{-1} \ell
-\;=\; \sum_{t \ge 0} (P^{\text{in}})^{t}\, \ell,
-\label{eq:inf}
-\end{equation}
-with the same nilpotence argument.
-
-\paragraph{Edge-level analogues.} The pruning score in
-Section~\ref{sec:solution-prune} reweights each surviving edge by the
-flow values at its endpoints,
-\begin{equation}
-\mathrm{Inf}_{uv} \;=\; \mathrm{Inf}_v \, P^{\text{in}}_{uv}, \qquad
-\mathrm{Rel}_{uv} \;=\; \mathrm{Rel}_u \, P^{\text{out}}_{uv},
-\label{eq:inf-rel-edge}
-\end{equation}
-so that $\mathrm{Inf}_{uv}$ (resp.\ $\mathrm{Rel}_{uv}$) measures the
-share of backward influence (resp.\ forward relevance) that traverses
-edge $(u, v)$.
-
-\begin{lemma}[Conservation]\label{lem:conservation}
-\textit{TODO.}
-\end{lemma}
-
-\noindent Lemma~\ref{lem:conservation} ties relevance at the logits to
-influence at the embeddings and motivates the symmetric completeness used
-by the conservation loss below.
-
-
-\subsection{Loss terms}
-
-\paragraph{Coherence (D1).}
-The \emph{role} of a feature $u \in V'_{\text{mid}}$ is its pair of edge
-profiles, with each coordinate scaled by the importance of its endpoint:
-\begin{align}
-(v_u^{\text{out}})_k &= W_{uk}\,\sqrt{\mathrm{Inf}_k} \nonumber \\
-(v_u^{\text{in}})_k  &= W_{ku}\,\sqrt{\mathrm{Rel}_k} \nonumber \\
-r(u) &= \bigl[\,v_u^{\text{out}}\,;\, v_u^{\text{in}}\,\bigr] \in \mathbb{R}^{2N},
-\label{eq:role}
-\end{align}
-where $\mathrm{Inf}_k$ and $\mathrm{Rel}_k$ are the per-node backward and
-forward flow values defined in Section~\ref{sec:flow}. The square-root
-weighting concentrates the profile on the edges that actually carry
-causal mass. The coherence
-loss is the mean rectified-cosine distance of each feature's role to its
-supernode centroid $\bar r(S) = \frac{1}{|S|}\sum_{u \in S} r(u)$,
-\begin{equation}
-L_{\text{coh}}(\varphi)
-\;=\;
-\frac{1}{|V'_{\text{mid}}|}
-\sum_{S \in \pi(\varphi)}\; \sum_{u \in S}
-\bigl[\,1 - \cos_{+}\!\bigl(r(u),\, \bar r(S)\bigr)\,\bigr],
-\label{eq:Lcoh}
-\end{equation}
-with $\cos_{+}(x, y) = \max\!\bigl(0,\, \cos(x, y)\bigr) \in [0, 1]$ the
-rectified cosine. The cosine form is scale-invariant in $W$, and
-rectifying keeps $L_{\text{coh}} \in [0, 1]$.
-
-\paragraph{Conservation (D2).}
-Conservation has two costs: \emph{pruning} (causal mass removed when $G$
-is replaced by the subgraph $(V', E')$) and \emph{aggregation} (mass
-cancelled or dropped when $(V', E')$ is contracted to $G_{SN}$).
-
-\emph{Pruning loss.} We score the surviving subgraph by asking, in both
-flow directions, what fraction of the flow visits non-error nodes. Each
-feature dropped from $V'$ is first folded into its same-position
-reconstruction-error node, so the error signal absorbs every causal
-contribution the subgraph fails to capture. On this merged graph, let
-\begin{equation}
-\mu^{\text{in}}_{\text{err}}(v) = \sum_{\eta \in V_{\text{error}}}
-P^{\text{in}}_{\eta v},
-\qquad
-\mu^{\text{out}}_{\text{err}}(v) = \sum_{\eta \in V_{\text{error}}}
-P^{\text{out}}_{v \eta}
-\label{eq:err-share}
-\end{equation}
-be the fractions of $v$'s normalised incoming and outgoing weight that
-terminate at error nodes. Weighting each node by its flow in the matching
-direction gives a backward and a forward completeness,
-\begin{align}
-\mathcal{C}_{\text{back}}(V', E') &\;=\;
-\frac{\sum_v \bigl(1 - \mu^{\text{in}}_{\text{err}}(v)\bigr)\,
-       \mathrm{OutInf}(v)}
-     {\sum_v \mathrm{OutInf}(v)},
-\label{eq:Cback} \\[2pt]
-\mathcal{C}_{\text{fwd}}(V', E') &\;=\;
-\frac{\sum_v \bigl(1 - \mu^{\text{out}}_{\text{err}}(v)\bigr)\,
-       \mathrm{Rel}(v)}
-     {\sum_v \mathrm{Rel}(v)},
-\label{eq:Cfwd}
-\end{align}
-with $\mathrm{OutInf}(v) = \mathrm{Inf}(v) + \ell_v$. We combine them by
-the geometric mean
-\begin{equation}
-\mathcal{C}(V', E') \;=\;
-\sqrt{\mathcal{C}_{\text{back}}(V', E')\,\mathcal{C}_{\text{fwd}}(V', E')}
-\;\in\; [0, 1].
-\label{eq:Ccombined}
-\end{equation}
-The geometric mean penalises asymmetry: a high score requires error nodes
-to be unimportant in \emph{both} directions, so a subgraph that preserves
-downstream influence but loses upstream coverage (or vice versa) is
-flagged. The pruning loss is $1 - \mathcal{C}(V', E')$.
-
-\emph{Aggregation loss.} Contracting features into supernodes drops
-within-block edges (self-loops in $G_{SN}$), cancels opposing signs
-inside each block $B_{ST}$, and discards the weaker direction of every
-unordered pair (Eq.~\eqref{eq:wsn}). The fraction of edge magnitude
-not retained is
-\begin{equation}
-D_{\text{agg}}(\varphi)
-\;=\;
-1 \;-\;
-\frac{\sum_{(S, T) \in E^{SN}} \lvert W^{SN}_{ST} \rvert}
-     {\sum_{(u, v) \in E'} \lvert W_{uv} \rvert}
-\;\in\;[0, 1],
-\label{eq:Dagg}
-\end{equation}
-zero iff every pruned edge is preserved as a same-sign contribution to a
-single directed inter-supernode block, and one iff every pruned edge is
-absorbed.
-
-\emph{Total.} The conservation loss averages the two contributions so it
-also lives in $[0, 1]$:
-\begin{equation}
-L_{\text{cons}}(V', E', \varphi)
-\;=\;
-\tfrac{1}{2}\bigl[\,
-  (1 - \mathcal{C}(V', E'))
-  \;+\;
-  D_{\text{agg}}(\varphi)
-\,\bigr].
-\label{eq:Lcons}
-\end{equation}
-
-\paragraph{Complexity (D3).}
-Reading complexity is the number of feature supernodes, normalised by
-the unsummarised feature count:
-\begin{equation}
-L_{\text{cplx}}(V', E', \varphi)
-\;=\;
-\frac{|\pi(\varphi)| - |V_{\text{emb}}| - |V_{\text{logit}}|}
-     {|V'_{\text{mid}}|}.
-\label{eq:Lcplx}
-\end{equation}
-Embedding and logit singletons are fixed by~(F2), so the numerator is
-exactly the number of feature supernodes. $L_{\text{cplx}} \in
-[1/|V'_{\text{mid}}|,\, 1]$: the minimum at full collapse (every
-mid-graph feature in one supernode), the maximum at all singletons.
+    \paragraph{Pruning is scored separately.}
+    Stage~1 chooses $V'$ to retain the causal mass flowing from
+    $V_{\text{emb}}$ to $V_{\text{logit}}$ in $G$. With $\mathrm{Rel}$ of
+    Eq.~\eqref{eq:rel} recomputed on the pruned graph (denoted
+    $\mathrm{Rel}_{V'}$), the \emph{flow completeness}
+    \begin{equation}
+    \mathcal{C}(V', E')
+    \;=\;
+    \sum_{\ell \in V_{\text{logit}}} \mathrm{Rel}_{V'}(\ell)
+    \;\in\; [0, 1]
+    \label{eq:Ccal}
+    \end{equation}
+    is the fraction of source mass that still reaches a logit after
+    pruning. We report $L_{\text{prune}} = 1 - \mathcal{C}$ alongside $L$
+    of Eq.~\eqref{eq:Lsum} but do not include it in the simplex sum:
+    $L_{\text{prune}}$ depends only on $(V', E')$ and not on $\varphi$, so
+    the two-stage pipeline lets it govern Stage~1 cleanly while
+    Eq.~\eqref{eq:Lsum} governs Stage~2 on a fixed pruned graph.

@@ -244,10 +244,10 @@ def compute_prune_loss(
 ) -> float:
     """1 - token_attribution_faithfulness; one number per (full, pruned) pair.
 
-    Used as the partition-invariant prune-loss component of L_cons in
-    paper/reformulation.tex. Constructs the full-graph cache lazily via
-    GraphCache so callers don't have to wire A_full_norm/full_target_rel
-    by hand.
+    Reported separately alongside L per paper/formulation.tex ("Pruning is
+    scored separately"); partition-invariant within a pruned graph.
+    Constructs the full-graph cache lazily via GraphCache so callers don't
+    have to wire A_full_norm/full_target_rel by hand.
     """
     cache = GraphCache(device=device)
     key = f"_inline_{id(attr_graph)}"
