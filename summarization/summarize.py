@@ -1,4 +1,4 @@
-"""Supernode / summarization-graph types and the summarize stage (clusters -> SummarizationGraph)."""
+"""Supernode / summary-graph types and the summarize stage (clusters -> SummaryGraph)."""
 
 from __future__ import annotations
 
@@ -212,10 +212,10 @@ def get_adj(supernodes: list[Supernode], pruned_adj: torch.Tensor) -> np.ndarray
 
 
 @dataclass
-class SummarizationGraph:
+class SummaryGraph:
     """Supernodes plus their post-π acyclic adjacency.
 
-    Construct with ``SummarizationGraph(supernodes=..., pruned_adj=...)``;
+    Construct with ``SummaryGraph(supernodes=..., pruned_adj=...)``;
     ``adj_matrix`` is derived once via ``get_adj`` (block-sum + antiparallel
     collapse + back-edge removal). ``adj_matrix[t, s]`` is the supernode-level
     edge weight source ``s`` → target ``t`` — same convention as ``pruned_adj``.
@@ -239,6 +239,6 @@ class SummarizationGraph:
         return {n.name: n for n in self.supernodes}
 
 
-def summarize(supernodes: list[Supernode], pruned_adj: torch.Tensor) -> SummarizationGraph:
-    """Stage 3: assemble grouped supernodes into the post-π summarization graph."""
-    return SummarizationGraph(supernodes=supernodes, pruned_adj=pruned_adj)
+def summarize(supernodes: list[Supernode], pruned_adj: torch.Tensor) -> SummaryGraph:
+    """Stage 3: assemble grouped supernodes into the post-π summary graph."""
+    return SummaryGraph(supernodes=supernodes, pruned_adj=pruned_adj)

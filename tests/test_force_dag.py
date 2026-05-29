@@ -1,4 +1,4 @@
-"""Tests for the π force-DAG operator (``get_adj``) behind SummarizationGraph.adj_matrix."""
+"""Tests for the π force-DAG operator (``get_adj``) behind SummaryGraph.adj_matrix."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import torch
 
 from summarization.summarize import (
     Node,
-    SummarizationGraph,
+    SummaryGraph,
     Supernode,
     compute_sn_adj,
 )
@@ -54,8 +54,8 @@ def _logit_node(node_id: str, node_idx: int, ctx_idx: int = 0) -> Node:
 
 def _sng_from_blocks(
     sns: list[Supernode], adj_block: np.ndarray
-) -> SummarizationGraph:
-    """Build a SummarizationGraph whose pre-π block-sum is exactly ``adj_block``.
+) -> SummaryGraph:
+    """Build a SummaryGraph whose pre-π block-sum is exactly ``adj_block``.
 
     Each Supernode is given a single member with a unique ``node_idx``, so the
     block-aggregation collapses to the supernode-level matrix we pass in.
@@ -70,7 +70,7 @@ def _sng_from_blocks(
     for t in range(n):
         for s in range(n):
             pruned_adj[t, s] = float(adj_block[t, s])
-    return SummarizationGraph(supernodes=sns, pruned_adj=pruned_adj)
+    return SummaryGraph(supernodes=sns, pruned_adj=pruned_adj)
 
 
 def _is_dag(sn_adj: np.ndarray) -> bool:

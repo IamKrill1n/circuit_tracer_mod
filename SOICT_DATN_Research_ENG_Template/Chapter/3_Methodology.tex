@@ -3,14 +3,249 @@
 
 \section{Overview}
 
-Phần này mô tả tổng quan giải pháp gồm những bước chính nào, hoạt động ra sao. Mục tiêu của phần này là cho người đọc một cái nhìn tổng thể về giải pháp. Để cho dễ hiểu thì nên có một biểu đồ mô tả luồng hoạt động của giải pháp đề xuất. 
+We summarize an \emph{attribution graph} --- the circuit a replacement model
+induces for a single prompt --- into a small, human-readable \emph{summary
+graph} of supernodes. The pipeline has two stages. \textbf{Stage~1 (pruning)}
+discards the nodes and edges that carry little causal mass between the input
+tokens and the output logits, leaving a compact subgraph that still reproduces
+the model's behaviour. \textbf{Stage~2 (clustering)} groups the surviving feature
+nodes into supernodes that each read as a single mechanism. This chapter states
+both stages as optimization problems: Stage~1 minimizes a pruning loss, and
+Stage~2 solves an exact correlation-clustering problem under explicit budgets on
+graph size and on lost causal information. The two stages are scored separately
+because the pruning loss depends only on the retained subgraph, not on how its
+nodes are grouped.
 
 \section{Problem Formulation}
-Tên của các chương này đặt theo nội dung mà sinh viên sẽ trình bày trong từng chương. 
 
-Các chương tiếp theo mô tả chi tiết về các bước, các thuật toán trong giải pháp đề xuất. Có thể trình bày pseudocode cho từng bước. Chú ý, pseudocode chỉ có tác dụng làm chi tiết hoá giải thuật chứ không thay thế được phần thuyết minh về giải thuật. Đối với những chi tiết kỹ thuật khó hiểu nên có các hình minh hoạ để người đọc dễ hiểu. Mỗi một thuật toán/bước thực hiện nên tách ra thành một chương. 
+\subsection{Attribution graph}
+The attribution graph is a directed acyclic graph $G = (V, E, W)$ whose vertex
+set is partitioned into
+$V = V_{\text{emb}} \cup V_{\text{inter}} \cup V_{\text{error}} \cup V_{\text{logit}}$
+(embedding, intermediate, error, and logit nodes), with signed weights
+$W \in \mathbb{R}^{N \times N}$ on $N := |V|$ nodes, where $W_{ij}$ is the linear
+influence of source node $j$ on target node $i$. Embedding and error nodes are
+sources (no incoming edges), logit nodes are sinks (no outgoing edges), and each
+intermediate node carries signal between them, indexed by a transformer
+(layer, position) pair; a node may only have edges to nodes of a higher layer.
+A token weight $\tau \in \mathbb{R}^N$ with $\sum_e \tau_e = 1$ marks the input
+tokens of interest and a logit weight $\ell \in \mathbb{R}^N$ marks the output
+positions of interest; both enter the loss terms below.
 
-\section{Methodology}
+\subsection{Flow quantities and role vectors}\label{sec:flow}
+Two propagated scores quantify how strongly each node participates in the
+$V_{\text{emb}} \to V_{\text{logit}}$ pathway. With the column-normalized matrix
+$W^{\text{in}}_{ij} = |W_{ij}|/\sum_k |W_{kj}|$ and the row-normalized
+$W^{\text{out}}_{ij} = |W_{ij}|/\sum_k |W_{ik}|$, the per-node \emph{influence}
+(downstream reach to logits) and \emph{relevance} (upstream reach to input
+tokens) are
+\begin{align}
+\mathrm{Inf} &= \ell^\top \bigl(I - (W^{\text{in}})^\top\bigr)^{-1}
+\;\in\; \mathbb{R}^N, \label{eq:inf}\\
+\mathrm{Rel} &= \tau^\top \bigl(I - W^{\text{out}}\bigr)^{-1}
+\;\in\; \mathbb{R}^N. \label{eq:rel}
+\end{align}
+The Neumann series converges because $G$ is a DAG. A node's \emph{importance} is
+the combination of its influence and relevance: a node matters to the prompt's
+computation only if it both reaches the logits and is reached from the input
+tokens.
 
+The \emph{role vector} of an intermediate feature stacks its weighted outgoing
+and incoming edge profiles, each coordinate scaled by the importance of the
+corresponding endpoint:
+\begin{align}
+(v_u^{\text{out}})_k &= W_{ku}\,\sqrt{\mathrm{Inf}_k}, \quad k \in V', \nonumber\\
+(v_u^{\text{in}})_k  &= W_{uk}\,\sqrt{\mathrm{Rel}_k}, \quad k \in V', \nonumber\\
+r(u) &= \bigl[\,v_u^{\text{out}}\,;\, v_u^{\text{in}}\,\bigr]
+\;\in\; \mathbb{R}^{2|V'|}. \label{eq:role}
+\end{align}
+The coordinates are \emph{signed} (they inherit the sign of $W$), so two features
+that drive the same targets with opposite sign --- an excitatory and an
+inhibitory feature --- have opposing role vectors. Outgoing coordinates are
+weighted by the downstream importance of the target ($\sqrt{\mathrm{Inf}_k}$),
+incoming coordinates by the upstream importance of the source
+($\sqrt{\mathrm{Rel}_k}$), so $r(u)$ concentrates on the edge dimensions that
+actually carry causal mass.
+
+\subsection{Summary graph}
+A \emph{summary} of $G$ is a triple $(V', E', \varphi)$ comprising
+\begin{itemize}[leftmargin=*,topsep=2pt,itemsep=1pt]
+\item a pruned subgraph $V' \subseteq V$, $E' \subseteq E \cap (V' \times V')$;
+\item a partition $\varphi : V' \to \pi(\varphi)$ where
+$\pi(\varphi) := \{\varphi(v) : v \in V'\}$ is the set of nonempty
+\emph{supernodes} and $K := |\pi(\varphi)|$ their count. Every
+$v \in (V_{\text{emb}} \cup V_{\text{error}} \cup V_{\text{logit}}) \cap V'$ is a
+singleton supernode; only the feature nodes
+$V'_{\text{mid}} := V' \cap V_{\text{inter}}$ are free to be grouped.
+\end{itemize}
+The summary induces the \emph{summary graph}
+$G_{SN} = (\pi(\varphi),\, E^{SN},\, W^{SN})$. For each ordered pair of distinct
+supernodes $(S, T)$, the signed block sum
+\begin{equation}
+B_{S \to T} \;=\; \sum_{u \in S,\, v \in T} W_{vu}\,\mathbf{1}[(u, v) \in E']
+\label{eq:block-sum}
+\end{equation}
+collects the signed weight of all edges from members of $S$ to members of $T$
+($W_{vu}$ is the entry for the edge $u \to v$, target $v$ indexing the row, source
+$u$ the column). The supernode adjacency keeps only the dominant signed direction
+per unordered pair,
+\begin{equation}
+W^{SN}_{S \to T} \;=\;
+\begin{cases}
+B_{S \to T} & \text{if } |B_{S \to T}| > |B_{T \to S}|, \\
+0           & \text{otherwise,}
+\end{cases}
+\label{eq:wsn}
+\end{equation}
+so $W^{SN}_{S \to T} \ne 0$ implies $W^{SN}_{T \to S} = 0$, eliminating $2$-cycles
+by construction; we set $E^{SN} = \{(S, T) : W^{SN}_{S \to T} \ne 0\}$.
+
+\subsection{Desiderata}
+A reader inspects $G_{SN}$ to recover the model's causal story, so the summary
+should be \emph{interpretable} (the flow of information can be traced at a glance)
+and \emph{faithful} (perturbing a supernode in $G_{SN}$ predicts the effect on the
+model). Four criteria translate these requirements into measurable conditions;
+the first governs Stage~1 and the other three govern Stage~2.
+\begin{description}[leftmargin=2.0em,style=nextline,topsep=2pt,itemsep=3pt]
+\item[(D1) Retain important nodes and edges.] The pruned subgraph
+$(V', E')$ should keep the nodes and edges that carry the causal flow from
+$V_{\text{emb}}$ to $V_{\text{logit}}$ in $G$, and discard the rest. A node or
+edge is important when it lies on a high influence--relevance pathway
+(Eqs.~\eqref{eq:inf}--\eqref{eq:rel}); pruning away unimportant structure makes
+the summary tractable without changing what the model does.
+\item[(D2) Complexity.] $G_{SN}$ has few enough supernodes to inspect in one
+sitting.
+\item[(D3) Atomicity.] Members of a supernode share a single causal role ---
+similar influential downstream targets and similar relevant upstream sources ---
+so the supernode reads as one mechanism, and the partition cannot be improved by
+further splitting or merging.
+\item[(D4) Causal information preservation.] $G_{SN}$ retains the edge weight that
+carries causal effect in the pruned graph. Edges absorbed inside a supernode and
+edge mass dropped by the dominant-direction rule both become invisible in
+$G_{SN}$: a reader using $G_{SN}$ to predict the outcome of a steering
+intervention has no edge to attribute the lost contribution to, even though the
+model still produces it. The partition should keep as much pruned-graph edge
+weight visible in $G_{SN}$ as possible.
+\end{description}
+
+\subsection{Objective}\label{sec:objective}
+The pipeline optimizes two objectives, one per stage. Stage~1 minimizes the
+pruning loss $L_{\text{prune}}$ (D1). Stage~2 minimizes the atomicity objective
+(D3) subject to the complexity budget (D2) and the causal budget (D4) as
+\emph{hard constraints} rather than soft penalties: ``few enough to inspect''
+and ``lose at most a fraction $\varepsilon$ of edge mass'' are naturally stated
+as bounds.
+
+\paragraph{Stage~1: pruning loss (D1).}
+With $\mathrm{Rel}$ of Eq.~\eqref{eq:rel} recomputed on the pruned graph (denoted
+$\mathrm{Rel}_{V'}$), the \emph{flow completeness}
+\begin{equation}
+\mathcal{C}(V', E') \;=\; \sum_{\ell \in V_{\text{logit}}} \mathrm{Rel}_{V'}(\ell)
+\;\in\; [0, 1]
+\label{eq:Ccal}
+\end{equation}
+is the fraction of input-token source mass that still reaches a logit after
+pruning. Stage~1 keeps the high-importance nodes and edges so as to minimize
+\begin{equation}
+L_{\text{prune}} \;=\; 1 - \mathcal{C}(V', E') \;\in\; [0, 1].
+\label{eq:Lprune}
+\end{equation}
+$L_{\text{prune}}$ depends only on $(V', E')$ and not on $\varphi$, so it is
+scored separately and fixed before Stage~2.
+
+\paragraph{Stage~2: atomicity as correlation clustering (D3).}
+On a fixed pruned graph, atomicity asks that features sharing a supernode have
+similar role vectors and features in different supernodes do not. We measure
+role similarity with the \emph{signed} cosine
+$s_{ij} = \cos\bigl(r(i), r(j)\bigr) \in [-1, 1]$ of Eq.~\eqref{eq:role}. Unlike a
+rectified cosine, the signed cosine treats antagonistic features (same targets,
+opposite sign; $s_{ij} < 0$) as maximally dissimilar, so they repel --- which is
+also what D4 wants, since merging opposing-sign features cancels mass inside the
+block sum of Eq.~\eqref{eq:block-sum}.
+
+Let $x_{ij} = \mathbf{1}[\varphi(i) = \varphi(j)]$ indicate that features
+$i, j \in V'_{\text{mid}}$ share a supernode, and let $\theta \in [-1, 1]$ be a
+resolution threshold. The \emph{correlation-clustering objective} is
+\begin{equation}
+L_{\text{cc}}(\varphi)
+\;=\;
+\sum_{\{i, j\} \subseteq V'_{\text{mid}}} x_{ij}\,(\theta - s_{ij}).
+\label{eq:Lcc}
+\end{equation}
+A similar pair ($s_{ij} > \theta$) contributes a negative term, so merging it is
+rewarded; a dissimilar pair ($s_{ij} < \theta$) contributes a positive term, so
+merging it is penalized. Minimizing $L_{\text{cc}}$ therefore penalizes
+\emph{over-merging} (dissimilar features placed together) and \emph{under-merging}
+(similar features kept apart) at once: up to an additive constant it equals the
+total weight of pairs placed on the ``wrong'' side of $\theta$. The threshold
+$\theta$ is the only granularity knob, and $\theta = 0$ is the natural default,
+since the sign of the cosine then decides whether a pair should merge.
+
+\paragraph{Stage~2 program and the Pareto front.}
+Stage~2 solves, for a complexity budget $K_{\max}$ and a causal budget
+$\varepsilon$,
+\begin{equation}
+\min_{\varphi}\; L_{\text{cc}}(\varphi)
+\qquad \text{s.t.} \qquad
+K \le K_{\max}\;\; \text{(D2)}, \qquad
+L_{\text{causal}}(\varphi) \le \varepsilon\;\; \text{(D4)},
+\label{eq:stage2}
+\end{equation}
+where the causal-preservation loss is the fraction of pruned edge weight not
+visible in $G_{SN}$,
+\begin{equation}
+L_{\text{causal}}
+\;=\;
+1 \;-\;
+\frac{\sum_{S \ne T}\, |W^{SN}_{S \to T}|}{\sum_{(u, v) \in E'} |W_{vu}|}
+\;\in\; [0, 1].
+\label{eq:Lcausal}
+\end{equation}
+There is no single ``correct'' value of $\varepsilon$: it controls a genuine
+trade-off, since merging role-similar features that are also directly connected
+improves atomicity (D3) but hides their edge (D4). We therefore do not fix
+$\varepsilon$ but \emph{sweep} it, solving Eq.~\eqref{eq:stage2} at each value to
+trace the two-dimensional Pareto front of $(L_{\text{atom}}, L_{\text{causal}})$,
+where $L_{\text{atom}}$ is the reported atomicity metric defined below. The
+operating point on this front is then chosen by an external, objective-blind
+evaluation rather than by tuning weights.
+
+Because the feasible set is a partition of a small set of features and both the
+objective Eq.~\eqref{eq:Lcc} and the constraints of Eq.~\eqref{eq:stage2} are
+linear in the same-cluster indicators $x_{ij}$, the program is an integer linear
+program (a clique-partitioning / correlation-clustering ILP, with transitivity
+constraints $x_{ij} + x_{jk} - x_{ik} \le 1$ enforcing a valid partition). For the
+pruned graphs considered here it is solved to optimality, so the reported summary
+is the exact minimizer, not the output of a heuristic.
+
+\paragraph{Reported atomicity metric.}
+While $L_{\text{cc}}$ is the linear quantity the solver optimizes, atomicity is
+\emph{reported} by the silhouette, which is threshold-free and bounded. With the
+signed-cosine role distance $d(u, v) = \tfrac{1}{2}\bigl(1 - s_{uv}\bigr) \in
+[0,1]$, the silhouette of a feature $u \in V'_{\text{mid}}$ is
+\begin{equation}
+s(u) \;=\; \frac{b(u) - a(u)}{\max\bigl(a(u),\, b(u)\bigr)} \;\in\; [-1, 1],
+\qquad
+\begin{aligned}
+a(u) &= \tfrac{1}{|\varphi(u)| - 1}\!\!\sum_{u' \in \varphi(u),\, u' \ne u}\!\!\! d(u, u'),\\
+b(u) &= \min_{S \ne \varphi(u)}\, \tfrac{1}{|S|}\!\sum_{u' \in S}\! d(u, u'),
+\end{aligned}
+\label{eq:silhouette}
+\end{equation}
+with the convention $s(u) = -1$ when $|\varphi(u)| = 1$, so unconsolidated
+singletons are penalized maximally. The reported atomicity loss is the
+mean-silhouette deficit,
+\begin{equation}
+L_{\text{atom}} \;=\; \frac{1 - \bar{s}}{2}, \qquad
+\bar{s} \;=\; \frac{1}{|V'_{\text{mid}}|} \sum_{u \in V'_{\text{mid}}} s(u)
+\;\in\; [0, 1].
+\label{eq:Latom}
+\end{equation}
+The silhouette encodes ``the partition cannot be improved by splitting or
+merging'' directly: $s(u) > 0$ iff $u$ is closer to its own supernode than to the
+nearest other, so neither moving $u$ nor splitting $\varphi(u)$ would locally
+improve the assignment. It rises both when a supernode's members are dissimilar
+(over-merging) and when similar features sit in different supernodes
+(under-merging), matching what $L_{\text{cc}}$ minimizes.
 
 \end{document}

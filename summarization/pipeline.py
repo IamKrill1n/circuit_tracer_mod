@@ -3,7 +3,7 @@
 ``run_pipeline`` produces a ``circuit_tracer.Graph`` by running local attribution on a
 prompt (or loading an existing ``.pt``), optionally computes SHAP token weights, prunes
 the graph directly, optionally annotates/filters by activation density, clusters (auto-k
-or fixed k), and assembles the supernode ``SummarizationGraph``. ``summarization/__main__.py``
+or fixed k), and assembles the supernode ``SummaryGraph``. ``summarization/__main__.py``
 is a thin CLI over this.
 """
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -11,6 +12,12 @@ import numpy as np
 import streamlit as st
 
 from api import save_subgraph
+from config import HUGGINGFACE_API_KEY
+
+# huggingface_hub.get_token() (used for gated downloads like google/gemma-2-2b)
+# reads HF_TOKEN, not HUGGINGFACE_API_KEY — bridge our .env name to the one it expects.
+if HUGGINGFACE_API_KEY and not os.getenv("HF_TOKEN"):
+    os.environ["HF_TOKEN"] = HUGGINGFACE_API_KEY
 from attribute_utils import format_qwen_with_tokenizer
 from summarization.attr_graph import AttrGraph
 from summarization.classify import filter_act_density
@@ -21,7 +28,7 @@ from summarization.cluster import (
     labels_to_supernodes,
 )
 from summarization.cluster_viz import supernode_graph_figure
-from summarization.summarize import SummarizationGraph
+from summarization.summarize import SummaryGraph
 
 REPO = Path(__file__).parent
 GEN_DIR = REPO / "generated_graphs"
@@ -271,8 +278,11 @@ def _cluster_dispatch(
     enforce_dag: bool,
     random_state: int,
     n_init: int,
+    theta: float = 0.0,
+    eps_causal: float | None = None,
+    ilp_time_limit: float = 30.0,
 ) -> list[list[str]]:
-    """Dispatch to one of 7 clustering methods. Baselines use eval/eval_cluster helpers."""
+    """Dispatch to a clustering method. Baselines use eval/eval_cluster helpers."""
     if method == "ours-spectral":
         return cluster_graph_spectral(
             prune_graph,
@@ -294,6 +304,20 @@ def _cluster_dispatch(
             mean_method=mean_method,
             normalize_weights=normalize_weights,
             decay_rate=decay_rate,
+        )
+    if method == "ours-ilp":
+        # Exact correlation clustering on signed-cosine role vectors; target_k is
+        # ignored (K is endogenous, capped by max_sn). eps_causal=None leaves the
+        # causal-preservation budget unconstrained.
+        from summarization.ilp_cluster import cluster_graph_ilp
+
+        return cluster_graph_ilp(
+            prune_graph,
+            theta=theta,
+            eps_causal=eps_causal,
+            max_sn=max_sn,
+            max_layer_span=max_layer_span,
+            time_limit=ilp_time_limit,
         )
 
     # Baselines: build middle indices + features, then route to label producers.
@@ -330,8 +354,8 @@ def _cluster_dispatch(
 # ── Streamlit layout ─────────────────────────────────────────────────────────
 
 
-st.set_page_config(page_title="Summarization Graph", layout="wide")
-st.title("Summarization Graph Pipeline")
+st.set_page_config(page_title="Summary Graph", layout="wide")
+st.title("Summary Graph Pipeline")
 
 # Sidebar: model config -------------------------------------------------------
 sb = st.sidebar
@@ -590,6 +614,7 @@ if "prune_graph" in st.session_state:
         [
             "ours-spectral",
             "ours-agglomerative",
+            "ours-ilp",
             "baseline-spectral-cosine",
             "baseline-kmeans",
             "baseline-modularity",
@@ -617,6 +642,30 @@ if "prune_graph" in st.session_state:
     )
     decay_rate = float(decay_rate_raw) if decay_rate_raw > 0.0 else None
 
+    is_ilp = method == "ours-ilp"
+    if is_ilp:
+        st.caption(
+            "ILP: exact correlation clustering on signed-cosine role vectors. "
+            "target_k is ignored; max_sn is the hard complexity budget (0 = no cap)."
+        )
+    i_c1, i_c2, i_c3 = st.columns(3)
+    ilp_theta = i_c1.number_input(
+        "theta (signed-cosine resolution)",
+        min_value=-1.0, max_value=1.0, value=0.0, step=0.05,
+        disabled=not is_ilp, key="cl_theta",
+    )
+    ilp_eps_raw = i_c2.number_input(
+        "eps_causal (<0 = unconstrained)",
+        min_value=-1.0, max_value=1.0, value=-1.0, step=0.05,
+        disabled=not is_ilp, key="cl_eps",
+    )
+    ilp_time_limit = i_c3.number_input(
+        "ilp time_limit (s)",
+        min_value=1.0, value=30.0, step=5.0,
+        disabled=not is_ilp, key="cl_tl",
+    )
+    ilp_eps = float(ilp_eps_raw) if ilp_eps_raw >= 0.0 else None
+
     is_spectral = method == "ours-spectral"
     enforce_dag = st.checkbox(
         "enforce_dag (ours-spectral only)", value=True, disabled=not is_spectral, key="cl_dag"
@@ -640,9 +689,12 @@ if "prune_graph" in st.session_state:
                     enforce_dag=enforce_dag,
                     random_state=int(random_state),
                     n_init=int(n_init),
+                    theta=float(ilp_theta),
+                    eps_causal=ilp_eps,
+                    ilp_time_limit=float(ilp_time_limit),
                 )
                 rows = clusters_to_supernodes(prune_graph, clusters)
-                sng = SummarizationGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
+                sng = SummaryGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
                 supernode_map = {s.name: s.member_node_ids() for s in rows}
                 attr = {n.node_id: asdict(n) for n in prune_graph.nodes}
 
@@ -659,17 +711,25 @@ if "prune_graph" in st.session_state:
 # 5. Supernode graph ---------------------------------------------------------
 if "sng" in st.session_state:
     st.header("5. Supernode graph")
-    sng: SummarizationGraph = st.session_state["sng"]
+    sng: SummaryGraph = st.session_state["sng"]
     supernode_map = st.session_state["supernode_map"]
     attr = st.session_state["attr"]
     method = st.session_state.get("cluster_method", "")
     slug = st.session_state.get("graph_slug", "")
+
+    ag = st.session_state.get("attr_graph")
+    prompt_tokens = (
+        [str(t) for t in (ag.metadata.get("prompt_tokens") or [])] if ag else None
+    )
+    prompt = str(ag.metadata.get("prompt", "") or "") if ag else None
 
     fig = supernode_graph_figure(
         sng=sng,
         final_supernodes=supernode_map,
         attr=attr,
         title=f"Supernode graph — {slug} ({method})",
+        prompt_tokens=prompt_tokens,
+        prompt=prompt,
     )
     st.plotly_chart(fig, use_container_width=True)
 

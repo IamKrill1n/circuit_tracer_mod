@@ -40,7 +40,7 @@ from summarization.cluster import (
     labels_to_supernodes,
 )
 from summarization.prune import PruneGraph, load_prune_graph
-from summarization.summarize import Supernode, SummarizationGraph
+from summarization.summarize import Supernode, SummaryGraph
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +109,8 @@ def _inter_cosine(sn_deltas: dict[str, torch.Tensor], n_samples: int = 1000) -> 
 
 def _sng_from_clusters(
     prune_graph: PruneGraph, clusters: list[list[str]]
-) -> SummarizationGraph:
-    return SummarizationGraph(
+) -> SummaryGraph:
+    return SummaryGraph(
         supernodes=clusters_to_supernodes(prune_graph, clusters),
         pruned_adj=prune_graph.pruned_adj,
     )
@@ -120,7 +120,7 @@ def _build_sngs(
     prune_graph: PruneGraph,
     random_state: int = 42,
     n_init: int = 20,
-) -> dict[str, SummarizationGraph]:
+) -> dict[str, SummaryGraph]:
     best_k_s, _ = find_best_k(prune_graph)
     spectral_sng = _sng_from_clusters(
         prune_graph, cluster_graph_spectral(prune_graph, target_k=best_k_s)
@@ -169,7 +169,7 @@ def _build_sngs(
 
 def _evaluate_sng(
     model: ReplacementModel,
-    sng: SummarizationGraph,
+    sng: SummaryGraph,
     prompt: str,
     orig_logits: torch.Tensor,
     orig_activations: torch.Tensor,

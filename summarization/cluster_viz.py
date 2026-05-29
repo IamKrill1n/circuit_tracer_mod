@@ -1,15 +1,31 @@
-"""Plotly visualization helpers for clustered supernode graphs."""
+"""Plotly visualization helpers for clustered supernode graphs.
+
+Renders the supernode graph in the style of the Anthropic attribution-graph
+figure: supernodes as rounded "card" boxes (with a stacked-paper shadow for
+composites), curved green/red connectors, and full-width Input-Tokens (bottom)
+and Outputs/Logits (top) bars showing the prompt.
+"""
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
-import networkx as nx
 import numpy as np
 import plotly.graph_objects as go
 
 from summarization.utils import layer_index_from_node_id
-from summarization.summarize import SummarizationGraph, Supernode
+from summarization.summarize import SummaryGraph, Supernode
+
+# Beige card fill (paper palette) with a thin kind-colored border accent.
+_KIND_STYLE = {
+    "emb": ("#EDE9DD", "#4CAF50"),
+    "logit": ("#EDE9DD", "#FF9800"),
+    "middle": ("#EDE9DD", "#5B6B7B"),
+}
+_CARD_W = 0.92
+_CARD_H = 0.58
+_BAR_H = 0.52
 
 
 def _sn_kind(sn_name: str, node_by_name: dict[str, Supernode]) -> str:
@@ -75,25 +91,29 @@ def _sn_label(sn: str, members: list[str], attr: dict[str, dict[str, Any]] | Non
     return sn
 
 
-def _layered_layout(
-    sn_names: list[str],
-    final_supernodes: dict[str, list[str]],
-    attr: dict[str, dict[str, Any]] | None,
-) -> dict[str, tuple[float, float]]:
-    if not sn_names:
-        return {}
-    grouped: dict[int, list[tuple[str, float]]] = {}
-    for sn in sn_names:
-        layer, ctx_mean = _layer_and_ctx_for_supernode(sn, final_supernodes.get(sn, []), attr)
-        grouped.setdefault(layer, []).append((sn, ctx_mean))
-    ordered_layers = sorted(grouped.keys())
-    layer_index = {layer: idx for idx, layer in enumerate(ordered_layers)}
-    pos: dict[str, tuple[float, float]] = {}
-    for layer in ordered_layers:
-        items = sorted(grouped[layer], key=lambda p: (p[1], p[0]))
-        for x_idx, (sn, _) in enumerate(items):
-            pos[sn] = (float(x_idx), float(layer_index[layer]))
-    return pos
+def _wrap_label(text: str, width: int = 14, max_lines: int = 4) -> str:
+    """Hard-wrap a label with <br> (Plotly annotations don't auto-wrap)."""
+    words = str(text).split()
+    lines: list[str] = []
+    cur = ""
+    for w in words:
+        if cur and len(cur) + 1 + len(w) > width:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = f"{cur} {w}".strip()
+    if cur:
+        lines.append(cur)
+    if len(lines) > max_lines:
+        lines = lines[: max_lines - 1] + [lines[max_lines - 1] + "…"]
+    return "<br>".join(lines)
+
+
+def _clean_token(tok: str) -> str:
+    """Make a raw tokenizer token printable (strip subword markers, show spaces)."""
+    cleaned = tok.replace("Ġ", " ").replace("▁", " ").replace("\n", "\\n")
+    cleaned = cleaned.strip()
+    return cleaned if cleaned else "·"
 
 
 def _edge_style(weight: float, max_abs_w: float) -> tuple[float, str]:
@@ -107,20 +127,178 @@ def _edge_style(weight: float, max_abs_w: float) -> tuple[float, str]:
     return width, color
 
 
+def _rounded_rect_path(x0: float, y0: float, x1: float, y1: float, rx: float, ry: float) -> str:
+    """SVG path string for a rounded rectangle (y0 < y1). Quadratic corners."""
+    return (
+        f"M {x0 + rx},{y0} L {x1 - rx},{y0} Q {x1},{y0} {x1},{y0 + ry} "
+        f"L {x1},{y1 - ry} Q {x1},{y1} {x1 - rx},{y1} "
+        f"L {x0 + rx},{y1} Q {x0},{y1} {x0},{y1 - ry} "
+        f"L {x0},{y0 + ry} Q {x0},{y0} {x0 + rx},{y0} Z"
+    )
+
+
+def _add_card(
+    fig: go.Figure,
+    cx: float,
+    cy: float,
+    w: float,
+    h: float,
+    fill: str,
+    line_color: str,
+    stacked: bool,
+) -> None:
+    rx, ry = 0.10, 0.10
+    x0, x1 = cx - w / 2, cx + w / 2
+    y0, y1 = cy - h / 2, cy + h / 2
+    if stacked:
+        # Two offset rects behind (down-right) for the stacked-paper effect.
+        for off in (0.10, 0.05):
+            fig.add_shape(
+                type="path",
+                path=_rounded_rect_path(x0 + off, y0 - off, x1 + off, y1 - off, rx, ry),
+                fillcolor="#DCD6C4",
+                line=dict(color=line_color, width=1),
+            )
+    fig.add_shape(
+        type="path",
+        path=_rounded_rect_path(x0, y0, x1, y1, rx, ry),
+        fillcolor=fill,
+        line=dict(color=line_color, width=1.6),
+    )
+
+
+def _supernode_layout(
+    sn_names: list[str],
+    mapping: dict[str, list[str]],
+    attr: dict[str, dict[str, Any]] | None,
+) -> tuple[dict[str, tuple[float, float]], int]:
+    """x = token position (ctx mean); y = layer rank (row 0 reserved for token bar)."""
+    rows: dict[int, list[tuple[str, float]]] = {}
+    for sn in sn_names:
+        layer, ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr)
+        rows.setdefault(layer, []).append((sn, ctx_mean))
+    ordered_layers = sorted(rows)
+    layer_y = {layer: idx + 1 for idx, layer in enumerate(ordered_layers)}
+
+    pos: dict[str, tuple[float, float]] = {}
+    min_gap = 1.0
+    for layer in ordered_layers:
+        items = sorted(rows[layer], key=lambda p: (p[1], p[0]))
+        last_x: float | None = None
+        for sn, ctx in items:
+            x = float(ctx)
+            if last_x is not None and x - last_x < min_gap:
+                x = last_x + min_gap
+            last_x = x
+            pos[sn] = (x, float(layer_y[layer]))
+    top_y = len(ordered_layers) + 1
+    return pos, top_y
+
+
+def _token_bar(
+    fig: go.Figure,
+    prompt_tokens: list[str],
+    emb_ctx: set[int],
+    y: float,
+) -> None:
+    cellw, cellh = 0.9, _BAR_H
+    for i, tok in enumerate(prompt_tokens):
+        highlight = i in emb_ctx
+        fill = "#D8D2BF" if highlight else "#F4F2EB"
+        x0, x1 = i - cellw / 2, i + cellw / 2
+        fig.add_shape(
+            type="path",
+            path=_rounded_rect_path(x0, y - cellh / 2, x1, y + cellh / 2, 0.06, 0.08),
+            fillcolor=fill,
+            line=dict(color="#B9B29A", width=1),
+        )
+        fig.add_annotation(
+            x=i,
+            y=y,
+            text=_clean_token(tok),
+            showarrow=False,
+            font=dict(size=9, color="#333"),
+        )
+    fig.add_annotation(
+        xref="paper",
+        x=0.0,
+        xanchor="left",
+        yref="y",
+        y=y,
+        text="<b>Input Tokens →</b>",
+        showarrow=False,
+        font=dict(size=11, color="#C2570C"),
+    )
+
+
+def _output_bar(
+    fig: go.Figure,
+    prompt_tokens: list[str],
+    prompt: str | None,
+    out_label: str,
+    y: float,
+) -> None:
+    n = len(prompt_tokens)
+    cellh = _BAR_H
+    text = (prompt or "".join(_clean_token(t) for t in prompt_tokens)).strip()
+    if len(text) > 70:
+        text = text[:67] + "…"
+    # Wide prompt bar.
+    fig.add_shape(
+        type="path",
+        path=_rounded_rect_path(-0.5, y - cellh / 2, n - 1 + 0.5, y + cellh / 2, 0.06, 0.08),
+        fillcolor="#F4F2EB",
+        line=dict(color="#B9B29A", width=1),
+    )
+    fig.add_annotation(
+        x=-0.4,
+        xanchor="left",
+        y=y,
+        text=text,
+        showarrow=False,
+        font=dict(size=10, color="#333"),
+    )
+    # Highlighted predicted-token cell at the right.
+    if out_label:
+        fig.add_shape(
+            type="path",
+            path=_rounded_rect_path(n - 0.5, y - cellh / 2, n + 0.5, y + cellh / 2, 0.06, 0.08),
+            fillcolor="#D8D2BF",
+            line=dict(color="#B9B29A", width=1),
+        )
+        fig.add_annotation(
+            x=n, y=y, text=_clean_token(out_label), showarrow=False, font=dict(size=10, color="#333")
+        )
+    fig.add_annotation(
+        xref="paper",
+        x=0.0,
+        xanchor="left",
+        yref="y",
+        y=y,
+        text="<b>Outputs / Logits →</b>",
+        showarrow=False,
+        font=dict(size=11, color="#C2570C"),
+    )
+
+
 def supernode_graph_figure(
-    sng: SummarizationGraph | dict[str, Any],
+    sng: SummaryGraph | dict[str, Any],
     final_supernodes: dict[str, list[str]] | None = None,
     attr: dict[str, dict[str, Any]] | None = None,
     title: str = "Cluster graph (supernodes)",
     seed: int = 42,
+    prompt_tokens: list[str] | None = None,
+    prompt: str | None = None,
 ) -> go.Figure:
     """
-    Build an interactive Plotly figure: supernodes as markers, directed edges as arrows.
+    Build an interactive Plotly figure in the Anthropic attribution-graph style:
+    supernodes as rounded cards, directed edges as curved green/red arrows, and
+    (when ``prompt_tokens`` is given) Input-Tokens / Outputs-Logits prompt bars.
 
-    `sng` may be a `SummarizationGraph` instance or the legacy dict.
+    `sng` may be a `SummaryGraph` instance or the legacy dict.
     """
     # Duck-typing rather than isinstance so this survives Streamlit hot-reload,
-    # which re-imports SummarizationGraph and breaks isinstance on session-state objects.
+    # which re-imports SummaryGraph and breaks isinstance on session-state objects.
     if hasattr(sng, "sn_names") and hasattr(sng, "adj_matrix"):
         sn_names = sng.sn_names
         sn_adj = np.asarray(sng.adj_matrix, dtype=np.float64)
@@ -134,103 +312,178 @@ def supernode_graph_figure(
         mapping = final_supernodes
         node_by_name = {}
 
-    g = nx.DiGraph()
+    pos, top_y = _supernode_layout(sn_names, mapping, attr)
     k = len(sn_names)
+
+    # Per-card geometry, colors, kinds.
+    geom: dict[str, tuple[float, float, float, float]] = {}  # sn -> (cx, cy, w, h)
+    kinds: dict[str, str] = {}
+    emb_ctx: set[int] = set()
+    logit_labels: list[str] = []
     for sn in sn_names:
-        g.add_node(sn)
-    for i in range(k):
-        for j in range(k):
-            if i == j:
-                continue
-            w = float(sn_adj[i, j])
-            if w != 0.0:
-                g.add_edge(sn_names[i], sn_names[j], weight=w)
-
-    pos = _layered_layout(sn_names, mapping, attr)
-
-    node_x = [pos[sn][0] for sn in sn_names if sn in pos]
-    node_y = [pos[sn][1] for sn in sn_names if sn in pos]
-    names_in_pos = [sn for sn in sn_names if sn in pos]
-
-    colors: list[str] = []
-    for sn in names_in_pos:
+        if sn not in pos:
+            continue
+        cx, cy = pos[sn]
+        members = mapping.get(sn, [])
+        m = max(len(members), 1)
+        grow = min(0.18, 0.03 * (m - 1))
+        geom[sn] = (cx, cy, _CARD_W + grow, _CARD_H + grow)
         kind = _sn_kind(sn, node_by_name)
+        kinds[sn] = kind
         if kind == "emb":
-            colors.append("#4CAF50")
+            emb_ctx.add(int(round(cx)))
         elif kind == "logit":
-            colors.append("#FF9800")
-        else:
-            colors.append("#2196F3")
-
-    sizes: list[float] = []
-    for sn in names_in_pos:
-        m = len(mapping.get(sn, []))
-        sizes.append(18 + min(32, 4 * max(m, 1)))
-
-    labels = [_sn_label(sn, mapping.get(sn, []), attr) for sn in names_in_pos]
-    hover = [_sn_title(sn, mapping.get(sn, []), attr) for sn in names_in_pos]
-
-    for i in range(k):
-        for j in range(k):
-            if i == j:
-                continue
-            w = float(sn_adj[i, j])
-            if w == 0.0:
-                continue
-            u, v = sn_names[i], sn_names[j]
-            if u not in pos or v not in pos:
-                continue
-            x0, y0 = pos[u]
-            x1, y1 = pos[v]
-            g.add_edge(u, v, weight=w)
+            logit_labels.append(_sn_label(sn, members, attr))
 
     fig = go.Figure()
 
-    max_abs_w = max((abs(float(data["weight"])) for _, _, data in g.edges(data=True)), default=1.0)
-    for u, v, data in g.edges(data=True):
-        x0, y0 = pos[u]
-        x1, y1 = pos[v]
-        w = float(data["weight"])
-        width, color = _edge_style(w, max_abs_w)
-        fig.add_trace(
-            go.Scatter(
-                x=[x0, x1],
-                y=[y0, y1],
-                mode="lines",
-                line=dict(width=width, color=color),
-                hovertemplate=f"{u} -> {v}<br>weight={w:.4f}<extra></extra>",
-                showlegend=False,
+    # --- Curved edges (drawn first so cards sit on top) ---
+    max_abs_w = float(np.max(np.abs(sn_adj))) if sn_adj.size else 1.0
+    for i in range(k):
+        for j in range(k):
+            if i == j:
+                continue
+            w = float(sn_adj[i, j])  # source j -> target i
+            if w == 0.0:
+                continue
+            u, v = sn_names[j], sn_names[i]
+            if u not in geom or v not in geom:
+                continue
+            uc, vc = geom[u], geom[v]
+            xs, ys = uc[0], uc[1] + uc[3] / 2  # source top-center
+            xt, yt = vc[0], vc[1] - vc[3] / 2  # target bottom-center
+            dx, dy = xt - xs, yt - ys
+            length = math.hypot(dx, dy) or 1.0
+            px, py = -dy / length, dx / length  # perpendicular
+            bow = 0.18 * length
+            cxm, cym = (xs + xt) / 2 + px * bow, (ys + yt) / 2 + py * bow
+            width, color = _edge_style(w, max_abs_w)
+            fig.add_trace(
+                go.Scatter(
+                    x=[xs, cxm, xt],
+                    y=[ys, cym, yt],
+                    mode="lines",
+                    line=dict(width=width, color=color, shape="spline"),
+                    hovertemplate=f"{u} -> {v}<br>weight={w:.4f}<extra></extra>",
+                    showlegend=False,
+                )
             )
-        )
+            # Arrowhead at the target end, tangent to the incoming curve.
+            ax = xt + (cxm - xt) * 0.18
+            ay = yt + (cym - yt) * 0.18
+            fig.add_annotation(
+                x=xt,
+                y=yt,
+                ax=ax,
+                ay=ay,
+                xref="x",
+                yref="y",
+                axref="x",
+                ayref="y",
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1.0,
+                arrowwidth=max(1.0, width * 0.6),
+                arrowcolor=color,
+                text="",
+            )
 
-    marker_kwargs: dict[str, Any] = dict(
-        size=sizes,
-        color=colors,
-        line=dict(width=1, color="#333"),
-    )
+    # --- Cards + labels ---
+    hover_x: list[float] = []
+    hover_y: list[float] = []
+    hover_text: list[str] = []
+    for sn in sn_names:
+        if sn not in geom:
+            continue
+        cx, cy, w, h = geom[sn]
+        members = mapping.get(sn, [])
+        fill, line_color = _KIND_STYLE.get(kinds[sn], _KIND_STYLE["middle"])
+        _add_card(fig, cx, cy, w, h, fill, line_color, stacked=len(members) > 1)
+        fig.add_annotation(
+            x=cx,
+            y=cy,
+            text=_wrap_label(_sn_label(sn, members, attr)),
+            showarrow=False,
+            font=dict(size=9, color="#1a1a1a"),
+            align="center",
+        )
+        hover_x.append(cx)
+        hover_y.append(cy)
+        hover_text.append(_sn_title(sn, members, attr))
+
+    # Invisible markers carry the rich hover (composite members).
     fig.add_trace(
         go.Scatter(
-            x=node_x,
-            y=node_y,
-            mode="markers+text",
-            text=labels,
-            textposition="middle center",
-            textfont=dict(size=10, color="black"),
-            marker=marker_kwargs,
-            hovertext=hover,
+            x=hover_x,
+            y=hover_y,
+            mode="markers",
+            marker=dict(size=18, color="rgba(0,0,0,0)"),
+            hovertext=hover_text,
             hoverinfo="text",
-            name="Supernodes",
+            showlegend=False,
         )
     )
 
+    # --- Prompt bars + input/output arrows ---
+    if prompt_tokens:
+        _token_bar(fig, prompt_tokens, emb_ctx, y=0.0)
+        out_label = logit_labels[0] if logit_labels else ""
+        _output_bar(fig, prompt_tokens, prompt, out_label, y=float(top_y))
+        # Token cell -> embedding card.
+        for sn, kind in kinds.items():
+            if kind != "emb":
+                continue
+            cx, cy, _w, h = geom[sn]
+            fig.add_annotation(
+                x=cx,
+                y=cy - h / 2,
+                ax=cx,
+                ay=_BAR_H / 2,
+                xref="x",
+                yref="y",
+                axref="x",
+                ayref="y",
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=0.9,
+                arrowwidth=1.0,
+                arrowcolor="#9a9a9a",
+                text="",
+            )
+        # Logit card -> output bar.
+        for sn, kind in kinds.items():
+            if kind != "logit":
+                continue
+            cx, cy, _w, h = geom[sn]
+            fig.add_annotation(
+                x=cx,
+                y=float(top_y) - _BAR_H / 2,
+                ax=cx,
+                ay=cy + h / 2,
+                xref="x",
+                yref="y",
+                axref="x",
+                ayref="y",
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=0.9,
+                arrowwidth=1.0,
+                arrowcolor="#9a9a9a",
+                text="",
+            )
+
+    # --- Layout / ranges ---
+    n_tokens = len(prompt_tokens) if prompt_tokens else 0
+    max_card_x = max((g[0] for g in geom.values()), default=0.0)
+    x_max = max(float(n_tokens), max_card_x) + 1.5
     fig.update_layout(
         title=title,
         showlegend=False,
-        xaxis=dict(visible=False),
-        yaxis=dict(visible=False),
-        margin=dict(l=20, r=20, t=50, b=20),
+        xaxis=dict(visible=False, range=[-1.5, x_max]),
+        yaxis=dict(visible=False, range=[-0.7, top_y + 0.7]),
+        margin=dict(l=120, r=30, t=50, b=20),
         plot_bgcolor="white",
-        height=700,
+        paper_bgcolor="white",
+        height=760,
     )
-    fig.update_yaxes(autorange=True)
     return fig

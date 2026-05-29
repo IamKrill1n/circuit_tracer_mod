@@ -8,7 +8,7 @@ import torch
 from sklearn.metrics import silhouette_score
 
 from summarization.prune import PruneGraph
-from summarization.summarize import Supernode, SummarizationGraph
+from summarization.summarize import Supernode, SummaryGraph
 from summarization.utils import node_is_fixed, node_is_logit
 
 
@@ -18,12 +18,13 @@ from summarization.utils import node_is_fixed, node_is_logit
 
 
 def compute_L_atom(role_vectors_middle: np.ndarray, labels: np.ndarray) -> float:
-    """Atomicity loss = (1 - mean_silhouette) / 2 over middle features, paper Eq. (Latom).
+    """Atomicity loss = (1 - mean_silhouette) / 2 over middle features (reported metric).
 
-    Uses rectified-cosine distance d(u, v) = 1 - max(0, cos(r(u), r(v))) on role
-    vectors. Per the paper convention, s(u) = -1 for singleton-cluster members
-    (and unassigned middle features, label == -1), maximally penalising
-    unconsolidated nodes.
+    Uses *signed*-cosine distance d(u, v) = (1 - cos(r(u), r(v))) / 2 on role
+    vectors, so antagonistic features (negative cosine) sit maximally far apart —
+    matching the signed cosine the correlation-clustering objective optimises. Per
+    convention, s(u) = -1 for singleton-cluster members (and unassigned middle
+    features, label == -1), maximally penalising unconsolidated nodes.
     """
     n = role_vectors_middle.shape[0] if role_vectors_middle.size else 0
     if n == 0 or labels.size == 0:
@@ -33,7 +34,7 @@ def compute_L_atom(role_vectors_middle: np.ndarray, labels: np.ndarray) -> float
     safe_norms = np.where(norms > 1e-12, norms, 1.0)
     unit = role_vectors_middle / safe_norms
     cos = np.clip(unit @ unit.T, -1.0, 1.0)
-    dist = 1.0 - np.maximum(0.0, cos)  # rectified-cosine distance, paper's cos_+
+    dist = (1.0 - cos) / 2.0  # signed-cosine distance in [0, 1]
     np.fill_diagonal(dist, 0.0)
 
     unique = [int(c) for c in np.unique(labels) if c >= 0]
@@ -61,7 +62,7 @@ def compute_L_atom(role_vectors_middle: np.ndarray, labels: np.ndarray) -> float
     return float((1.0 - s.mean()) / 2.0)
 
 
-def compute_L_causal(sng: SummarizationGraph) -> float:
+def compute_L_causal(sng: SummaryGraph) -> float:
     """Causal-preservation loss = 1 - sum(|W^SN_ST|) / sum(|W_vu|), paper Eq. (Lcausal).
 
     A single ratio over the three mechanisms that remove pruned-graph edge
@@ -76,7 +77,7 @@ def compute_L_causal(sng: SummarizationGraph) -> float:
     return 1.0 - retained_mag / total_mag
 
 
-def compute_L_cplx(sng: SummarizationGraph, prune_graph: PruneGraph) -> float:
+def compute_L_cplx(sng: SummaryGraph, prune_graph: PruneGraph) -> float:
     """Complexity loss = |pi(phi)| / |V'|, paper Eq. (Lcplx).
 
     Total number of supernodes divided by the total pruned-node count.
@@ -90,7 +91,7 @@ def compute_L_cplx(sng: SummarizationGraph, prune_graph: PruneGraph) -> float:
 
 
 def _supernode_labels_for_middle(
-    sng: SummarizationGraph,
+    sng: SummaryGraph,
     middle_node_id_to_local: dict[str, int],
     n_middle: int,
 ) -> np.ndarray:
@@ -109,7 +110,7 @@ def _supernode_labels_for_middle(
 
 
 def compute_L(
-    sng: SummarizationGraph,
+    sng: SummaryGraph,
     role_vectors_middle: np.ndarray,
     middle_node_id_to_local: dict[str, int],
     prune_graph: PruneGraph,
@@ -138,6 +139,80 @@ def compute_L(
         "L_causal": float(L_causal),
         "L": float(L),
         "prune_loss": float(prune_loss),
+        "n_supernodes": int(len(sng.supernodes)),
+    }
+
+
+def compute_L_cc(
+    role_vectors_middle: np.ndarray,
+    labels: np.ndarray,
+    theta: float = 0.0,
+) -> dict[str, float]:
+    """Correlation-clustering atomicity objective on *signed* cosine of role vectors.
+
+    This is the quantity the Stage-2 ILP minimises (reported here for the
+    surrogate-vs-silhouette check). With signed cosine ``cos_ij`` and resolution
+    ``theta``, the raw objective is
+
+        L_cc = sum_{i<j, same supernode} (theta - cos_ij),
+
+    lower (more negative) is better: similar pairs (``cos > theta``) reward
+    merging, dissimilar pairs penalise it. ``L_cc_norm`` is the normalised
+    *disagreement fraction* in ``[0, 1]`` — the weight on the "wrong" side
+    (dissimilar-but-merged + similar-but-split) over the total weight
+    ``sum |cos_ij - theta|`` — so 0 is a perfect partition and 1 the worst.
+    """
+    n = role_vectors_middle.shape[0] if role_vectors_middle.size else 0
+    if n < 2 or labels.size == 0:
+        return {"L_cc": 0.0, "L_cc_norm": 0.0}
+
+    norms = np.linalg.norm(role_vectors_middle, axis=1, keepdims=True)
+    safe_norms = np.where(norms > 1e-12, norms, 1.0)
+    unit = role_vectors_middle / safe_norms
+    cos = np.clip(unit @ unit.T, -1.0, 1.0)
+
+    iu, ju = np.triu_indices(n, k=1)
+    w = cos[iu, ju] - theta  # signed merge weight per pair
+    same = (labels[iu] == labels[ju]) & (labels[iu] >= 0)
+
+    raw = float((-w[same]).sum())  # = sum_{same} (theta - cos)
+    total = float(np.abs(w).sum())
+    if total <= 1e-12:
+        return {"L_cc": raw, "L_cc_norm": 0.0}
+    # Disagreement: dissimilar pairs merged (w<0 & same) + similar pairs split (w>0 & ~same).
+    disagreement = float(np.abs(w[(w < 0) & same]).sum() + np.abs(w[(w > 0) & ~same]).sum())
+    return {"L_cc": raw, "L_cc_norm": disagreement / total}
+
+
+def compute_objectives(
+    sng: SummaryGraph,
+    role_vectors_middle: np.ndarray,
+    middle_node_id_to_local: dict[str, int],
+    prune_graph: PruneGraph,
+    *,
+    prune_loss: float = 0.0,
+    theta: float = 0.0,
+) -> dict[str, float | int]:
+    """Report bundle for the two-objective formulation (no simplex, no lambdas).
+
+    Stage 1 is summarised by ``L_prune`` (passed in, = 1 - flow completeness) and
+    Stage 2 by the correlation-clustering objective ``L_cc`` under the complexity
+    (K) and causal (``L_causal``) budgets. The silhouette ``L_atom`` and the full
+    ``L_causal`` (mechanisms i-iii) are the reported quality metrics that the ILP's
+    linear surrogates stand in for; ``L_cplx`` and ``K`` are reported, not summed.
+    """
+    n_middle = role_vectors_middle.shape[0]
+    labels = _supernode_labels_for_middle(sng, middle_node_id_to_local, n_middle)
+    cc = compute_L_cc(role_vectors_middle, labels, theta=theta)
+    n_feature_sn = sum(1 for sn in sng.supernodes if sn.type in ("features", "feature"))
+    return {
+        "L_prune": float(prune_loss),
+        "L_cc": float(cc["L_cc"]),
+        "L_cc_norm": float(cc["L_cc_norm"]),
+        "L_atom": float(compute_L_atom(role_vectors_middle, labels)),
+        "L_causal": float(compute_L_causal(sng)),
+        "L_cplx": float(compute_L_cplx(sng, prune_graph)),
+        "K": int(n_feature_sn),
         "n_supernodes": int(len(sng.supernodes)),
     }
 
@@ -494,7 +569,7 @@ def score_clusters(
       - silhouette_norm = (mean silhouette over middle nodes + 1) / 2, in [0, 1].
       - internal_independence = 1 - (internal edge mass ratio), in [0, 1].
     """
-    sng = SummarizationGraph(supernodes=supernode_rows, pruned_adj=prune_graph.pruned_adj)
+    sng = SummaryGraph(supernodes=supernode_rows, pruned_adj=prune_graph.pruned_adj)
     return _cluster_metrics_from_parts(
         supernode_rows,
         prune_graph,
@@ -505,12 +580,12 @@ def score_clusters(
 
 
 def score_summarization_graph(
-    sng: SummarizationGraph,
+    sng: SummaryGraph,
     prune_graph: PruneGraph,
     similarity: Any,
 ) -> dict[str, Any]:
     """
-    Score an existing ``SummarizationGraph`` using the same metrics as ``score_clusters``.
+    Score an existing ``SummaryGraph`` using the same metrics as ``score_clusters``.
 
     Use this when the supernode graph is already built (e.g. for evaluation pipelines).
     """

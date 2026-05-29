@@ -14,7 +14,7 @@ from summarization.scoring import _cosine_similarity, _middle_indices, compute_L
 from summarization.summarize import (
     Node,
     Supernode,
-    SummarizationGraph,
+    SummaryGraph,
     cluster_kind_to_supernode_type,
     node_from_prune_graph,
 )
@@ -265,7 +265,7 @@ def cluster_graph_spectral(
         List of supernodes where each supernode is a list of node ids.
         Embedding/logit nodes are returned as singleton supernodes.
     """
-    del enforce_dag  # legacy: π in SummarizationGraph is always on; partition is preserved
+    del enforce_dag  # legacy: π in SummaryGraph is always on; partition is preserved
     logger.info("Starting cluster_graph_spectral (target_k=%d, max_layer_span=%s)", target_k, max_layer_span)
     kept_ids = prune_graph.node_ids
     nodes_by_id = _nodes_by_id(prune_graph)
@@ -522,7 +522,7 @@ def clusters_to_supernodes(
 ) -> list[Supernode]:
     """Convert `cluster_graph_spectral` member lists into named `Supernode` rows (middle + emb + logit).
 
-    The legacy ``enforce_dag`` parameter is ignored — π in ``SummarizationGraph`` is
+    The legacy ``enforce_dag`` parameter is ignored — π in ``SummaryGraph`` is
     always on and operates at the edge level, so the clusterer's partition is
     preserved exactly as given.
     """
@@ -685,7 +685,7 @@ def find_best_k(
             n_init=n_init,
         )
         rows = clusters_to_supernodes(prune_graph, supernodes)
-        sng = SummarizationGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
+        sng = SummaryGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
         sc: dict[str, Any] = dict(compute_L(
             sng,
             role_vectors_middle,
@@ -723,7 +723,7 @@ def find_best_k_for_clusterer(
         fallback_k = max(0, n_middle)
         clusters = clusterer(fallback_k)
         rows = clusters_to_supernodes(prune_graph, clusters)
-        sng = SummarizationGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
+        sng = SummaryGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
         result: dict[str, Any] = dict(compute_L(
             sng,
             role_vectors_middle,
@@ -745,7 +745,7 @@ def find_best_k_for_clusterer(
     for target_k in range(k_min, k_max + 1):
         clusters = clusterer(target_k)
         rows = clusters_to_supernodes(prune_graph, clusters)
-        sng = SummarizationGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
+        sng = SummaryGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
         result = dict(compute_L(
             sng,
             role_vectors_middle,
@@ -780,19 +780,20 @@ def cluster(
 
     ``num_clusters="auto"`` picks k by minimizing the closed-form L objective
     (``find_best_k`` for spectral, ``find_best_k_for_clusterer`` for agglomerative);
-    an int clusters at exactly that k. ``method="ilp"`` chooses K endogenously by
-    minimising the linearised ``L = lam_cplx L_cplx + lam_atom L_atom + lam_causal L_causal``
-    objective and ignores ``num_clusters``.
+    an int clusters at exactly that k. ``method="ilp"`` solves the exact
+    correlation-clustering objective (signed cosine, resolution ``theta=0``) with K
+    capped at ``max_sn``; it ignores ``num_clusters`` and ``lambdas``. For the causal
+    epsilon-constraint and theta/eps sweeps, call ``cluster_graph_ilp`` directly.
     """
     if method == "ilp":
-        # K is endogenous (driven by lambdas), so skip the k-resolution path.
         from summarization.ilp_cluster import cluster_graph_ilp  # local: avoids import cycle
 
         clusters = cluster_graph_ilp(
             prune_graph,
-            lambdas=lambdas,
-            max_layer_span=max_layer_span,
+            theta=0.0,
+            eps_causal=None,
             max_sn=max_sn,
+            max_layer_span=max_layer_span,
             time_limit=ilp_time_limit,
         )
         return clusters_to_supernodes(prune_graph, clusters)

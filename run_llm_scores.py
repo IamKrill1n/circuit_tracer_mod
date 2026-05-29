@@ -53,7 +53,7 @@ def main() -> None:
     # Lazy imports so arg parsing is fast
     from summarization.prune import load_prune_graph
     from summarization.cluster import cluster_graph_spectral, clusters_to_supernodes
-    from summarization.supernode_graph import SummarizationGraph
+    from summarization.summarize import SummaryGraph
     from summarization.group_llm import label_summarization_graph, score_summarization_graph_coherence
 
     graphs_dir = Path(args.graphs_dir)
@@ -106,7 +106,7 @@ def main() -> None:
                 normalize_weights=args.normalize_weights,
             )
             supernodes = clusters_to_supernodes(prune_graph, clusters)
-            sng = SummarizationGraph(supernodes=supernodes, pruned_adj=prune_graph.pruned_adj)
+            sng = SummaryGraph(supernodes=supernodes, pruned_adj=prune_graph.pruned_adj)
 
             # Use pre-generated labels if available, otherwise generate new ones
             if key in labels and labels[key]:

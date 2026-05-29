@@ -13,7 +13,7 @@ Two experiments share setup:
                   Sweep alpha; record whether top-1 flips toward target_B.
 
 PruneGraphs are pre-cached under eval_outputs/analogies/.../node_0.02/. Spectral
-clustering (mean_method="geo") is run on top to produce the SummarizationGraph.
+clustering (mean_method="geo") is run on top to produce the SummaryGraph.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ import torch.nn.functional as F
 from circuit_tracer import ReplacementModel
 from summarization.cluster import cluster_graph_spectral, clusters_to_supernodes, find_best_k
 from summarization.prune import PruneGraph, load_prune_graph
-from summarization.summarize import Supernode, SummarizationGraph
+from summarization.summarize import Supernode, SummaryGraph
 
 logger = logging.getLogger(__name__)
 
@@ -61,14 +61,14 @@ def load_dataset(analogies_file: Path) -> list[dict]:
     return rows
 
 
-def build_sng(prune_graph: PruneGraph, target_k: int | None) -> SummarizationGraph:
+def build_sng(prune_graph: PruneGraph, target_k: int | None) -> SummaryGraph:
     """Run spectral-geo clustering on the pruned graph to get the SNG."""
     if target_k is None:
         # auto-k via closed-form L objective; geo to match user's selection
         target_k, _ = find_best_k(prune_graph, mean_method="geo")
     clusters = cluster_graph_spectral(prune_graph, target_k=target_k, mean_method="geo")
     rows = clusters_to_supernodes(prune_graph, clusters)
-    return SummarizationGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
+    return SummaryGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
 
 
 def get_target(prune_graph: PruneGraph) -> tuple[int, float]:

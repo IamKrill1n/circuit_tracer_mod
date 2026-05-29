@@ -4,19 +4,19 @@ from typing import Any
 
 import numpy as np
 
-from summarization.summarize import SummarizationGraph
+from summarization.summarize import SummaryGraph
 
 
 def _unwrap_sng(
-    sng: SummarizationGraph | dict[str, Any],
+    sng: SummaryGraph | dict[str, Any],
 ) -> tuple[list[str], np.ndarray, dict]:
-    if isinstance(sng, SummarizationGraph):
+    if isinstance(sng, SummaryGraph):
         return sng.sn_names, sng.adj_matrix, sng.node_by_name()
     return list(sng["sn_names"]), np.asarray(sng["sn_adj"], dtype=np.float64), {}
 
 
 def shortcut_analysis(
-    sng: SummarizationGraph | dict[str, Any],
+    sng: SummaryGraph | dict[str, Any],
     final_supernodes: dict[str, list[str]] | list[list[str]] | None = None,
     min_edge_weight: float = 1e-6,
 ) -> dict[str, Any]:

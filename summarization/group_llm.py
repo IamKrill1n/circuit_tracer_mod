@@ -12,7 +12,7 @@ from google.genai import types as genai_types
 
 from api import get_feature
 from config import get_env
-from summarization.summarize import Supernode, SummarizationGraph
+from summarization.summarize import Supernode, SummaryGraph
 
 
 # ---------------------------------------------------------------------------
@@ -271,26 +271,26 @@ def generate_supernode_name(
 
 
 # ---------------------------------------------------------------------------
-# Public API – Sub-task 2: batch-label all supernodes in a SummarizationGraph
+# Public API – Sub-task 2: batch-label all supernodes in a SummaryGraph
 # ---------------------------------------------------------------------------
 
 
 def label_summarization_graph(
-    sng: SummarizationGraph,
+    sng: SummaryGraph,
     metadata: dict,
     model_name: str = "gemini-2.5-flash",
     temperature: float = 0.2,
     *,
     inplace: bool = True,
-) -> SummarizationGraph:
+) -> SummaryGraph:
     """Generate LLM names for every supernode in *sng* and return the graph.
 
     Calls :func:`generate_supernode_name` for each supernode, then updates
-    ``supernode.name`` (and, correspondingly, ``SummarizationGraph.sn_names``).
+    ``supernode.name`` (and, correspondingly, ``SummaryGraph.sn_names``).
     Embedding / logit supernodes are skipped (their names are kept as-is).
 
     Args:
-        sng: The ``SummarizationGraph`` whose supernodes will be labelled.
+        sng: The ``SummaryGraph`` whose supernodes will be labelled.
         metadata: Graph metadata dict from ``prune_graph.metadata``.
         model_name: Gemini model to use.
         temperature: Sampling temperature.
@@ -299,7 +299,7 @@ def label_summarization_graph(
 
     Returns:
         The same ``sng`` object (names updated in-place) or a new
-        ``SummarizationGraph`` with renamed supernodes when ``inplace=False``.
+        ``SummaryGraph`` with renamed supernodes when ``inplace=False``.
 
     Raises:
         ValueError: If the Gemini API key is not set.
@@ -335,7 +335,7 @@ def label_summarization_graph(
 
     if inplace:
         return sng
-    return SummarizationGraph(supernodes=new_supernodes, pruned_adj=sng.pruned_adj)
+    return SummaryGraph(supernodes=new_supernodes, pruned_adj=sng.pruned_adj)
 
 
 # ---------------------------------------------------------------------------
@@ -437,15 +437,15 @@ def score_supernode_coherence(
 
 
 def score_summarization_graph_coherence(
-    sng: SummarizationGraph,
+    sng: SummaryGraph,
     metadata: dict,
     model_name: str = "gpt-4o-mini",
     temperature: float = 0.2,
 ) -> dict[str, float]:
-    """Score all supernodes in a SummarizationGraph for coherence.
+    """Score all supernodes in a SummaryGraph for coherence.
 
     Args:
-        sng: The ``SummarizationGraph`` to score.
+        sng: The ``SummaryGraph`` to score.
         metadata: Graph metadata dict from ``prune_graph.metadata``.
         model_name: LLM model to use.
         temperature: Sampling temperature.

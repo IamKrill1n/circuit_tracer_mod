@@ -13,57 +13,72 @@ from summarization.utils import layer_index_from_node, node_is_fixed
 
 logger = logging.getLogger(__name__)
 
-# Hard cap on total MILP variables (z + y); beyond this, exact HiGHS solves are intractable.
+# Hard caps beyond which exact HiGHS solves become intractable.
 MAX_ILP_VARS = 200_000
+MAX_ILP_CONSTRAINTS = 2_000_000
 
 
 def cluster_graph_ilp(
     prune_graph: PruneGraph,
-    lambdas: tuple[float, float, float] = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
-    max_layer_span: int = 4,
+    *,
+    theta: float = 0.0,
+    eps_causal: float | None = None,
     max_sn: int | None = None,
+    max_layer_span: int = 4,
     time_limit: float = 30.0,
 ) -> list[list[str]]:
-    """Cluster a pruned graph by minimising a linearised form of the paper's L.
+    """Cluster a pruned graph by exact correlation clustering of its feature nodes.
 
-    Objective tracks ``L = lam_cplx * L_cplx + lam_atom * L_atom + lam_causal * L_causal``
-    from paper Eq. (Lsum):
-      - L_cplx (exact): K / |V'|, with K = (opened medoids) + (constant) fixed
-        singletons. Only the K term varies with z; the fixed-singleton offset is a
-        constant ignored by the MILP and recovered post-hoc by ``compute_L_cplx``.
-      - L_atom (medoid proxy): mean rectified-cosine distance from each middle
-        feature to its assigned medoid, normalised by n_middle so the term lies in
-        [0, 1]. The paper's silhouette is non-linear (min / max over neighbours)
-        and cannot enter an MILP; medoid distance is the standard k-medoids
-        surrogate and agrees with the silhouette in spirit (penalises within-
-        cluster dispersion).
-      - L_causal (intra-edge proxy): fraction of pruned edge weight that falls
-        inside supernodes, via same-cluster indicators y[i, j]. Captures
-        mechanism (i) from paper Eq. (Lcausal); the dominant-direction drop (ii)
-        and sign-cancellation (iii) depend on the post-projection summary
-        adjacency and cannot be linearised cheaply, so they are not in the MILP
-        objective — they are still scored post-hoc by ``compute_L_causal``.
+    This is the Stage-2 solver of the methodology. It minimises the
+    correlation-clustering atomicity objective on the *signed* cosine of the role
+    vectors, subject to the complexity budget (D2) and the causal preservation
+    budget (D4) as hard constraints:
 
-    ``lambdas = (lam_cplx, lam_atom, lam_causal)`` must lie on the probability
-    simplex. ``max_layer_span`` hard-bounds cluster layer width (the paper has
-    no such constraint; this is a tractability prior — set to a large value to
-    relax). ``max_sn`` is an optional hard cap on K.
+        min_phi  sum_{i<j} x_ij (theta - cos(r_i, r_j))
+        s.t.     K <= max_sn                                (D2, complexity)
+                 sum_{feature edges} x_ij |W_ij| <= eps_causal * W_total   (D4, causal)
+
+    with ``x_ij = 1`` iff middle features ``i, j`` share a supernode. The
+    objective is the symmetric over/under-merge penalty: a pair with
+    ``cos > theta`` (similar) carries a negative coefficient (merging is
+    rewarded), a pair with ``cos < theta`` (dissimilar / antagonistic) a positive
+    one (merging is penalised). Signed cosine is used directly — the negative
+    region marks antagonistic features that should repel, which also keeps this
+    objective consistent with ``L_causal``'s sign-cancellation term.
+
+    Parameters
+    ----------
+    theta:
+        Resolution threshold in ``[-1, 1]`` on the signed cosine. ``theta = 0``
+        (the default) makes the cosine sign itself the merge boundary, so no
+        threshold needs to be invented; raise it to merge more conservatively.
+    eps_causal:
+        Causal budget (D4). When set, the fraction of pruned edge weight absorbed
+        *inside* supernodes (the linear surrogate of mechanism (i) from the
+        causal-preservation loss) is constrained to ``<= eps_causal``. ``None``
+        leaves causal preservation unconstrained. Sweeping ``eps_causal`` traces
+        the 2-D Pareto front (atomicity vs. causal).
+    max_sn:
+        Complexity budget (D2): a hard cap ``K <= max_sn`` on the number of
+        feature supernodes. ``None`` leaves K endogenous (driven by ``theta``).
+    max_layer_span:
+        Tractability prior: forbid merging two features more than this many
+        layers apart. The methodology imposes no such constraint; raise it to
+        relax. Combined with transitivity this bounds every cluster's layer span.
 
     Returns the same ``list[list[str]]`` contract as ``cluster_graph_spectral``:
-    middle clusters + embedding/error/logit singletons.
+    feature clusters + embedding/error/logit singletons.
     """
-    lam_cplx, lam_atom, lam_causal = lambdas
-    if min(lam_cplx, lam_atom, lam_causal) < 0:
-        raise ValueError(f"lambdas must be non-negative, got {lambdas}")
-    if abs((lam_cplx + lam_atom + lam_causal) - 1.0) > 1e-6:
-        raise ValueError(f"lambdas must sum to 1, got {lam_cplx + lam_atom + lam_causal}")
+    if eps_causal is not None and eps_causal < 0:
+        raise ValueError(f"eps_causal must be non-negative, got {eps_causal}")
+    if max_sn is not None and max_sn < 1:
+        raise ValueError(f"max_sn must be >= 1, got {max_sn}")
 
     kept_ids = prune_graph.node_ids
     nodes_by_id = _nodes_by_id(prune_graph)
     if not kept_ids:
         return []
 
-    n_pruned = len(kept_ids)
     mid_idx = [i for i, nid in enumerate(kept_ids) if not node_is_fixed(nodes_by_id[nid])]
     middle_ids = [kept_ids[i] for i in mid_idx]
     emb_singletons, logit_singletons = _fixed_singletons(kept_ids, nodes_by_id)
@@ -74,30 +89,117 @@ def cluster_graph_ilp(
         return [[middle_ids[0]]] + emb_singletons + logit_singletons
 
     n = len(middle_ids)
-    phi = compute_phi_vectors(prune_graph).detach().cpu().numpy()  # [N, 2N]
-    sim = _cosine_similarity(phi[mid_idx])  # [n, n] cosine in [-1, 1]
-    d = 1.0 - np.clip(sim, 0.0, 1.0)  # rectified-cosine distance, paper's cos_+
+    phi = compute_phi_vectors(prune_graph).detach().cpu().numpy()  # (N, 2N)
+    cos = _cosine_similarity(phi[mid_idx])  # (n, n) signed cosine in [-1, 1]
     layers = np.array([layer_index_from_node(nodes_by_id[nid]) for nid in middle_ids])
 
-    # Allowed assignments u -> medoid m: directional upward window
-    # 0 <= layer(u) - layer(m) <= max_layer_span. Forces the medoid to sit at the
-    # lowest layer of its cluster, so each cluster spans <= L exactly.
+    # Allowed same-cluster pairs: features within max_layer_span layers of each other.
+    # A disallowed pair is structurally x_ij = 0 (cannot share a supernode).
     pairs: list[tuple[int, int]] = [
-        (u, m)
-        for u in range(n)
-        for m in range(n)
-        if 0 <= layers[u] - layers[m] <= max_layer_span
+        (i, j)
+        for i in range(n)
+        for j in range(i + 1, n)
+        if abs(int(layers[i]) - int(layers[j])) <= max_layer_span
     ]
-    col_z = {(u, m): k for k, (u, m) in enumerate(pairs)}
-    n_var_z = len(pairs)
+    col_x = {pair: k for k, pair in enumerate(pairs)}
+    n_var_x = len(pairs)
 
-    # Same-cluster indicators for the L_causal proxy. y[(i, j)] = 1 iff middle
-    # features i, j land in the same cluster; linearised via constraint (C3).
-    prune_adj = prune_graph.pruned_adj.detach().cpu().numpy()
-    W_total = float(np.abs(prune_adj).sum())
-    global_to_local: dict[int, int] = {gi: li for li, gi in enumerate(mid_idx)}
-    edge_weight: dict[tuple[int, int], float] = {}
-    if lam_causal > 0.0 and W_total > 0.0:
+    # Representative variables r_i (i is the lowest-index member of its cluster) are
+    # only needed to count K for the complexity budget; skip them when max_sn is None.
+    use_reps = max_sn is not None
+    col_r = {i: n_var_x + i for i in range(n)} if use_reps else {}
+    n_var_r = n if use_reps else 0
+    n_var = n_var_x + n_var_r
+
+    if n_var > MAX_ILP_VARS:
+        raise ValueError(
+            f"ILP too large: {n_var:,} variables for n_middle={n} "
+            f"({n_var_x} same-cluster + {n_var_r} representative), "
+            f"max_layer_span={max_layer_span}. Reduce graph size, lower "
+            "max_layer_span, or use method='spectral'/'agglomerative'."
+        )
+
+    def pkey(a: int, b: int) -> tuple[int, int]:
+        return (a, b) if a < b else (b, a)
+
+    # Objective: minimise sum_pairs x_ij (theta - cos_ij). r has zero cost.
+    c = np.zeros(n_var, dtype=np.float64)
+    for pair, k in col_x.items():
+        i, j = pair
+        c[k] = theta - float(cos[i, j])
+
+    rows: list[int] = []
+    cols: list[int] = []
+    data: list[float] = []
+    b_l: list[float] = []
+    b_u: list[float] = []
+    r = 0
+
+    def add(row: int, c_idx: int, val: float) -> None:
+        rows.append(row)
+        cols.append(c_idx)
+        data.append(val)
+
+    # Allowed partners of each node, used for both transitivity and representatives.
+    partners: list[list[int]] = [[] for _ in range(n)]
+    for (i, j) in pairs:
+        partners[i].append(j)
+        partners[j].append(i)
+    for lst in partners:
+        lst.sort()
+
+    # (T) Transitivity. Each inequality has a unique apex node a shared by its two
+    # positive pairs; enumerate over (apex, unordered partner pair). The third pair
+    # (p, q) may be disallowed, in which case its term is 0 and the constraint
+    # x_ap + x_aq <= 1 forbids the layer-span-violating transitive merge.
+    for a in range(n):
+        pa = partners[a]
+        for ii in range(len(pa)):
+            p = pa[ii]
+            x_ap = col_x[pkey(a, p)]
+            for jj in range(ii + 1, len(pa)):
+                q = pa[jj]
+                add(r, x_ap, 1.0)
+                add(r, col_x[pkey(a, q)], 1.0)
+                pq = col_x.get(pkey(p, q))
+                if pq is not None:
+                    add(r, pq, -1.0)
+                b_l.append(-np.inf)
+                b_u.append(1.0)
+                r += 1
+
+    if use_reps:
+        # (R) r_i <= 1 - x_ji for each earlier allowed partner j < i, and
+        #     r_i >= 1 - sum_{j<i} x_ji. Together: r_i = 1 iff i has no earlier
+        #     same-cluster partner, i.e. i is the lowest-index member of its cluster.
+        for i in range(n):
+            earlier = [j for j in partners[i] if j < i]
+            for j in earlier:
+                add(r, col_r[i], 1.0)
+                add(r, col_x[pkey(j, i)], 1.0)
+                b_l.append(-np.inf)
+                b_u.append(1.0)
+                r += 1
+            add(r, col_r[i], 1.0)
+            for j in earlier:
+                add(r, col_x[pkey(j, i)], 1.0)
+            b_l.append(1.0)
+            b_u.append(np.inf)
+            r += 1
+
+        # (D2) complexity budget: sum_i r_i <= max_sn.
+        for i in range(n):
+            add(r, col_r[i], 1.0)
+        b_l.append(-np.inf)
+        b_u.append(float(max_sn))
+        r += 1
+
+    # (D4) causal epsilon-constraint: absorbed feature-edge mass <= eps_causal * W_total.
+    if eps_causal is not None:
+        prune_adj = prune_graph.pruned_adj.detach().cpu().numpy()
+        W_total = float(np.abs(prune_adj).sum())
+        global_to_local = {gi: li for li, gi in enumerate(mid_idx)}
+        edge_weight: dict[tuple[int, int], float] = {}
         nz_t, nz_s = np.nonzero(prune_adj)
         for tgt_g, src_g in zip(nz_t.tolist(), nz_s.tolist()):
             if tgt_g == src_g:
@@ -106,92 +208,25 @@ def cluster_graph_ilp(
             v_l = global_to_local.get(tgt_g)
             if u_l is None or v_l is None:
                 continue
-            key = (min(u_l, v_l), max(u_l, v_l))
-            edge_weight[key] = edge_weight.get(key, 0.0) + float(abs(prune_adj[tgt_g, src_g]))
+            key = pkey(u_l, v_l)
+            if key in col_x:  # span-disallowed pairs cannot merge -> absorb nothing
+                edge_weight[key] = edge_weight.get(key, 0.0) + float(abs(prune_adj[tgt_g, src_g]))
+        if W_total > 0.0 and edge_weight:
+            for key, w in edge_weight.items():
+                add(r, col_x[key], w)
+            b_l.append(-np.inf)
+            b_u.append(eps_causal * W_total)
+            r += 1
 
-    y_keys = sorted(edge_weight.keys())
-    col_y = {key: n_var_z + k for k, key in enumerate(y_keys)}
-    n_var_y = len(y_keys)
-    n_var = n_var_z + n_var_y
-
-    if n_var > MAX_ILP_VARS:
+    if r > MAX_ILP_CONSTRAINTS:
         raise ValueError(
-            f"ILP too large: {n_var:,} variables for n_middle={n} "
-            f"({n_var_z} assignment + {n_var_y} same-cluster), "
-            f"max_layer_span={max_layer_span}. Reduce graph size, set "
-            "lam_causal=0 to skip same-cluster variables, or use "
-            "method='spectral'/'agglomerative'."
+            f"ILP too large: {r:,} constraints for n_middle={n}, "
+            f"max_layer_span={max_layer_span}. Lower max_layer_span or graph size."
         )
-
-    # Objective coefficients (each loss term is already in [0, 1]).
-    c = np.zeros(n_var, dtype=np.float64)
-    atom_scale = lam_atom / n
-    cplx_scale = lam_cplx / n_pruned
-    for k, (u, m) in enumerate(pairs):
-        c[k] = atom_scale * d[u, m]
-        if u == m:
-            c[k] += cplx_scale  # opening cost per supernode
-    if W_total > 0.0:
-        causal_scale = lam_causal / W_total
-        for key, w in edge_weight.items():
-            c[col_y[key]] = causal_scale * w
-
-    rows: list[int] = []
-    cols: list[int] = []
-    data: list[float] = []
-    b_l: list[float] = []
-    b_u: list[float] = []
-
-    def add(row: int, c_idx: int, val: float) -> None:
-        rows.append(row)
-        cols.append(c_idx)
-        data.append(val)
-
-    r = 0
-    # (C1) each u assigned to exactly one medoid: sum_m z[u, m] = 1.
-    for u in range(n):
-        for m in range(n):
-            if (u, m) in col_z:
-                add(r, col_z[(u, m)], 1.0)
-        b_l.append(1.0)
-        b_u.append(1.0)
-        r += 1
-
-    # (C2) a node may only join an open medoid: z[u, m] - z[m, m] <= 0 (u != m).
-    for (u, m) in pairs:
-        if u == m:
-            continue
-        add(r, col_z[(u, m)], 1.0)
-        add(r, col_z[(m, m)], -1.0)
-        b_l.append(-np.inf)
-        b_u.append(0.0)
-        r += 1
-
-    # (C3) same-cluster: z[i, m] + z[j, m] - y[i, j] <= 1 for each m where both
-    # (i, m) and (j, m) are allowed. With z binary this forces y[i, j] = 1 iff
-    # i, j share a medoid; y is left continuous (LP-tight at integer z).
-    for (i, j) in y_keys:
-        for m in range(n):
-            if (i, m) in col_z and (j, m) in col_z:
-                add(r, col_z[(i, m)], 1.0)
-                add(r, col_z[(j, m)], 1.0)
-                add(r, col_y[(i, j)], -1.0)
-                b_l.append(-np.inf)
-                b_u.append(1.0)
-                r += 1
-
-    # (C4) optional budget cap on opened medoids: sum_m z[m, m] <= max_sn.
-    if max_sn is not None:
-        for m in range(n):
-            add(r, col_z[(m, m)], 1.0)
-        b_l.append(-np.inf)
-        b_u.append(float(max_sn))
-        r += 1
 
     A = csr_matrix((data, (rows, cols)), shape=(r, n_var))
     constraints = LinearConstraint(A, np.array(b_l), np.array(b_u))
-    integrality = np.zeros(n_var, dtype=np.int64)
-    integrality[:n_var_z] = 1  # z binary; y continuous (LP-tight at integer z).
+    integrality = np.ones(n_var, dtype=np.int64)  # x and r are binary
     res = milp(
         c=c,
         constraints=constraints,
@@ -203,8 +238,8 @@ def cluster_graph_ilp(
     if res.x is None:
         if res.status == 2:  # 2 = infeasible
             raise ValueError(
-                f"ILP infeasible (n_middle={n}, max_layer_span={max_layer_span}, max_sn={max_sn}). "
-                "Increase max_sn or max_layer_span."
+                f"ILP infeasible (n_middle={n}, max_sn={max_sn}, eps_causal={eps_causal}, "
+                f"max_layer_span={max_layer_span}). Raise max_sn/eps_causal/max_layer_span."
             )
         raise ValueError(
             f"ILP found no solution within time_limit={time_limit}s (status={res.status}, "
@@ -213,11 +248,28 @@ def cluster_graph_ilp(
     if res.status == 1:  # 1 = time/iteration limit, but an incumbent exists
         logger.warning("ILP hit the %.1fs time limit; using the best incumbent (may be suboptimal).", time_limit)
 
-    z = res.x[:n_var_z] > 0.5
+    # Recover clusters by union-find over the same-cluster pairs set to 1.
+    parent = list(range(n))
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+
+    x_sol = res.x[:n_var_x] > 0.5
+    for (i, j), k in col_x.items():
+        if x_sol[k]:
+            union(i, j)
+
     grouped: dict[int, list[str]] = {}
-    for (u, m) in pairs:
-        if z[col_z[(u, m)]]:
-            grouped.setdefault(m, []).append(middle_ids[u])
+    for i in range(n):
+        grouped.setdefault(find(i), []).append(middle_ids[i])
     middle_clusters = list(grouped.values())
 
     return middle_clusters + emb_singletons + logit_singletons
