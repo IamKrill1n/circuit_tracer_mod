@@ -1,3 +1,7 @@
+---
+alwaysApply: true
+---
+
 # Code Style for Research Code
 
 This is a research codebase. Optimize for readability, traceability of assumptions, and fast iteration. Prioritize in this order: **readability → reproducibility → maintainability → correctness on real inputs**. Don't sacrifice the first three for exhaustive defensive programming.
