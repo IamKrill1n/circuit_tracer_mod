@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:transformer-circuits.pub)",
+      "WebFetch(domain:arxiv.org)"
+    ]
+  },
+  "defaultShell": "bash"
+}

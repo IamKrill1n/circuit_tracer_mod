@@ -12,7 +12,7 @@ from google.genai import types as genai_types
 
 from api import get_feature
 from config import get_env
-from summarization.summarize import Supernode, SummaryGraph
+from summarization.summarize import Node, Supernode, SummaryGraph
 
 
 # ---------------------------------------------------------------------------
@@ -111,11 +111,12 @@ def _fetch_feature_context(
     source_set: str,
     node_id: str,
     top_n: int = 2,
+    top_logits_n: int = 10,
 ) -> dict[str, Any] | None:
-    """Fetch clerp label and top-N activation contexts for one feature node.
+    """Fetch clerp, top-N activation contexts, and top positive logits for one feature.
 
-    Returns a dict ``{"clerp": str, "contexts": [str, ...]}`` or ``None`` on
-    failure (network error, bad status, unexpected node format).
+    Returns ``{"clerp": str, "contexts": [str, ...], "top_logits": [str, ...]}`` or
+    ``None`` on failure (network error, bad status, unexpected node format).
     """
     parts = node_id.split("_")
     if len(parts) < 2:
@@ -143,7 +144,79 @@ def _fetch_feature_context(
         marked = [f"«{t}»" if i == peak_idx else t for i, t in enumerate(tokens)]
         contexts.append("".join(marked))
 
-    return {"clerp": clerp, "contexts": contexts}
+    top_logits: list[str] = json_data.get("pos_str", [])[:top_logits_n]  # pos_str = top positive logits
+
+    return {"clerp": clerp, "contexts": contexts, "top_logits": top_logits}
+
+
+def _build_feature_block(
+    node: Node,
+    info: dict[str, Any] | None,
+    prompt_tokens: list[str] | None = None,
+) -> str:
+    """One feature's description block. Pass *prompt_tokens* to add the Level-B line."""
+    clerp = (info["clerp"] if info and info["clerp"] else None) or node.clerp or node.node_id
+    lines = [f'Label: "{clerp}"']
+
+    top_logits = info["top_logits"] if info else []
+    if top_logits:
+        lines.append(f"  Top promoted tokens: {', '.join(top_logits)}")
+
+    contexts: list[str] = info["contexts"] if info else []
+    for i, ctx in enumerate(contexts, 1):
+        lines.append(f"  Context {i}: {ctx}")
+
+    # Level B (naming only): the token this feature fires on in the actual prompt.
+    if prompt_tokens is not None:
+        cidx = int(node.ctx_idx)
+        if 0 <= cidx < len(prompt_tokens):  # same guard as classify.py
+            lines.append(f"  Fires in this prompt on: «{prompt_tokens[cidx]}»")
+
+    return "\n".join(lines)
+
+
+def _build_prompt_context(metadata: dict, target_token: str | None) -> str:
+    """Level-A header: the prompt that produced this circuit + the predicted token."""
+    prompt = str(metadata.get("prompt", "") or "")
+    lines: list[str] = []
+    if prompt:
+        lines.append(f'These features were active while a language model processed this prompt:\n"{prompt}"')
+    if target_token:
+        lines.append(f'The model\'s predicted next token is "{target_token}".')
+    return ("\n".join(lines) + "\n\n") if lines else ""
+
+
+def _extract_target_token(sng: SummaryGraph) -> str | None:
+    """Pull the predicted token from the logit supernode's target node clerp."""
+    for sn in sng.supernodes:
+        if sn.type != "logit":
+            continue
+        for node in sn.features:
+            if node.is_target_logit:
+                m = re.search(r'Output "(.*?)"', node.clerp)  # clerp is 'Output "X" (p=...)'
+                if m:
+                    return m.group(1)
+    return None
+
+
+def _parse_label_response(text: str) -> tuple[str, str]:
+    """Parse the naming JSON into (name, role); fall back to (raw_text, "")."""
+    raw = text.strip()
+    fence = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw, re.DOTALL)
+    if fence:
+        raw = fence.group(1).strip()
+    obj = re.search(r"\{.*\}", raw, re.DOTALL)
+    if obj:
+        raw = obj.group(0)
+    try:
+        data = json.loads(raw)
+        name = str(data.get("name", "")).strip()
+        role = str(data.get("role", "")).strip()
+        if name:
+            return name, role
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    return text.strip(), ""
 
 
 # ---------------------------------------------------------------------------
@@ -151,19 +224,30 @@ def _fetch_feature_context(
 # ---------------------------------------------------------------------------
 
 _LABEL_SYSTEM_PROMPT = """\
-You are an AI interpretability researcher. You will be given a group (cluster) \
-of SAE features from a language model. Each feature is described by:
+You are an AI interpretability researcher. You will be given the prompt a language \
+model processed, the token it predicted next, and a group (cluster) of SAE features \
+that were active during that computation. Each feature is described by:
 - A short auto-interpretation label (clerp)
-- Up to 2 example activation contexts, where the peak-activating token is \
-wrapped in «»
+- Its top promoted output tokens
+- Up to 2 example activation contexts, where the peak-activating token is wrapped in «»
+- The token it fires on in the given prompt
 
-Your task: output a single short descriptive name (3–7 words) that captures \
-the shared semantic theme of the cluster.
+Do the following, in order:
+1. Classify each feature as exactly one of:
+   - "Input": detects specific input tokens or low-level surface patterns (label matches \
+its activation / prompt token).
+   - "Abstract": a high-level concept, topic, or reasoning relationship (conceptual label, \
+diverse tokens).
+   - "Output": promotes specific next tokens (label starts with "say", or the top promoted \
+tokens are concentrated on one token).
+2. Decide the cluster's overall role — the dominant type among its features — using the \
+prompt and predicted token as context.
+3. Produce a short descriptive name (3–7 words) capturing the cluster's shared role in this \
+computation. If the features share no clear theme, use "Mixed features".
 
-Rules:
-1. Output the name only — no explanation, no punctuation at the end.
-2. Be specific and concise.
-3. If features share no clear theme, output "Mixed features".
+Output strict JSON only — no markdown, no extra text:
+{"feature_types": ["Input"|"Abstract"|"Output", ...one per feature in the order given], \
+"role": "Input"|"Abstract"|"Output", "name": "<short name>"}
 """
 
 
@@ -175,9 +259,11 @@ _SCORE_SYSTEM_PROMPT = """\
 You are an AI interpretability researcher evaluating SAE feature coherence.
 
 You will be given:
+- The prompt the model processed and its predicted next token (as context)
 - A supernode (cluster) name
 - A single feature from that cluster, described by:
   - A short auto-interpretation label (clerp)
+  - Its top promoted output tokens
   - Up to 2 example activation contexts, where the peak-activating token is wrapped in «»
 
 Your task: Decide if this feature belongs in a cluster with the given name.
@@ -200,31 +286,39 @@ def generate_supernode_name(
     metadata: dict,
     model_name: str = "gemini-2.5-flash",
     temperature: float = 0.2,
-) -> str:
-    """Generate a short descriptive name for a supernode using a Gemini LLM.
+    target_token: str | None = None,
+) -> tuple[str, str]:
+    """Generate a ``(name, role)`` for a supernode using an LLM.
 
-    For each feature node in *supernode*, fetches the top 2 activation
-    contexts from Neuronpedia, then asks Gemini to produce a cluster label.
+    For each feature node, fetches its Neuronpedia clerp / top activation contexts /
+    top positive logits, plus the token it fires on in the graph's prompt (Level B),
+    then asks the LLM to classify each feature and return a cluster name + overall role.
     Embedding and logit nodes are skipped.
 
     Args:
         supernode: The ``Supernode`` to label.
-        metadata: Graph metadata dict (must contain ``"scan"`` and
-            ``info.neuronpedia_source_set``).
-        model_name: Gemini model to use.
+        metadata: Graph metadata dict (must contain ``"scan"`` /
+            ``info.neuronpedia_source_set``, and ``"prompt"`` / ``"prompt_tokens"``).
+        model_name: LLM model to use.
         temperature: Sampling temperature.
+        target_token: The model's predicted next token, for prompt context (Level A).
 
     Returns:
-        A short name string for the supernode.
+        ``(name, role)`` where role is "Input" | "Abstract" | "Output" (or "" if
+        the response could not be parsed as JSON).
 
     Raises:
         ValueError: If the Gemini API key is not set.
     """
+    # Only the Gemini path needs a Gemini key; the OpenAI path validates
+    # OPENAI_API_KEY itself inside _openai_generate_with_retry.
+    is_gemini = not model_name.startswith(("gpt-", "o1", "o3", "o4"))
     api_key = _get_gemini_api_key()
-    if not api_key:
+    if is_gemini and not api_key:
         raise ValueError("Set GEMINI_API_KEY (or GENAI_API_KEY) in environment")
 
     model_id, source_set = _parse_metadata(metadata)
+    prompt_tokens = metadata.get("prompt_tokens", [])
 
     feature_blocks: list[str] = []
     for node in supernode.features:
@@ -233,29 +327,24 @@ def generate_supernode_name(
             continue
 
         info = _fetch_feature_context(model_id, source_set, node.node_id, top_n=2)
-        clerp = (info["clerp"] if info and info["clerp"] else None) or node.clerp or node.node_id
-        contexts: list[str] = info["contexts"] if info else []
-
-        lines = [f'Label: "{clerp}"']
-        for i, ctx in enumerate(contexts, 1):
-            lines.append(f"  Context {i}: {ctx}")
-        feature_blocks.append("\n".join(lines))
+        feature_blocks.append(_build_feature_block(node, info, prompt_tokens))
 
     if not feature_blocks:
-        return supernode.name or "Unnamed cluster"
+        return supernode.name or "Unnamed cluster", supernode.role
 
-    user_message = "Features in this cluster:\n\n" + "\n\n".join(
+    user_message = _build_prompt_context(metadata, target_token) + "Features in this cluster:\n\n" + "\n\n".join(
         f"[Feature {i + 1}]\n{block}" for i, block in enumerate(feature_blocks)
     )
 
     # Route to OpenAI or Gemini based on model name prefix
     if model_name.startswith(("gpt-", "o1", "o3", "o4")):
-        return _openai_generate_with_retry(
+        text = _openai_generate_with_retry(
             model=model_name,
             system_prompt=_LABEL_SYSTEM_PROMPT,
             user_message=user_message,
             temperature=temperature,
         )
+        return _parse_label_response(text)
 
     client = genai.Client(api_key=api_key)
     response = _gemini_generate_with_retry(
@@ -267,7 +356,7 @@ def generate_supernode_name(
         ),
         contents=user_message,
     )
-    return (response.text or "").strip()
+    return _parse_label_response(response.text or "")
 
 
 # ---------------------------------------------------------------------------
@@ -306,9 +395,13 @@ def label_summarization_graph(
     """
     from dataclasses import replace as dc_replace
 
-    api_key = _get_gemini_api_key()
-    if not api_key:
+    # Only the Gemini path needs a Gemini key; the OpenAI path validates
+    # OPENAI_API_KEY itself inside _openai_generate_with_retry.
+    is_gemini = not model_name.startswith(("gpt-", "o1", "o3", "o4"))
+    if is_gemini and not _get_gemini_api_key():
         raise ValueError("Set GEMINI_API_KEY (or GENAI_API_KEY) in environment")
+
+    target_token = _extract_target_token(sng)
 
     new_supernodes: list[Supernode] = []
     for supernode in sng.supernodes:
@@ -317,11 +410,12 @@ def label_summarization_graph(
             new_supernodes.append(supernode)
             continue
 
-        new_label = generate_supernode_name(
+        new_label, new_role = generate_supernode_name(
             supernode,
             metadata,
             model_name=model_name,
             temperature=temperature,
+            target_token=target_token,
         )
         if not new_label:
             new_supernodes.append(supernode)
@@ -329,9 +423,10 @@ def label_summarization_graph(
 
         if inplace:
             supernode.name = new_label
+            supernode.role = new_role
             new_supernodes.append(supernode)
         else:
-            new_supernodes.append(dc_replace(supernode, name=new_label))
+            new_supernodes.append(dc_replace(supernode, name=new_label, role=new_role))
 
     if inplace:
         return sng
@@ -349,6 +444,7 @@ def score_supernode_coherence(
     metadata: dict,
     model_name: str = "gpt-4o-mini",
     temperature: float = 0.2,
+    target_token: str | None = None,
 ) -> float:
     """Score how well feature nodes in a supernode match its assigned name.
 
@@ -377,6 +473,7 @@ def score_supernode_coherence(
         raise ValueError("Set GEMINI_API_KEY or OPENAI_API_KEY in environment")
 
     model_id, source_set = _parse_metadata(metadata)
+    prompt_context = _build_prompt_context(metadata, target_token)
 
     feature_count = 0
     match_count = 0
@@ -389,15 +486,9 @@ def score_supernode_coherence(
         feature_count += 1
 
         info = _fetch_feature_context(model_id, source_set, node.node_id, top_n=2)
-        clerp = (info["clerp"] if info and info["clerp"] else None) or node.clerp or node.node_id
-        contexts: list[str] = info["contexts"] if info else []
+        feature_block = _build_feature_block(node, info)  # no prompt_tokens → Level A only
 
-        lines = [f'Label: "{clerp}"']
-        for i, ctx in enumerate(contexts, 1):
-            lines.append(f"  Context {i}: {ctx}")
-        feature_block = "\n".join(lines)
-
-        user_message = f"Cluster name: '{supernode_name}'\n\nFeature:\n{feature_block}"
+        user_message = prompt_context + f"Cluster name: '{supernode_name}'\n\nFeature:\n{feature_block}"
 
         try:
             if model_name.startswith(("gpt-", "o1", "o3", "o4")):
@@ -458,6 +549,7 @@ def score_summarization_graph_coherence(
         ValueError: If the LLM API key is not set.
     """
     scores: dict[str, float] = {}
+    target_token = _extract_target_token(sng)
 
     for supernode in sng.supernodes:
         sn_type = supernode.type
@@ -470,6 +562,7 @@ def score_summarization_graph_coherence(
             metadata,
             model_name=model_name,
             temperature=temperature,
+            target_token=target_token,
         )
         scores[supernode.name] = score
 

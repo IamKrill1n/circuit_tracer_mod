@@ -194,12 +194,17 @@ def cluster_graph_ilp(
         b_u.append(float(max_sn))
         r += 1
 
-    # (D4) causal epsilon-constraint: absorbed feature-edge mass <= eps_causal * W_total.
+    # (D4) causal epsilon-constraint: absorbed feature-edge mass <= eps_causal * W_ff.
+    # W_ff is the total feature-feature edge mass (the only mass the clustering can absorb);
+    # normalizing against it makes eps=1.0 mean "absorb at most all controllable mass" and
+    # keeps the eps scale graph-independent.  W_total (all edges) is intentionally NOT used
+    # because emb/logit boundary edges cannot be inside supernodes, so it inflates the
+    # denominator and compresses the useful eps range to a small interval near 0.
     if eps_causal is not None:
         prune_adj = prune_graph.pruned_adj.detach().cpu().numpy()
-        W_total = float(np.abs(prune_adj).sum())
         global_to_local = {gi: li for li, gi in enumerate(mid_idx)}
         edge_weight: dict[tuple[int, int], float] = {}
+        W_ff = 0.0  # total feature-feature |W| (both directions, all pairs incl. disallowed)
         nz_t, nz_s = np.nonzero(prune_adj)
         for tgt_g, src_g in zip(nz_t.tolist(), nz_s.tolist()):
             if tgt_g == src_g:
@@ -208,14 +213,16 @@ def cluster_graph_ilp(
             v_l = global_to_local.get(tgt_g)
             if u_l is None or v_l is None:
                 continue
+            w = float(abs(prune_adj[tgt_g, src_g]))
+            W_ff += w
             key = pkey(u_l, v_l)
             if key in col_x:  # span-disallowed pairs cannot merge -> absorb nothing
-                edge_weight[key] = edge_weight.get(key, 0.0) + float(abs(prune_adj[tgt_g, src_g]))
-        if W_total > 0.0 and edge_weight:
+                edge_weight[key] = edge_weight.get(key, 0.0) + w
+        if W_ff > 0.0 and edge_weight:
             for key, w in edge_weight.items():
                 add(r, col_x[key], w)
             b_l.append(-np.inf)
-            b_u.append(eps_causal * W_total)
+            b_u.append(eps_causal * W_ff)
             r += 1
 
     if r > MAX_ILP_CONSTRAINTS:

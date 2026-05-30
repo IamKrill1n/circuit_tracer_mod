@@ -192,8 +192,6 @@ graphs/
 graph_files/
 generated_graphs/
 # agent
-.claude/
-.cursor/
 # datasets
 make_bats_dataset.py
 

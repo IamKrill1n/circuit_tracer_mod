@@ -129,6 +129,7 @@ class Supernode:
     type: SupernodeType
     layer_min: int
     layer_max: int
+    role: str = ""  # LLM-assigned cluster role ("Input" | "Abstract" | "Output")
 
     def member_node_ids(self) -> list[str]:
         return [node.node_id for node in self.features]

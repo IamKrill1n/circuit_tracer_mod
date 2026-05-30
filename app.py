@@ -476,6 +476,7 @@ if gen_btn:
         st.session_state["graph_slug"] = slug
         st.session_state.pop("prune_graph", None)
         st.session_state.pop("sng", None)
+        st.session_state.pop("sng_labeled", None)
     except Exception as exc:
         st.error(f"Failed: {exc}")
 
@@ -599,6 +600,7 @@ if "attr_graph" in st.session_state:
                     )
             st.session_state["prune_graph"] = pg
             st.session_state.pop("sng", None)
+            st.session_state.pop("sng_labeled", None)
             st.success(f"Pruned: {pg.num_nodes} nodes, {pg.num_edges} edges.")
         except Exception as exc:
             st.error(f"Prune failed: {exc}")
@@ -703,6 +705,7 @@ if "prune_graph" in st.session_state:
             st.session_state["attr"] = attr
             st.session_state["clusters"] = clusters
             st.session_state["cluster_method"] = method
+            st.session_state.pop("sng_labeled", None)
             st.success(f"{method}: {len(rows)} supernodes ({sum(1 for s in rows if s.type == 'features')} middle).")
         except Exception as exc:
             st.error(f"Cluster failed: {exc}")
@@ -723,6 +726,56 @@ if "sng" in st.session_state:
     )
     prompt = str(ag.metadata.get("prompt", "") or "") if ag else None
 
+    # LLM labeling: name each middle supernode from its members' Neuronpedia
+    # clerps/contexts. Reads model_id + source_set from metadata only, so inject
+    # them here (source_set defaults to the prune step's neuronpedia source_set).
+    st.subheader("Label supernodes (LLM)")
+    l_c1, l_c2 = st.columns(2)
+    label_model = l_c1.text_input("LLM model", value="gemini-2.5-flash", key="lbl_model")
+    label_temp = l_c2.number_input(
+        "temperature", min_value=0.0, max_value=1.0, value=0.2, step=0.05, key="lbl_temp"
+    )
+    l_c3, l_c4 = st.columns(2)
+    label_model_id = l_c3.text_input("neuronpedia model_id", value="gemma-2-2b", key="lbl_model_id")
+    label_source_set = l_c4.text_input(
+        "neuronpedia source_set",
+        value=st.session_state.get("pr_np_source", ""),
+        key="lbl_source_set",
+        help="e.g. clt-hp; needed for Neuronpedia context lookups (else falls back to clerps).",
+    )
+    if st.button("Label supernodes with LLM", type="primary"):
+        try:
+            from summarization.group_llm import label_summarization_graph
+
+            prune_graph = st.session_state["prune_graph"]
+            metadata = dict(prune_graph.metadata)
+            metadata["model_name"] = label_model_id or metadata.get("model_name", "")
+            metadata["info"] = {
+                **metadata.get("info", {}),
+                "neuronpedia_source_set": label_source_set,
+            }
+            with st.spinner("Labeling supernodes via LLM…"):
+                label_summarization_graph(
+                    sng, metadata, model_name=label_model, temperature=float(label_temp)
+                )
+            st.session_state["sng"] = sng
+            st.session_state["supernode_map"] = sng.to_mapping()
+            st.session_state["sng_labeled"] = True
+            st.success("Supernodes labeled.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Labeling failed: {exc}")
+
+    # Display options (pure view filters — re-render the figure, no recompute).
+    v_c1, v_c2 = st.columns(2)
+    edge_disp_threshold = v_c1.slider(
+        "edge display threshold (fraction of max)", 0.0, 1.0, 0.0, step=0.01, key="sng_edge_thr"
+    )
+    top_k_logits_raw = v_c2.number_input(
+        "top_k_logits (0 = all)", min_value=0, value=0, step=1, key="sng_topk_logit"
+    )
+    top_k_logits = int(top_k_logits_raw) if top_k_logits_raw > 0 else None
+
     fig = supernode_graph_figure(
         sng=sng,
         final_supernodes=supernode_map,
@@ -730,6 +783,9 @@ if "sng" in st.session_state:
         title=f"Supernode graph — {slug} ({method})",
         prompt_tokens=prompt_tokens,
         prompt=prompt,
+        use_supernode_names=st.session_state.get("sng_labeled", False),
+        edge_threshold=float(edge_disp_threshold),
+        top_k_logits=top_k_logits,
     )
     st.plotly_chart(fig, use_container_width=True)
 

@@ -1,0 +1,37 @@
+[
+  {
+    "source_set": "analogies",
+    "graph_file": "083.pt",
+    "graph_stem": "083",
+    "graph_path": "dataset\\analogies\\083.pt",
+    "shap_json": "dataset\\analogies\\shap_values.json",
+    "shap_row_index": 84,
+    "masker_keep_prefix": null,
+    "normalize_method": "softmax",
+    "node_threshold": 0.02,
+    "edge_threshold": 0.95,
+    "combine_method": "geometric",
+    "score_normalization": "rank",
+    "alpha": 0.5,
+    "logit_weights": "target",
+    "keep_all_tokens_and_logits": false,
+    "token_weights": [
+      0.0,
+      0.00460779806599021,
+      0.0032712891697883606,
+      0.013698185794055462,
+      0.001960760448127985,
+      0.0807013064622879,
+      0.005931857507675886,
+      0.004324513953179121,
+      0.6720265746116638,
+      0.004941810388118029,
+      0.17045371234416962,
+      0.010378556326031685,
+      0.02770366705954075
+    ],
+    "num_nodes": 41,
+    "num_edges": 693,
+    "prune_graph_path": "eval_outputs\\prune\\analogies_083\\analogies\\softmax\\alpha_0.50\\node_0.02\\083_prune_graph.pt"
+  }
+]

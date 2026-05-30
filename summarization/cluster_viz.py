@@ -55,6 +55,21 @@ def _sn_title(sn: str, members: list[str], attr: dict[str, dict[str, Any]] | Non
     return sn + "<br>" + "<br>".join(previews) + more
 
 
+def _logit_prob(
+    sn: str,
+    members: list[str],
+    node_by_name: dict[str, Supernode],
+    attr: dict[str, dict[str, Any]] | None,
+) -> float:
+    """Representative token probability of a logit supernode (max over members)."""
+    row = node_by_name.get(sn)
+    if row is not None and row.features:
+        return max(float(n.token_prob) for n in row.features)
+    if attr is not None and members:
+        return max(float(attr.get(nid, {}).get("token_prob", 0.0)) for nid in members)
+    return 0.0
+
+
 def _parse_ctx_idx(attr: dict[str, dict[str, Any]] | None, node_id: str) -> int:
     if attr is None:
         return 0
@@ -289,6 +304,9 @@ def supernode_graph_figure(
     seed: int = 42,
     prompt_tokens: list[str] | None = None,
     prompt: str | None = None,
+    use_supernode_names: bool = False,
+    edge_threshold: float = 0.0,
+    top_k_logits: int | None = None,
 ) -> go.Figure:
     """
     Build an interactive Plotly figure in the Anthropic attribution-graph style:
@@ -296,6 +314,10 @@ def supernode_graph_figure(
     (when ``prompt_tokens`` is given) Input-Tokens / Outputs-Logits prompt bars.
 
     `sng` may be a `SummaryGraph` instance or the legacy dict.
+
+    ``edge_threshold`` (0-1) hides edges whose magnitude is below that fraction of
+    the largest edge weight. ``top_k_logits`` keeps only the k highest-probability
+    logit supernodes (and their edges); ``None`` shows all.
     """
     # Duck-typing rather than isinstance so this survives Streamlit hot-reload,
     # which re-imports SummaryGraph and breaks isinstance on session-state objects.
@@ -312,7 +334,20 @@ def supernode_graph_figure(
         mapping = final_supernodes
         node_by_name = {}
 
-    pos, top_y = _supernode_layout(sn_names, mapping, attr)
+    # Optionally keep only the top-k logit supernodes by token probability. Hidden
+    # logits are dropped from the layout, so their cards and edges never render.
+    hidden: set[str] = set()
+    if top_k_logits is not None:
+        logit_sns = [sn for sn in sn_names if _sn_kind(sn, node_by_name) == "logit"]
+        ranked = sorted(
+            logit_sns,
+            key=lambda sn: _logit_prob(sn, mapping.get(sn, []), node_by_name, attr),
+            reverse=True,
+        )
+        hidden = set(ranked[max(top_k_logits, 0):])
+
+    layout_names = [sn for sn in sn_names if sn not in hidden]
+    pos, top_y = _supernode_layout(layout_names, mapping, attr)
     k = len(sn_names)
 
     # Per-card geometry, colors, kinds.
@@ -344,7 +379,7 @@ def supernode_graph_figure(
             if i == j:
                 continue
             w = float(sn_adj[i, j])  # source j -> target i
-            if w == 0.0:
+            if w == 0.0 or abs(w) < edge_threshold * max_abs_w:
                 continue
             u, v = sn_names[j], sn_names[i]
             if u not in geom or v not in geom:
@@ -399,10 +434,16 @@ def supernode_graph_figure(
         members = mapping.get(sn, [])
         fill, line_color = _KIND_STYLE.get(kinds[sn], _KIND_STYLE["middle"])
         _add_card(fig, cx, cy, w, h, fill, line_color, stacked=len(members) > 1)
+        # Labeled middle cards show the LLM-generated supernode name; emb/logit keep
+        # their clerp ("Emb: France", 'Output "Paris"') since those aren't relabeled.
+        if use_supernode_names and kinds[sn] == "middle":
+            label_text = sn
+        else:
+            label_text = _sn_label(sn, members, attr)
         fig.add_annotation(
             x=cx,
             y=cy,
-            text=_wrap_label(_sn_label(sn, members, attr)),
+            text=_wrap_label(label_text),
             showarrow=False,
             font=dict(size=9, color="#1a1a1a"),
             align="center",
