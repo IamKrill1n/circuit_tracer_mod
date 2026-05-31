@@ -157,6 +157,88 @@ def _serve(viewer_dir_str: str, port: int):
     return serve(data_dir=viewer_dir_str, port=port)
 
 
+@st.cache_resource(show_spinner=False)
+def _load_model(model_name: str, transcoder: str, dtype_str: str, backend: str):
+    """Resident model for the steering stage. Unlike _run_attribution (load->free),
+    this keeps the model in memory for the session so steering reruns are fast."""
+    import torch
+    from circuit_tracer import ReplacementModel
+
+    dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
+    return ReplacementModel.from_pretrained(
+        model_name, transcoder, dtype=dtype_map[dtype_str], lazy_encoder=True, backend=backend
+    )
+
+
+def _steering_intervention_graph(
+    sng: SummaryGraph,
+    steered_factors: dict[str, float],
+    prompt: str,
+    orig_activations,
+    new_activations,
+    edge_threshold: float = 0.1,
+):
+    """SummaryGraph + one steering run -> graph_visualization.InterventionGraph.
+
+    Feature/emb supernodes become cards laid out bottom-to-top by layer (emb is layer
+    -1, so it sits at the bottom); logit supernodes are dropped — their effect shows in
+    the top-outputs row. Edges are downstream supernode links (sn_adj[t, s] = source s ->
+    target t, same convention as AttrGraph) above ``edge_threshold`` of the max |weight|.
+    Each steered card gets its ``factor``x badge; every other card shows its new/orig
+    activation %.
+    """
+    from graph_visualization import Feature, InterventionGraph
+    from graph_visualization import Supernode as VizSupernode
+
+    drawn = [s for s in sng.supernodes if s.type != "logit"]
+    viz_by_name: dict[str, VizSupernode] = {}
+    for s in drawn:
+        feats = [
+            Feature(int(n.node_id.split("_")[0]), n.ctx_idx, int(n.node_id.split("_")[1]))
+            for n in s.features
+            if n.feature_type == "cross layer transcoder"
+        ]
+        viz_by_name[s.name] = VizSupernode(name=s.name, features=feats or None, children=[])
+
+    # Rows by layer rank (ascending -> bottom-to-top).
+    layer_of = {s.name: s.layer_min for s in drawn}
+    ordered_layers = sorted(set(layer_of.values()))
+    layer_row = {layer: i for i, layer in enumerate(ordered_layers)}
+    rows: list[list[VizSupernode]] = [[] for _ in ordered_layers]
+    for s in drawn:
+        rows[layer_row[layer_of[s.name]]].append(viz_by_name[s.name])
+
+    # Children = strong downstream (higher-row) edges. sn_adj[t, s] = source s -> target t.
+    sn_adj = np.asarray(sng.adj_matrix, dtype=np.float64)
+    idx = {s.name: i for i, s in enumerate(sng.supernodes)}
+    max_abs = float(np.max(np.abs(sn_adj))) if sn_adj.size else 1.0
+    for s in drawn:
+        for t in drawn:
+            if t.name == s.name or layer_row[layer_of[t.name]] <= layer_row[layer_of[s.name]]:
+                continue
+            if abs(float(sn_adj[idx[t.name], idx[s.name]])) >= edge_threshold * max_abs:
+                viz_by_name[s.name].children.append(viz_by_name[t.name])
+
+    ig = InterventionGraph(ordered_nodes=rows, prompt=prompt)
+    for s in drawn:
+        node = viz_by_name[s.name]
+        ig.initialize_node(node, orig_activations)
+        if s.name in steered_factors:
+            # Steered cards show the factor badge instead of an activation %.
+            node.activation = None
+            node.intervention = f"{steered_factors[s.name]:g}x"
+        elif node.features:
+            # Ratio of means (not mean of ratios): robust when a member feature is
+            # inactive (orig act 0, which would give 0/0 -> NaN) and consistent with
+            # _mean_activation in the eval pipeline.
+            orig_mean = float(np.mean([orig_activations[f].item() for f in node.features]))
+            new_mean = float(np.mean([new_activations[f].item() for f in node.features]))
+            node.activation = new_mean / (orig_mean + 1e-9)
+        else:
+            node.activation = None
+    return ig
+
+
 def _generate_shap_weights(
     ag: AttrGraph,
     model_name: str,
@@ -792,6 +874,11 @@ if "sng" in st.session_state:
     with st.expander("Supernode mapping (JSON)"):
         st.json(supernode_map)
 
+    if st.button("💾 Save summary graph (.pt)"):
+        sng_path = GEN_DIR / f"{slug or 'summary'}.sng.pt"
+        sng.save(str(sng_path))
+        st.success(f"Saved summary graph to `{sng_path}`.")
+
 
 # 6. Upload to Neuronpedia ---------------------------------------------------
 if "sng" in st.session_state and "prune_graph" in st.session_state:
@@ -835,3 +922,93 @@ if "sng" in st.session_state and "prune_graph" in st.session_state:
                 st.success(f"Uploaded! status={status}")
             else:
                 st.error(f"Upload failed (status={status}): {body[:300]}")
+
+
+# 7. Steering intervention ---------------------------------------------------
+if "sng" in st.session_state:
+    st.header("7. Steering intervention")
+    sng: SummaryGraph = st.session_state["sng"]
+    ag = st.session_state.get("attr_graph")
+    steer_prompt = str(ag.metadata.get("prompt", "") or "") if ag else ""
+    feature_sns = [s for s in sng.supernodes if s.type == "features"]
+
+    if not feature_sns:
+        st.info("No feature supernodes to steer.")
+    elif not steer_prompt:
+        st.warning("AttrGraph metadata lacks a prompt; cannot run steering.")
+    else:
+        left, right = st.columns([2, 1])
+
+        with left:
+            st.subheader("Features to Steer")
+            st.caption(
+                "Toggle supernodes to steer them simultaneously. value = factor × original "
+                "activation at each feature's active position; factor −1 negates, 0 ablates "
+                "(per the paper)."
+            )
+            b_all, b_none = st.columns(2)
+            if b_all.button("Steer all"):
+                for s in feature_sns:
+                    st.session_state[f"st_on_{s.name}"] = True
+            if b_none.button("Unsteer all"):
+                for s in feature_sns:
+                    st.session_state[f"st_on_{s.name}"] = False
+
+            steered_factors: dict[str, float] = {}
+            for s in feature_sns:
+                card = st.container(border=True)
+                c_on, c_f = card.columns([3, 1])
+                on = c_on.checkbox(
+                    f"**{s.name}** · {len(s.features)} feats · L{s.layer_min}–{s.layer_max}",
+                    key=f"st_on_{s.name}",
+                )
+                factor = c_f.number_input(
+                    "factor", value=-1.0, step=0.5, key=f"st_f_{s.name}",
+                    label_visibility="collapsed", disabled=not on,
+                )
+                if on:
+                    steered_factors[s.name] = float(factor)
+
+        with right:
+            st.subheader("Settings")
+            freeze_attn = st.checkbox("freeze attention", value=True, key="st_freeze")
+            edge_thr = st.slider(
+                "graph edge threshold (frac of max)", 0.0, 1.0, 0.1, 0.05, key="st_edge_thr"
+            )
+            st.caption(f"Steering {len(steered_factors)} node(s).")
+            run_steer = st.button("STEER", type="primary", disabled=not steered_factors)
+
+        if run_steer:
+            try:
+                import streamlit.components.v1 as components
+
+                from graph_visualization import create_graph_visualization
+                from summarization.summarize import steer_interventions
+
+                with st.spinner("Loading model (kept resident for the session)…"):
+                    model = _load_model(model_name, transcoder, dtype_str, backend)
+                with st.spinner("Running steering intervention…"):
+                    _, orig_activations = model.get_activations(steer_prompt)
+                    steered = [s for s in sng.supernodes if s.name in steered_factors]
+                    interventions = steer_interventions(
+                        steered, orig_activations, steered_factors
+                    )
+                    new_logits, new_acts = model.feature_intervention(
+                        steer_prompt,
+                        interventions,
+                        freeze_attention=freeze_attn,
+                        return_activations=True,
+                    )
+
+                ig = _steering_intervention_graph(
+                    sng, steered_factors, steer_prompt, orig_activations, new_acts, edge_thr
+                )
+                top_probs, top_ids = new_logits.squeeze(0)[-1].softmax(-1).topk(5)
+                top_outputs = [
+                    (model.tokenizer.decode(tid), p)
+                    for tid, p in zip(top_ids.tolist(), top_probs.tolist())
+                ]
+                svg = create_graph_visualization(ig, top_outputs)
+                components.html(svg.data, height=440, scrolling=True)
+            except Exception as exc:
+                st.error(f"Steering failed: {exc}")

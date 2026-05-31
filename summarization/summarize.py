@@ -239,7 +239,43 @@ class SummaryGraph:
     def node_by_name(self) -> dict[str, Supernode]:
         return {n.name: n for n in self.supernodes}
 
+    def save(self, path: str) -> None:
+        """Pickle supernodes + pruned_adj to ``path`` (.pt). adj_matrix is re-derived on load."""
+        torch.save({"supernodes": self.supernodes, "pruned_adj": self.pruned_adj}, path)
+
+    @classmethod
+    def load(cls, path: str) -> "SummaryGraph":
+        """Inverse of ``save``; ``__post_init__`` rebuilds the post-π adjacency."""
+        d = torch.load(path, map_location="cpu", weights_only=False)
+        return cls(supernodes=d["supernodes"], pruned_adj=d["pruned_adj"])
+
 
 def summarize(supernodes: list[Supernode], pruned_adj: torch.Tensor) -> SummaryGraph:
     """Stage 3: assemble grouped supernodes into the post-π summary graph."""
     return SummaryGraph(supernodes=supernodes, pruned_adj=pruned_adj)
+
+
+def steer_interventions(
+    supernodes: list[Supernode],
+    orig_activations: torch.Tensor,
+    factors: dict[str, float] | float,
+) -> list[tuple[int, int, int, float]]:
+    """Steer several supernodes at once: value = factor * orig_activation per CLT feature.
+
+    Each feature is steered at its active position (Node.ctx_idx). factor=-1 negates
+    (paper steering), factor=0 ablates. ``factors`` is a per-supernode-name mapping or a
+    single float applied to all. ``orig_activations``: [n_layers, n_pos, d_transcoder].
+    Returns (layer, pos, feature_idx, value) tuples for ``feature_intervention``.
+    """
+    n_layers, n_pos, d_tc = orig_activations.shape
+    out: list[tuple[int, int, int, float]] = []
+    for sn in supernodes:
+        factor = factors if isinstance(factors, (int, float)) else factors[sn.name]
+        for n in sn.features:
+            if n.feature_type != "cross layer transcoder":
+                continue
+            layer, feat = int(n.node_id.split("_")[0]), int(n.node_id.split("_")[1])
+            pos = n.ctx_idx
+            if layer < n_layers and pos < n_pos and feat < d_tc:
+                out.append((layer, pos, feat, factor * orig_activations[layer, pos, feat].item()))
+    return out
