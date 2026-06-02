@@ -228,17 +228,15 @@ def _steering_intervention_graph(
             node.activation = None
             node.intervention = f"{steered_factors[s.name]:g}x"
         elif node.features:
-            # Activation % = fraction of original activation retained (ratio of means).
+            # Activation % = mean of per-feature activation ratios (current/original),
+            # matching InterventionGraph.set_node_activation_fractions in graph_visualization.py.
             # The activation cache zeroes BOS (position 0), so a member whose ctx_idx==0
-            # reads 0 in both runs and would make the ratio a meaningless 0/0 -> shown as
-            # "0%". Restrict the mean to members with a nonzero baseline; if none remain,
-            # the ratio is undefined and we show no badge.
+            # reads 0 in both runs and would make the ratio a meaningless 0/0. Restrict the
+            # mean to members with a nonzero baseline; if none remain, we show no badge.
             pairs = [(orig_activations[f].item(), new_activations[f].item()) for f in node.features]
             active = [(o, nw) for o, nw in pairs if abs(o) > 1e-6]
             if active:
-                orig_mean = float(np.mean([o for o, _ in active]))
-                new_mean = float(np.mean([nw for _, nw in active]))
-                node.activation = new_mean / orig_mean
+                node.activation = float(np.mean([nw / o for o, nw in active]))
             else:
                 node.activation = None
         else:

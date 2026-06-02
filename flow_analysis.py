@@ -1,3 +1,5 @@
+# Is the direct edge stronger than the path through a mediator?
+# This is the research question that we don't have time to do, but we leave it here just incase.
 from __future__ import annotations
 
 from typing import Any

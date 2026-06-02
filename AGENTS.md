@@ -58,29 +58,42 @@ Pipeline: prompt → `ReplacementModel` → `attribute()` → `Graph`
 
 ### Summarization pipeline (`summarization/`)
 
-Layered pipeline: `Graph` → `AttrGraph` → `PruneGraph` → `SummarizationGraph`
+Stages: `Graph` → `AttrGraph` → `PruneGraph` → clusters → `SummaryGraph`
+(attribute → [token_attribution] → prune → [classify] → cluster → summarize). `pipeline.run_pipeline()` orchestrates end-to-end; `python -m summarization` is a thin CLI over it.
 
 | Module | Purpose |
 |---|---|
-| `attr_graph.AttrGraph` | Node-level wrapper around `Graph` or frontend JSON. Nodes are `supernode_graph.Node` dataclasses. |
-| `prune.prune_attr_graph()` | Prunes via combined influence + relevance scores. Optional SHAP token weights and logit-probability weighting. |
-| `cluster` | `cluster_graph_spectral()`, `cluster_graph_agglomerative()`, `compute_phi_vectors()`. |
-| `supernode_graph.SummarizationGraph` | Final summarized graph of `Supernode` objects and their adjacency. |
-| `cluster_viz` | Plotly figure for the supernode graph. |
+| `attr_graph.AttrGraph` | Node-level wrapper around `Graph` or frontend JSON. Nodes are `summarize.Node` dataclasses. |
+| `prune.prune_attr_graph()` | `AttrGraph`/`Graph` → `PruneGraph` via combined influence + relevance scores. Optional SHAP token weights and logit-probability weighting. Pure tensor math, no Neuronpedia. |
+| `summarize` | `Node`, `Supernode`, `SummaryGraph` types + `summarize()` (clusters → `SummaryGraph` with block-sum supernode adjacency). |
+| `cluster` | `cluster()` (dispatch: spectral / agglomerative / ilp), `find_best_k()`, `cluster_graph_spectral()`, `cluster_graph_agglomerative()`, `compute_phi_vectors()`. |
+| `ilp_cluster.cluster_graph_ilp()` | Stage-2 facility-location MILP (scipy HiGHS): minimizes atomicity + λ·causal loss under a complexity budget. |
+| `scoring` | Stage-2 loss terms: `compute_L_atom` (signed-cosine correlation clustering), `compute_L` (atom + causal), silhouette. |
+| `classify` | Neuronpedia feature labels + `filter_act_density()` activation-density filtering. |
+| `group_llm` | LLM (Gemini) supernode labelling and scoring. |
+| `cluster_viz.supernode_graph_figure()` | Plotly figure for the supernode graph. |
 | `token_attribution` | SHAP-based token importance for embedding nodes. |
-| `graph_utils` | Score combiners (geometric / arithmetic / harmonic), normalization, influence / relevance. |
+| `graph_utils` | Pure-math scoring: influence / relevance, score combiners (geometric / arithmetic / harmonic), normalization. |
+| `utils` | Frontend-JSON node parsing and node-role helpers (`node_is_embedding`/`_logit`/`_fixed`, layer indexing). |
 
 ### Evaluation (`eval/`)
 
 Standalone scripts — not a library. Each is runnable end-to-end:
-- `eval_faithfulness.py` — faithfulness metrics
-- `eval_intervention.py` — intervention validation
-- `eval_prune.py`, `prune_graphs.py` — pruning quality
+- `eval_faithfulness.py` — causal faithfulness of pruning (zero dropped CLT features, measure P(target) ratio)
+- `eval_intervention.py` — supernode causal validation via feature interventions
+- `eval_prune.py`, `prune_graphs.py` — pruning sweep + quality metrics
+- `analyze_prune.py` — compare pruning normalization schemes vs. baselines
 - `eval_cluster.py` — clustering quality
+- `eval_steering.py` — supernodes as steerable concepts on the BATS analogy dataset (ablate / steer)
+- `pareto_curve.py` — Stage-2 atomicity-vs-causal Pareto front (sweep `lambda_causal` over `cluster_graph_ilp`)
 
 ### Streamlit app (`app.py`)
 
-Five-stage pipeline UI: generate graph → view raw circuit → prune → cluster → display supernode graph.
+Seven-stage pipeline UI: input → original attribution graph → prune → cluster → supernode graph → upload to Neuronpedia → steering intervention.
+
+### Paper & thesis
+
+LaTeX sources for the write-up live in `paper/` and `SOICT_DATN_Research_ENG_Template/` (graduation thesis). LaTeX math is permitted only there — see `.claude/rules/math.md`.
 
 ### External API (`api.py`)
 

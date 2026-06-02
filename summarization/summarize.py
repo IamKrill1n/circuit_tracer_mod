@@ -214,14 +214,6 @@ def get_adj(supernodes: list[Supernode], pruned_adj: torch.Tensor) -> np.ndarray
 
 @dataclass
 class SummaryGraph:
-    """Supernodes plus their post-π acyclic adjacency.
-
-    Construct with ``SummaryGraph(supernodes=..., pruned_adj=...)``;
-    ``adj_matrix`` is derived once via ``get_adj`` (block-sum + antiparallel
-    collapse + back-edge removal). ``adj_matrix[t, s]`` is the supernode-level
-    edge weight source ``s`` → target ``t`` — same convention as ``pruned_adj``.
-    """
-
     supernodes: list[Supernode]
     pruned_adj: torch.Tensor
     adj_matrix: np.ndarray = field(init=False, repr=False)
