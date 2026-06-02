@@ -22,29 +22,31 @@ def cluster_graph_ilp(
     prune_graph: PruneGraph,
     *,
     theta: float = 0.0,
-    eps_causal: float | None = None,
+    lambda_causal: float = 0.0,
     max_sn: int | None = None,
     max_layer_span: int = 4,
     time_limit: float = 30.0,
 ) -> list[list[str]]:
-    """Cluster a pruned graph by exact correlation clustering of its feature nodes.
+    """Cluster a pruned graph by exactly minimising the Stage-2 objective.
 
-    This is the Stage-2 solver of the methodology. It minimises the
-    correlation-clustering atomicity objective on the *signed* cosine of the role
-    vectors, subject to the complexity budget (D2) and the causal preservation
-    budget (D4) as hard constraints:
+    This is the Stage-2 solver of the methodology. It minimises the weighted sum of
+    the atomicity loss (signed-cosine correlation clustering, Eq. Latom) and the
+    causal-preservation loss (intra-supernode absorbed-mass fraction, Eq. Lcausal),
+    subject to the complexity budget (C2) as a hard constraint:
 
-        min_phi  sum_{i<j} x_ij (theta - cos(r_i, r_j))
-        s.t.     K <= max_sn                                (D2, complexity)
-                 sum_{feature edges} x_ij |W_ij| <= eps_causal * W_total   (D4, causal)
+        min_f  L_atom(f) + lambda_causal * L_causal(f)
+             = sum_{i<j} x_ij [ (theta - cos(r_i, r_j)) + lambda_causal * |W_ij| / W_total ]
+        s.t.   K <= max_sn                                       (C2, complexity)
 
-    with ``x_ij = 1`` iff middle features ``i, j`` share a supernode. The
-    objective is the symmetric over/under-merge penalty: a pair with
-    ``cos > theta`` (similar) carries a negative coefficient (merging is
-    rewarded), a pair with ``cos < theta`` (dissimilar / antagonistic) a positive
-    one (merging is penalised). Signed cosine is used directly — the negative
-    region marks antagonistic features that should repel, which also keeps this
-    objective consistent with ``L_causal``'s sign-cancellation term.
+    with ``x_ij = 1`` iff middle features ``i, j`` share a supernode, ``|W_ij|`` the
+    pruned edge mass between them (both directions), and ``W_total`` the total pruned
+    edge mass (the constant Eq. Lcausal denominator). Both losses are linear in the
+    same-cluster indicators, so the objective is a single binary ILP. The atomicity
+    term is the symmetric over/under-merge penalty: a similar pair (``cos > theta``)
+    carries a negative coefficient (merging rewarded), a dissimilar/antagonistic pair
+    a positive one. The causal term adds a non-negative cost for merging any directly
+    connected pair, so ``lambda_causal`` trades atomicity (D2) against keeping edge
+    weight visible across supernodes (D3). Acyclicity (C1) is deferred to Stage 3.
 
     Parameters
     ----------
@@ -52,14 +54,13 @@ def cluster_graph_ilp(
         Resolution threshold in ``[-1, 1]`` on the signed cosine. ``theta = 0``
         (the default) makes the cosine sign itself the merge boundary, so no
         threshold needs to be invented; raise it to merge more conservatively.
-    eps_causal:
-        Causal budget (D4). When set, the fraction of pruned edge weight absorbed
-        *inside* supernodes (the linear surrogate of mechanism (i) from the
-        causal-preservation loss) is constrained to ``<= eps_causal``. ``None``
-        leaves causal preservation unconstrained. Sweeping ``eps_causal`` traces
-        the 2-D Pareto front (atomicity vs. causal).
+    lambda_causal:
+        Trade-off weight ``>= 0`` on the causal-preservation loss (Eq. Lstage2).
+        ``0`` (the default) leaves the objective pure correlation clustering; larger
+        values penalise merging directly connected features. Sweeping it traces the
+        atomicity-vs-causal Pareto front.
     max_sn:
-        Complexity budget (D2): a hard cap ``K <= max_sn`` on the number of
+        Complexity budget (C2): a hard cap ``K <= max_sn`` on the number of
         feature supernodes. ``None`` leaves K endogenous (driven by ``theta``).
     max_layer_span:
         Tractability prior: forbid merging two features more than this many
@@ -69,8 +70,8 @@ def cluster_graph_ilp(
     Returns the same ``list[list[str]]`` contract as ``cluster_graph_spectral``:
     feature clusters + embedding/error/logit singletons.
     """
-    if eps_causal is not None and eps_causal < 0:
-        raise ValueError(f"eps_causal must be non-negative, got {eps_causal}")
+    if lambda_causal < 0:
+        raise ValueError(f"lambda_causal must be non-negative, got {lambda_causal}")
     if max_sn is not None and max_sn < 1:
         raise ValueError(f"max_sn must be >= 1, got {max_sn}")
 
@@ -122,11 +123,22 @@ def cluster_graph_ilp(
     def pkey(a: int, b: int) -> tuple[int, int]:
         return (a, b) if a < b else (b, a)
 
-    # Objective: minimise sum_pairs x_ij (theta - cos_ij). r has zero cost.
+    # Objective: minimise L_atom + lambda_causal * L_causal, both linear in x_ij.
+    #   atomicity coefficient: (theta - cos_ij)               (signed correlation clustering)
+    #   causal coefficient:    lambda_causal * |W_ij| / W_total  (intra-supernode mass, Eq. Lcausal)
+    # r has zero cost; W_total is the constant Eq. Lcausal denominator (total pruned mass).
     c = np.zeros(n_var, dtype=np.float64)
     for pair, k in col_x.items():
         i, j = pair
         c[k] = theta - float(cos[i, j])
+    if lambda_causal > 0:
+        prune_adj = prune_graph.pruned_adj.detach().cpu().numpy()  # adj[tgt, src]
+        W_total = float(np.abs(prune_adj).sum())
+        if W_total > 0.0:
+            for (i, j), k in col_x.items():
+                gi, gj = mid_idx[i], mid_idx[j]  # local -> global pruned_adj indices
+                pair_mass = abs(float(prune_adj[gi, gj])) + abs(float(prune_adj[gj, gi]))
+                c[k] += lambda_causal * pair_mass / W_total
 
     rows: list[int] = []
     cols: list[int] = []
@@ -194,36 +206,8 @@ def cluster_graph_ilp(
         b_u.append(float(max_sn))
         r += 1
 
-    # (D4) causal epsilon-constraint: absorbed feature-edge mass <= eps_causal * W_ff.
-    # W_ff is the total feature-feature edge mass (the only mass the clustering can absorb);
-    # normalizing against it makes eps=1.0 mean "absorb at most all controllable mass" and
-    # keeps the eps scale graph-independent.  W_total (all edges) is intentionally NOT used
-    # because emb/logit boundary edges cannot be inside supernodes, so it inflates the
-    # denominator and compresses the useful eps range to a small interval near 0.
-    if eps_causal is not None:
-        prune_adj = prune_graph.pruned_adj.detach().cpu().numpy()
-        global_to_local = {gi: li for li, gi in enumerate(mid_idx)}
-        edge_weight: dict[tuple[int, int], float] = {}
-        W_ff = 0.0  # total feature-feature |W| (both directions, all pairs incl. disallowed)
-        nz_t, nz_s = np.nonzero(prune_adj)
-        for tgt_g, src_g in zip(nz_t.tolist(), nz_s.tolist()):
-            if tgt_g == src_g:
-                continue
-            u_l = global_to_local.get(src_g)
-            v_l = global_to_local.get(tgt_g)
-            if u_l is None or v_l is None:
-                continue
-            w = float(abs(prune_adj[tgt_g, src_g]))
-            W_ff += w
-            key = pkey(u_l, v_l)
-            if key in col_x:  # span-disallowed pairs cannot merge -> absorb nothing
-                edge_weight[key] = edge_weight.get(key, 0.0) + w
-        if W_ff > 0.0 and edge_weight:
-            for key, w in edge_weight.items():
-                add(r, col_x[key], w)
-            b_l.append(-np.inf)
-            b_u.append(eps_causal * W_ff)
-            r += 1
+    # Causal preservation enters the objective (lambda_causal term above), not as a
+    # constraint, so there is no causal row to add here (paper Eq. Lstage2).
 
     if r > MAX_ILP_CONSTRAINTS:
         raise ValueError(
@@ -245,8 +229,8 @@ def cluster_graph_ilp(
     if res.x is None:
         if res.status == 2:  # 2 = infeasible
             raise ValueError(
-                f"ILP infeasible (n_middle={n}, max_sn={max_sn}, eps_causal={eps_causal}, "
-                f"max_layer_span={max_layer_span}). Raise max_sn/eps_causal/max_layer_span."
+                f"ILP infeasible (n_middle={n}, max_sn={max_sn}, "
+                f"max_layer_span={max_layer_span}). Raise max_sn or max_layer_span."
             )
         raise ValueError(
             f"ILP found no solution within time_limit={time_limit}s (status={res.status}, "

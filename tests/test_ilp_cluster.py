@@ -76,19 +76,19 @@ def test_ilp_emb_logit_singletons() -> None:
     assert ["27_0_0"] in clusters
 
 
-def test_ilp_cplx_weight_monotonic() -> None:
-    # Larger lambda_cplx (per-supernode opening cost) => same-or-fewer middle supernodes.
+def test_ilp_lambda_causal_monotonic() -> None:
+    # Larger lambda_causal penalizes merging directly connected features (Eq. Lcausal),
+    # so it produces the same-or-more middle supernodes than pure atomicity (lambda=0).
     pg = _build_test_graph()
     nodes_by_id = {n.node_id: n for n in pg.nodes}
 
     def n_middle(clusters: list[list[str]]) -> int:
         return sum(1 for c in clusters if not node_is_fixed(nodes_by_id[c[0]]))
 
-    few = n_middle(cluster_graph_ilp(pg, max_layer_span=4, lambdas=(0.9, 0.1, 0.0)))
-    many = n_middle(cluster_graph_ilp(pg, max_layer_span=4, lambdas=(0.01, 0.99, 0.0)))
+    few = n_middle(cluster_graph_ilp(pg, max_layer_span=4, lambda_causal=0.0))
+    many = n_middle(cluster_graph_ilp(pg, max_layer_span=4, lambda_causal=100.0))
     assert few <= many
-    assert few == 1  # one medoid can cover layers 1..2 under span=4
-    assert many == 4  # tiny opening cost => every node is its own supernode
+    assert many == 4  # large causal penalty => every connected node is its own supernode
 
 
 def test_ilp_deterministic() -> None:

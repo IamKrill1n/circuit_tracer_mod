@@ -1,38 +1,34 @@
 """Trace the Stage-2 atomicity-vs-causal Pareto curve for one or more pruned graphs.
 
-The clustering objective is exact correlation clustering on the signed cosine of
-role vectors, with complexity as a hard cap ``K <= max_sn`` and causal
-preservation as an epsilon-constraint::
+The clustering objective is the exact Stage-2 objective (Methodology Eq. Lstage2)
 
-    absorbed feature-feature edge mass  <=  eps  *  W_ff
+    min_f  L_atom(f) + lambda_causal * L_causal(f)
+    s.t.   K <= max_sn                               (complexity, hard)
 
-where ``W_ff`` is the *total feature-feature edge mass* in the pruned graph —
-the only mass the clustering can absorb (embedding/logit boundary edges can never
-be inside a supernode). Normalizing against ``W_ff`` (not W_total) makes eps=1.0
-mean "absorb at most all controllable mass", so the grid [0, 1] is uniformly
-interpretable and graph-independent.
+solved by ``cluster_graph_ilp``. ``L_atom`` is the signed-cosine correlation-clustering
+loss (Eq. Latom) and ``L_causal`` the intra-supernode absorbed-mass fraction (Eq.
+Lcausal). Sweeping the trade-off weight ``lambda_causal`` walks the front from pure
+atomicity (lambda=0: merge every role-similar pair) to causal-dominated (large lambda:
+refuse to merge directly connected pairs).
 
 Three sweep modes:
 
-  --sweep eps   (default)
-    Fix max_sn, vary eps. Use --auto-eps-grid to calibrate the eps range
-    automatically from the unconstrained optimum (recommended).
+  --sweep lambda   (default)
+    Fix max_sn, vary lambda_causal over --lambda-grid.
 
   --sweep k
-    Fix eps=None (unconstrained), vary max_sn from 2 to max_sn. The most
-    direct way to force diverse operating points: each K value produces a
+    Fix lambda_causal=0, vary max_sn from 2 to max_sn. Each K value produces a
     qualitatively distinct partition.
 
   --sweep both
-    Outer loop: K values (2..max_sn). Inner loop: eps grid per K. Produces the
-    fullest picture at the cost of more ILP solves.
+    Outer loop: K values (2..max_sn). Inner loop: lambda grid per K.
 
 Run:
   conda activate circuit
-  # single graph, auto-calibrated eps grid:
+  # single graph, lambda sweep:
   python -m eval.pareto_curve \\
       --prune-graph eval_outputs/.../000_prune_graph.pt \\
-      --max-sn 10 --auto-eps-grid
+      --max-sn 10 --sweep lambda
 
   # batch, K-sweep mode:
   python -m eval.pareto_curve \\
@@ -51,46 +47,13 @@ import numpy as np
 from summarization.cluster import clusters_to_supernodes, compute_phi_vectors
 from summarization.ilp_cluster import cluster_graph_ilp
 from summarization.prune import PruneGraph, load_prune_graph
-from summarization.scoring import compute_objectives
+from summarization.scoring import compute_L
 from summarization.summarize import SummaryGraph
 from summarization.utils import node_is_fixed
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_EPS_GRID = "0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0"
-AUTO_EPS_N = 12  # number of points in auto-calibrated grid
-
-
-# ---------------------------------------------------------------------------
-# Surrogate diagnostics
-# ---------------------------------------------------------------------------
-
-def _feature_feature_mass(prune_graph: PruneGraph) -> float:
-    """Total |W| over all feature-to-feature edges (both directions)."""
-    adj = prune_graph.pruned_adj.detach().cpu().numpy()
-    mid_set = {i for i, nd in enumerate(prune_graph.nodes) if not node_is_fixed(nd)}
-    nz_t, nz_s = np.nonzero(adj)
-    total = 0.0
-    for t, s in zip(nz_t.tolist(), nz_s.tolist()):
-        if t != s and t in mid_set and s in mid_set:
-            total += float(abs(adj[t, s]))
-    return total
-
-
-def _intra_cluster_mass(prune_graph: PruneGraph, clusters: list[list[str]]) -> float:
-    """Feature-feature edge mass absorbed inside clusters (the surrogate's numerator)."""
-    adj = prune_graph.pruned_adj.detach().cpu().numpy()
-    id_to_idx = {nd.node_id: i for i, nd in enumerate(prune_graph.nodes)}
-    total = 0.0
-    for cluster in clusters:
-        idxs = [id_to_idx[nid] for nid in cluster if nid in id_to_idx]
-        if len(idxs) < 2:
-            continue
-        for a in range(len(idxs)):
-            for b in range(a + 1, len(idxs)):
-                i, j = idxs[a], idxs[b]
-                total += float(abs(adj[i, j])) + float(abs(adj[j, i]))
-    return total
+DEFAULT_LAMBDA_GRID = "0,1,2,5,10,20,50"
 
 
 # ---------------------------------------------------------------------------
@@ -124,18 +87,16 @@ def _solve_one(
     *,
     max_sn: int | None,
     theta: float,
-    eps_causal: float | None,
+    lambda_causal: float,
     time_limit: float,
     prune_loss: float,
-    W_ff: float,
-    W_total: float,
     label: str,
 ) -> dict[str, Any] | None:
     try:
         clusters = cluster_graph_ilp(
             prune_graph,
             theta=theta,
-            eps_causal=eps_causal,
+            lambda_causal=lambda_causal,
             max_sn=max_sn,
             time_limit=time_limit,
         )
@@ -144,21 +105,17 @@ def _solve_one(
         return None
     rows = clusters_to_supernodes(prune_graph, clusters)
     sng = SummaryGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
-    obj = compute_objectives(
-        sng, role_vectors_middle, middle_id_to_local, prune_graph,
-        prune_loss=prune_loss, theta=theta,
+    obj = compute_L(
+        sng, role_vectors_middle, middle_id_to_local,
+        prune_loss=prune_loss, lambda_causal=lambda_causal,
     )
-    surr = _intra_cluster_mass(prune_graph, clusters)
-    surr_frac = surr / W_ff if W_ff > 0 else 0.0
     logger.info(
-        "%s  L_atom=%.4f  L_causal=%.4f  K=%d  surr_frac=%.3f",
-        label, obj["L_atom"], obj["L_causal"], obj["K"], surr_frac,
+        "%s  L=%.4f  L_atom=%.4f  L_causal=%.4f  K=%d",
+        label, obj["L"], obj["L_atom"], obj["L_causal"], obj["K"],
     )
     return {
-        "eps": float(eps_causal) if eps_causal is not None else float("nan"),
+        "lambda_causal": float(lambda_causal),
         "max_sn": int(max_sn) if max_sn is not None else -1,
-        "surrogate_causal": float(surr_frac),
-        "W_ff_frac": float(W_ff / W_total) if W_total > 0 else 0.0,
         **obj,
     }
 
@@ -167,57 +124,35 @@ def _solve_one(
 # Sweep modes
 # ---------------------------------------------------------------------------
 
-def sweep_eps(
+def _middle_inputs(prune_graph: PruneGraph) -> tuple[np.ndarray, dict[str, int]]:
+    mid_idx = [i for i, nd in enumerate(prune_graph.nodes) if not node_is_fixed(nd)]
+    middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
+    middle_id_to_local = {nid: i for i, nid in enumerate(middle_ids)}
+    phi = compute_phi_vectors(prune_graph).detach().cpu().numpy()
+    return phi[mid_idx], middle_id_to_local
+
+
+def sweep_lambda(
     prune_graph: PruneGraph,
     prune_graph_path: str,
     *,
     max_sn: int,
     theta: float,
-    eps_grid: list[float],
-    auto_eps_grid: bool,
+    lambda_grid: list[float],
     time_limit: float,
     prune_loss: float,
 ) -> list[dict[str, Any]]:
-    mid_idx = [i for i, nd in enumerate(prune_graph.nodes) if not node_is_fixed(nd)]
-    middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
-    middle_id_to_local = {nid: i for i, nid in enumerate(middle_ids)}
-    phi = compute_phi_vectors(prune_graph).detach().cpu().numpy()
-    role_vectors_middle = phi[mid_idx]
-    W_ff = _feature_feature_mass(prune_graph)
-    W_total = float(prune_graph.pruned_adj.abs().sum().item())
-
-    logger.info(
-        "%s | %d middle | max_sn=%d | W_ff/W_total=%.3f",
-        prune_graph_path, len(middle_ids), max_sn, W_ff / W_total if W_total else 0,
-    )
-
-    if auto_eps_grid:
-        # Solve unconstrained → find surrogate fraction → sample densely below it.
-        logger.info("auto-eps-grid: solving unconstrained to calibrate eps range...")
-        unc = _solve_one(
-            prune_graph, role_vectors_middle, middle_id_to_local,
-            max_sn=max_sn, theta=theta, eps_causal=None,
-            time_limit=time_limit, prune_loss=prune_loss, W_ff=W_ff, W_total=W_total,
-            label="eps=∞ (unconstrained)",
-        )
-        if unc is not None:
-            sat = unc["surrogate_causal"]  # saturation point in [0,1] of W_ff
-            # Dense grid from 0 to sat (exclusive of sat itself, which is the unconstrained)
-            eps_grid = [round(x, 4) for x in np.linspace(0.0, sat, AUTO_EPS_N + 1)[:-1].tolist()]
-            eps_grid.append(float("inf"))  # sentinel for unconstrained
-            logger.info("auto-eps-grid: saturation at surr_frac=%.4f; grid=%s", sat, eps_grid[:-1])
-        else:
-            logger.warning("auto-eps-grid: unconstrained solve failed; falling back to default grid.")
+    role_vectors_middle, middle_id_to_local = _middle_inputs(prune_graph)
+    logger.info("%s | %d middle | max_sn=%d", prune_graph_path, len(middle_id_to_local), max_sn)
 
     points: list[dict[str, Any]] = []
     seen_solutions: set[tuple] = set()
-    for eps in eps_grid:
-        real_eps = None if (isinstance(eps, float) and np.isinf(eps)) else eps
+    for lam in lambda_grid:
         rec = _solve_one(
             prune_graph, role_vectors_middle, middle_id_to_local,
-            max_sn=max_sn, theta=theta, eps_causal=real_eps,
-            time_limit=time_limit, prune_loss=prune_loss, W_ff=W_ff, W_total=W_total,
-            label=f"eps={'∞' if real_eps is None else f'{eps:.4g}'}",
+            max_sn=max_sn, theta=theta, lambda_causal=lam,
+            time_limit=time_limit, prune_loss=prune_loss,
+            label=f"lambda={lam:.4g}",
         )
         if rec is None:
             continue
@@ -238,26 +173,16 @@ def sweep_k(
     time_limit: float,
     prune_loss: float,
 ) -> list[dict[str, Any]]:
-    mid_idx = [i for i, nd in enumerate(prune_graph.nodes) if not node_is_fixed(nd)]
-    middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
-    middle_id_to_local = {nid: i for i, nid in enumerate(middle_ids)}
-    phi = compute_phi_vectors(prune_graph).detach().cpu().numpy()
-    role_vectors_middle = phi[mid_idx]
-    W_ff = _feature_feature_mass(prune_graph)
-    W_total = float(prune_graph.pruned_adj.abs().sum().item())
-    n_middle = len(middle_ids)
-
-    logger.info(
-        "%s | %d middle | sweeping K=2..%d | W_ff/W_total=%.3f",
-        prune_graph_path, n_middle, max_sn, W_ff / W_total if W_total else 0,
-    )
+    role_vectors_middle, middle_id_to_local = _middle_inputs(prune_graph)
+    n_middle = len(middle_id_to_local)
+    logger.info("%s | %d middle | sweeping K=2..%d", prune_graph_path, n_middle, max_sn)
 
     points: list[dict[str, Any]] = []
     for k in range(2, min(max_sn, n_middle) + 1):
         rec = _solve_one(
             prune_graph, role_vectors_middle, middle_id_to_local,
-            max_sn=k, theta=theta, eps_causal=None,
-            time_limit=time_limit, prune_loss=prune_loss, W_ff=W_ff, W_total=W_total,
+            max_sn=k, theta=theta, lambda_causal=0.0,
+            time_limit=time_limit, prune_loss=prune_loss,
             label=f"K_max={k}",
         )
         if rec is not None:
@@ -270,29 +195,23 @@ def sweep_both(
     *,
     max_sn: int,
     theta: float,
-    eps_grid: list[float],
+    lambda_grid: list[float],
     time_limit: float,
     prune_loss: float,
 ) -> list[dict[str, Any]]:
-    """Outer K loop, inner eps loop — fullest coverage."""
-    mid_idx = [i for i, nd in enumerate(prune_graph.nodes) if not node_is_fixed(nd)]
-    middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
-    middle_id_to_local = {nid: i for i, nid in enumerate(middle_ids)}
-    phi = compute_phi_vectors(prune_graph).detach().cpu().numpy()
-    role_vectors_middle = phi[mid_idx]
-    W_ff = _feature_feature_mass(prune_graph)
-    W_total = float(prune_graph.pruned_adj.abs().sum().item())
-    n_middle = len(middle_ids)
+    """Outer K loop, inner lambda loop — fullest coverage."""
+    role_vectors_middle, middle_id_to_local = _middle_inputs(prune_graph)
+    n_middle = len(middle_id_to_local)
 
     points: list[dict[str, Any]] = []
     seen_solutions: set[tuple] = set()
     for k in range(2, min(max_sn, n_middle) + 1):
-        for eps in [None] + [float(e) for e in eps_grid]:
+        for lam in lambda_grid:
             rec = _solve_one(
                 prune_graph, role_vectors_middle, middle_id_to_local,
-                max_sn=k, theta=theta, eps_causal=eps,
-                time_limit=time_limit, prune_loss=prune_loss, W_ff=W_ff, W_total=W_total,
-                label=f"K_max={k} eps={'∞' if eps is None else f'{eps:.3g}'}",
+                max_sn=k, theta=theta, lambda_causal=lam,
+                time_limit=time_limit, prune_loss=prune_loss,
+                label=f"K_max={k} lambda={lam:.3g}",
             )
             if rec is None:
                 continue
@@ -308,8 +227,8 @@ def sweep_both(
 # ---------------------------------------------------------------------------
 
 FIELDNAMES = [
-    "eps", "max_sn", "L_atom", "L_causal", "L_cc", "L_cc_norm", "L_cplx",
-    "K", "n_supernodes", "L_prune", "surrogate_causal", "W_ff_frac", "on_pareto_front",
+    "lambda_causal", "max_sn", "L", "L_atom", "L_atom_norm", "L_causal",
+    "K", "n_supernodes", "prune_loss", "on_pareto_front",
 ]
 
 
@@ -335,7 +254,6 @@ def plot_curve(
 
     causal = np.array([p["L_causal"] for p in points])
     atom = np.array([p["L_atom"] for p in points])
-    ks = np.array([p["K"] for p in points])
     front = np.array(frontier, dtype=bool)
 
     fig, ax = plt.subplots(figsize=(7, 5))
@@ -349,15 +267,13 @@ def plot_curve(
         if sweep_mode == "k":
             label = f"K={p['K']}"
         else:
-            eps_val = p.get("eps", float("nan"))
-            surr = p.get("surrogate_causal", float("nan"))
-            label = f"ε={eps_val:.3g}\n(surr={surr:.2f})" if on_front else ""
+            label = f"λ={p['lambda_causal']:.3g}" if on_front else ""
         if label:
             ax.annotate(label, (p["L_causal"], p["L_atom"]),
                         fontsize=6.5, xytext=(4, 3), textcoords="offset points")
 
-    ax.set_xlabel("$L_{causal}$  (causal mass lost, full)")
-    ax.set_ylabel("$L_{atom}$  (silhouette deficit)")
+    ax.set_xlabel("$L_{causal}$  (intra-supernode mass fraction)")
+    ax.set_ylabel("$L_{atom}$  (correlation-clustering loss)")
     ax.set_title(title)
     ax.grid(True, ls="--", alpha=0.4)
     ax.legend()
@@ -380,12 +296,11 @@ def run_one(
     prune_graph = load_prune_graph(prune_graph_path, map_location=args.map_location)
 
     mode = args.sweep
-    if mode == "eps":
-        points = sweep_eps(
+    if mode == "lambda":
+        points = sweep_lambda(
             prune_graph, prune_graph_path,
             max_sn=args.max_sn, theta=args.theta,
-            eps_grid=_parse_eps_grid(args.eps_grid),
-            auto_eps_grid=args.auto_eps_grid,
+            lambda_grid=_parse_grid(args.lambda_grid),
             time_limit=args.time_limit, prune_loss=args.prune_loss,
         )
     elif mode == "k":
@@ -398,7 +313,7 @@ def run_one(
         points = sweep_both(
             prune_graph,
             max_sn=args.max_sn, theta=args.theta,
-            eps_grid=_parse_eps_grid(args.eps_grid),
+            lambda_grid=_parse_grid(args.lambda_grid),
             time_limit=args.time_limit, prune_loss=args.prune_loss,
         )
 
@@ -427,7 +342,7 @@ def write_aggregate_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def _parse_eps_grid(text: str) -> list[float]:
+def _parse_grid(text: str) -> list[float]:
     return [float(tok) for tok in text.split(",") if tok.strip()]
 
 
@@ -448,16 +363,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Complexity budget K <= max_sn (default 10).")
     p.add_argument("--theta", type=float, default=0.0,
                    help="Signed-cosine resolution threshold (default 0).")
-    p.add_argument("--sweep", choices=["eps", "k", "both"], default="eps",
-                   help="Sweep mode: eps (vary causal budget at fixed K), "
-                        "k (vary K_max at unconstrained eps), both (2D grid). Default: eps.")
-    p.add_argument("--eps-grid", type=str, default=DEFAULT_EPS_GRID,
-                   help="Comma-separated eps values in [0,1] relative to W_ff "
-                        "(feature-feature edge mass). Used when --sweep=eps or both.")
-    p.add_argument("--auto-eps-grid", action="store_true",
-                   help="Calibrate eps grid automatically from the unconstrained optimum "
-                        "(eps=None solve first, then sample densely below saturation). "
-                        "Overrides --eps-grid. Recommended when the default grid saturates quickly.")
+    p.add_argument("--sweep", choices=["lambda", "k", "both"], default="lambda",
+                   help="Sweep mode: lambda (vary causal weight at fixed K), "
+                        "k (vary K_max at lambda=0), both (2D grid). Default: lambda.")
+    p.add_argument("--lambda-grid", type=str, default=DEFAULT_LAMBDA_GRID,
+                   help="Comma-separated lambda_causal values (>= 0). Used when "
+                        "--sweep=lambda or both.")
     p.add_argument("--time-limit", type=float, default=30.0,
                    help="Per-solve MILP time limit in seconds (default 30).")
     p.add_argument("--prune-loss", type=float, default=0.0,
@@ -476,7 +387,7 @@ def main() -> None:
     if args.prune_graph:
         result = run_one(args.prune_graph, args, out_dir, Path(args.prune_graph).stem)
         if result is None:
-            raise SystemExit("No feasible points; try --auto-eps-grid, --sweep k, or raise --max-sn.")
+            raise SystemExit("No feasible points; try --sweep k or raise --max-sn.")
         return
 
     root = Path(args.prune_graph_dir)

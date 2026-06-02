@@ -1,20 +1,30 @@
 \documentclass[../main.tex]{subfiles}
 \begin{document}
 
-\textcolor{red}{Chú ý: Chương này là không bắt buộc. Nếu nghiên cứu chỉ có phân tích lý thuyết mà không có thực nghiệm thì sinh viên không cần trình bày chương này }
+% \textcolor{red}{Chú ý: Chương này là không bắt buộc. Nếu nghiên cứu chỉ có phân tích lý thuyết mà không có thực nghiệm thì sinh viên không cần trình bày chương này }
+\section{Overview}
+\section{Dataset}
+\subsection{Synthetic Analogies from BATS}
+The Bigger Analogy Test Set (BATS) is a widely used benchmark for word embeddings and language models to capture relational and semantic knowledge.
+We extract the entities in BATS lexicography category to create a synthetic dataset consist of 10 prompts per subcategory. The prompts in the dataset are of the format:
+The saying goes: A is to B as C is to D 
+Where A, B, C, D are entities in the BATS lexicography subcategory. The task is to predict D given A, B, and C.
+\subsection{Multihop reasoning dataset}
+We follow the multihop queries in \cite{circuit_tracer}. The dataset contains multiple queries that require reasoning across multiple steps to arrive at the correct answer. Each query is designed to test the model's ability to perform basic reasoning and inference. 
 
+All the prompts in both datasets are chosen such that the model correctly output the answer with confidence > 20\%.
+\section{Experimental Setup}
+\subsection{Environment Setup}
+Experiments are conducted on a single PC with NVIDIA GeForce RTX 4090 GPU, 24GB VRAM, and 64GB RAM. The operating system is Ubuntu 22.04 LTS. We use Python 3.10 for all implementations and experiments.
+\subsection{Tools and Libraries}
+We use the circuit tracer library to generate the attribution graphs for our prompts. We also utilize features' metadata provided by the library and adapt the UI to visualize the attribution graphs. 
 \section{Evaluation Methodology}
-
-Sinh viên trình bày cụ thể về các tham số dùng trong đánh giá 
-
-Draft:
-LLM-Score
-Steering
-
-
-\section{Simulation Method}
-
-Sinh viên trình bày chi tiết cách thức tiến hành thí nghiệm, ví dụ: các baseline chọn để so sánh là gì? tại sao lại chọn các baseline đấy? Tiến hành bao nhiêu thí nghiệm? mỗi thí nghiệm được thực hiện bao nhiêu lần? Các tham số của thuật toán được chọn như thế nào? Kịch bản thí nghiệm được tạo ra sao? Dữ liệu xử lý thế nào? … Có thể chia  chương này thành các chương nhỏ hơn để tiện trình bày. 
+\subsection{Baseline Methods}
+\subsection{LLM score}
+We utilize an LLM to both label and score the supernodes in a summary graph.
+The scoring process is the opposite of the labeling process. We first prompt the LLM to label the supernodes in the summary graph, then we prompt the LLM to score each supernode based on its relevance to the final answer. The scoring is done on a scale of 0 to 1, where 0 indicates that the supernode is not relevant at all, and 1 indicates that the supernode is highly relevant to the final answer. The LLM's score for each supernode is then used as a measure of its importance in the reasoning process.
+\subsection{Steering evaluation}
+% Sinh viên trình bày chi tiết cách thức tiến hành thí nghiệm, ví dụ: các baseline chọn để so sánh là gì? tại sao lại chọn các baseline đấy? Tiến hành bao nhiêu thí nghiệm? mỗi thí nghiệm được thực hiện bao nhiêu lần? Các tham số của thuật toán được chọn như thế nào? Kịch bản thí nghiệm được tạo ra sao? Dữ liệu xử lý thế nào? … Có thể chia  chương này thành các chương nhỏ hơn để tiện trình bày. 
 
 \section{Tên của kết quả thí nghiệm 1}
 

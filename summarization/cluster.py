@@ -644,7 +644,7 @@ def find_best_k(
     random_state: int = 42,
     n_init: int = 20,
     prune_loss: float = 0.0,
-    lambdas: tuple[float, float, float] = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+    lambda_causal: float = 1.0,
 ) -> tuple[int, dict[int, dict[str, Any]]]:
     """Auto-select k for spectral clustering by minimizing the closed-form L objective.
 
@@ -690,9 +690,8 @@ def find_best_k(
             sng,
             role_vectors_middle,
             middle_id_to_local,
-            prune_graph,
             prune_loss=prune_loss,
-            lambdas=lambdas,
+            lambda_causal=lambda_causal,
         ))
         sc["final_supernodes"] = {s.name: s.member_node_ids() for s in rows}
         results[k] = sc
@@ -710,7 +709,7 @@ def find_best_k_for_clusterer(
     k_min_override: int | None = None,
     k_max_override: int | None = None,
     prune_loss: float = 0.0,
-    lambdas: tuple[float, float, float] = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+    lambda_causal: float = 1.0,
 ) -> tuple[int, dict[int, dict[str, Any]]]:
     """Auto-select k for an arbitrary clusterer by minimizing the closed-form L objective."""
     phi, sim_phi = _phi_and_similarity(prune_graph)
@@ -728,9 +727,8 @@ def find_best_k_for_clusterer(
             sng,
             role_vectors_middle,
             middle_id_to_local,
-            prune_graph,
             prune_loss=prune_loss,
-            lambdas=lambdas,
+            lambda_causal=lambda_causal,
         ))
         result["final_supernodes"] = {s.name: s.member_node_ids() for s in rows}
         return fallback_k, {fallback_k: result}
@@ -750,9 +748,8 @@ def find_best_k_for_clusterer(
             sng,
             role_vectors_middle,
             middle_id_to_local,
-            prune_graph,
             prune_loss=prune_loss,
-            lambdas=lambdas,
+            lambda_causal=lambda_causal,
         ))
         result["final_supernodes"] = {s.name: s.member_node_ids() for s in rows}
         results[target_k] = result
@@ -774,16 +771,16 @@ def cluster(
     random_state: int = 42,
     n_init: int = 20,
     ilp_time_limit: float = 30.0,
-    lambdas: tuple[float, float, float] = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+    lambda_causal: float = 1.0,
 ) -> list[Supernode]:
     """Stage 2: cluster a ``PruneGraph`` into typed ``Supernode`` rows.
 
     ``num_clusters="auto"`` picks k by minimizing the closed-form L objective
     (``find_best_k`` for spectral, ``find_best_k_for_clusterer`` for agglomerative);
-    an int clusters at exactly that k. ``method="ilp"`` solves the exact
-    correlation-clustering objective (signed cosine, resolution ``theta=0``) with K
-    capped at ``max_sn``; it ignores ``num_clusters`` and ``lambdas``. For the causal
-    epsilon-constraint and theta/eps sweeps, call ``cluster_graph_ilp`` directly.
+    an int clusters at exactly that k. ``method="ilp"`` solves the exact Stage-2
+    objective ``L_atom + lambda_causal * L_causal`` (signed cosine, resolution
+    ``theta=0``) with K capped at ``max_sn``; it ignores ``num_clusters``. For
+    ``theta`` sweeps, call ``cluster_graph_ilp`` directly.
     """
     if method == "ilp":
         from summarization.ilp_cluster import cluster_graph_ilp  # local: avoids import cycle
@@ -791,7 +788,7 @@ def cluster(
         clusters = cluster_graph_ilp(
             prune_graph,
             theta=0.0,
-            eps_causal=None,
+            lambda_causal=lambda_causal,
             max_sn=max_sn,
             max_layer_span=max_layer_span,
             time_limit=ilp_time_limit,
@@ -808,7 +805,7 @@ def cluster(
                 decay_rate=decay_rate,
                 random_state=random_state,
                 n_init=n_init,
-                lambdas=lambdas,
+                lambda_causal=lambda_causal,
             )
         else:
             def _agg(target_k: int) -> list[list[str]]:
@@ -822,7 +819,7 @@ def cluster(
                     decay_rate=decay_rate,
                 )
 
-            k, _ = find_best_k_for_clusterer(prune_graph=prune_graph, clusterer=_agg, lambdas=lambdas)
+            k, _ = find_best_k_for_clusterer(prune_graph=prune_graph, clusterer=_agg, lambda_causal=lambda_causal)
     else:
         k = int(num_clusters)
 

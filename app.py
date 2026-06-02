@@ -228,12 +228,19 @@ def _steering_intervention_graph(
             node.activation = None
             node.intervention = f"{steered_factors[s.name]:g}x"
         elif node.features:
-            # Ratio of means (not mean of ratios): robust when a member feature is
-            # inactive (orig act 0, which would give 0/0 -> NaN) and consistent with
-            # _mean_activation in the eval pipeline.
-            orig_mean = float(np.mean([orig_activations[f].item() for f in node.features]))
-            new_mean = float(np.mean([new_activations[f].item() for f in node.features]))
-            node.activation = new_mean / (orig_mean + 1e-9)
+            # Activation % = fraction of original activation retained (ratio of means).
+            # The activation cache zeroes BOS (position 0), so a member whose ctx_idx==0
+            # reads 0 in both runs and would make the ratio a meaningless 0/0 -> shown as
+            # "0%". Restrict the mean to members with a nonzero baseline; if none remain,
+            # the ratio is undefined and we show no badge.
+            pairs = [(orig_activations[f].item(), new_activations[f].item()) for f in node.features]
+            active = [(o, nw) for o, nw in pairs if abs(o) > 1e-6]
+            if active:
+                orig_mean = float(np.mean([o for o, _ in active]))
+                new_mean = float(np.mean([nw for _, nw in active]))
+                node.activation = new_mean / orig_mean
+            else:
+                node.activation = None
         else:
             node.activation = None
     return ig
@@ -361,7 +368,7 @@ def _cluster_dispatch(
     random_state: int,
     n_init: int,
     theta: float = 0.0,
-    eps_causal: float | None = None,
+    lambda_causal: float = 0.0,
     ilp_time_limit: float = 30.0,
 ) -> list[list[str]]:
     """Dispatch to a clustering method. Baselines use eval/eval_cluster helpers."""
@@ -388,15 +395,15 @@ def _cluster_dispatch(
             decay_rate=decay_rate,
         )
     if method == "ours-ilp":
-        # Exact correlation clustering on signed-cosine role vectors; target_k is
-        # ignored (K is endogenous, capped by max_sn). eps_causal=None leaves the
-        # causal-preservation budget unconstrained.
+        # Exact Stage-2 objective L_atom + lambda_causal * L_causal on signed-cosine
+        # role vectors; target_k is ignored (K endogenous, capped by max_sn).
+        # lambda_causal=0 leaves the objective pure correlation clustering.
         from summarization.ilp_cluster import cluster_graph_ilp
 
         return cluster_graph_ilp(
             prune_graph,
             theta=theta,
-            eps_causal=eps_causal,
+            lambda_causal=lambda_causal,
             max_sn=max_sn,
             max_layer_span=max_layer_span,
             time_limit=ilp_time_limit,
@@ -729,8 +736,8 @@ if "prune_graph" in st.session_state:
     is_ilp = method == "ours-ilp"
     if is_ilp:
         st.caption(
-            "ILP: exact correlation clustering on signed-cosine role vectors. "
-            "target_k is ignored; max_sn is the hard complexity budget (0 = no cap)."
+            "ILP: exact min of L_atom + lambda_causal * L_causal on signed-cosine role "
+            "vectors. target_k is ignored; max_sn is the hard complexity budget (0 = no cap)."
         )
     i_c1, i_c2, i_c3 = st.columns(3)
     ilp_theta = i_c1.number_input(
@@ -738,17 +745,16 @@ if "prune_graph" in st.session_state:
         min_value=-1.0, max_value=1.0, value=0.0, step=0.05,
         disabled=not is_ilp, key="cl_theta",
     )
-    ilp_eps_raw = i_c2.number_input(
-        "eps_causal (<0 = unconstrained)",
-        min_value=-1.0, max_value=1.0, value=-1.0, step=0.05,
-        disabled=not is_ilp, key="cl_eps",
+    ilp_lambda = i_c2.number_input(
+        "lambda_causal (>= 0; 0 = pure atomicity)",
+        min_value=0.0, value=0.0, step=0.1,
+        disabled=not is_ilp, key="cl_lambda",
     )
     ilp_time_limit = i_c3.number_input(
         "ilp time_limit (s)",
         min_value=1.0, value=30.0, step=5.0,
         disabled=not is_ilp, key="cl_tl",
     )
-    ilp_eps = float(ilp_eps_raw) if ilp_eps_raw >= 0.0 else None
 
     is_spectral = method == "ours-spectral"
     enforce_dag = st.checkbox(
@@ -774,7 +780,7 @@ if "prune_graph" in st.session_state:
                     random_state=int(random_state),
                     n_init=int(n_init),
                     theta=float(ilp_theta),
-                    eps_causal=ilp_eps,
+                    lambda_causal=float(ilp_lambda),
                     ilp_time_limit=float(ilp_time_limit),
                 )
                 rows = clusters_to_supernodes(prune_graph, clusters)
@@ -972,6 +978,16 @@ if "sng" in st.session_state:
         with right:
             st.subheader("Settings")
             freeze_attn = st.checkbox("freeze attention", value=True, key="st_freeze")
+            w_lo, w_hi = st.columns(2)
+            layers_below = w_lo.number_input(
+                "layers below (l−)", min_value=0, max_value=12, value=1, step=1, key="st_below"
+            )
+            layers_above = w_hi.number_input(
+                "layers above (l+)", min_value=0, max_value=12, value=0, step=1, key="st_above",
+                help="Constrained direct-effect window [l−below, l+above] around a feature's "
+                "layer l; default [l−1, l] (paper). One pass per source layer. CLT features "
+                "decode only into layers ≥ l, so the l−1 slot carries no write.",
+            )
             edge_thr = st.slider(
                 "graph edge threshold (frac of max)", 0.0, 1.0, 0.1, 0.05, key="st_edge_thr"
             )
@@ -983,22 +999,52 @@ if "sng" in st.session_state:
                 import streamlit.components.v1 as components
 
                 from graph_visualization import create_graph_visualization
-                from summarization.summarize import steer_interventions
+                from summarization.summarize import steer_interventions_constrained
 
                 with st.spinner("Loading model (kept resident for the session)…"):
                     model = _load_model(model_name, transcoder, dtype_str, backend)
                 with st.spinner("Running steering intervention…"):
-                    _, orig_activations = model.get_activations(steer_prompt)
+                    # Tokenize once via ensure_tokenized (idempotent on an existing BOS) and
+                    # pass the TOKEN TENSOR — not the string — to both passes. The stored
+                    # prompt begins with a literal "<bos>"; feeding the string to the model
+                    # would let to_tokens prepend a *second* BOS (gemma default), shifting
+                    # every position by one so each node's ctx_idx reads the wrong activation
+                    # and steering silently becomes a no-op. The tensor path reconstructs the
+                    # exact sequence the graph (and thus ctx_idx) was built on.
+                    steer_tokens = model.ensure_tokenized(steer_prompt)
+                    _, orig_activations = model.get_activations(steer_tokens)
                     steered = [s for s in sng.supernodes if s.name in steered_factors]
-                    interventions = steer_interventions(
-                        steered, orig_activations, steered_factors
+
+                    # Constrained (direct-effect) patching: each feature active at layer l is
+                    # patched only over [l-below, l+above] (default [l-1, l]). feature_intervention
+                    # takes ONE global constrained_layers range, so per-feature windows require one pass per
+                    # source layer. Clean (unsteered) logits are the baseline; each group's
+                    # effect is its (constrained_logits - baseline). With a single source
+                    # layer this is exact; across layers the groups are combined as a sum of
+                    # direct effects (first-order in the residual stream).
+                    groups = steer_interventions_constrained(
+                        steered, orig_activations, steered_factors,
+                        layers_below=int(layers_below), layers_above=int(layers_above),
                     )
-                    new_logits, new_acts = model.feature_intervention(
-                        steer_prompt,
-                        interventions,
-                        freeze_attention=freeze_attn,
-                        return_activations=True,
+                    base_logits, _ = model.feature_intervention(
+                        steer_tokens, [], return_activations=False
                     )
+                    new_logits = base_logits.clone()
+                    new_acts = orig_activations.clone()
+                    for window, ivs in groups:
+                        group_logits, _ = model.feature_intervention(
+                            steer_tokens,
+                            ivs,
+                            constrained_layers=window,
+                            freeze_attention=freeze_attn,
+                            return_activations=False,
+                        )
+                        new_logits += group_logits - base_logits
+                        # Steered features are pinned to their patched value; downstream
+                        # activations stay frozen under direct-effect patching, so the viz
+                        # shows ~100% for unsteered nodes (expected).
+                        for layer, pos, feat, value in ivs:
+                            new_acts[layer, pos, feat] = value
 
                 ig = _steering_intervention_graph(
                     sng, steered_factors, steer_prompt, orig_activations, new_acts, edge_thr

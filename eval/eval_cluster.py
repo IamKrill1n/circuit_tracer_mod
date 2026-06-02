@@ -48,8 +48,8 @@ SUMMARY_COLUMNS = [
     "k_candidates",
     "n_supernodes",
     "L",
-    "L_cplx",
     "L_atom",
+    "L_atom_norm",
     "L_causal",
     "prune_loss",
     "sweep_path",
@@ -413,7 +413,7 @@ def _evaluate_solver(
     middle_id_to_local: dict[str, int],
     num_nodes: int,
     prune_loss: float,
-    lambdas: tuple[float, float, float],
+    lambda_causal: float,
     enforce_dag: bool,
 ) -> dict[str, Any]:
     """Full hyperparameter × K sweep; pick argmin(L) and write artifacts."""
@@ -439,9 +439,8 @@ def _evaluate_solver(
                     sng,
                     role_vectors_middle,
                     middle_id_to_local,
-                    prune_graph,
                     prune_loss=prune_loss,
-                    lambdas=lambdas,
+                    lambda_causal=lambda_causal,
                 )
             except Exception as exc:
                 logger.warning(
@@ -497,8 +496,8 @@ def _evaluate_solver(
         "k_candidates": json.dumps(list(map(int, k_candidates))),
         "n_supernodes": best.get("n_supernodes") if best else "",
         "L": best.get("L") if best else math.nan,
-        "L_cplx": best.get("L_cplx") if best else math.nan,
         "L_atom": best.get("L_atom") if best else math.nan,
+        "L_atom_norm": best.get("L_atom_norm") if best else math.nan,
         "L_causal": best.get("L_causal") if best else math.nan,
         "prune_loss": best.get("prune_loss") if best else math.nan,
         "sweep_path": str(sweep_path),
@@ -519,7 +518,7 @@ def evaluate_prune_graph(
     random_state: int,
     n_init: int,
     enforce_dag: bool,
-    lambdas: tuple[float, float, float],
+    lambda_causal: float,
 ) -> list[dict[str, Any]]:
     """Evaluate all 6 solvers on a single prune graph; return one summary row per solver."""
     prune_graph = load_prune_graph(str(graph_path), map_location=map_location)
@@ -633,27 +632,22 @@ def evaluate_prune_graph(
                 middle_id_to_local=middle_id_to_local,
                 num_nodes=num_nodes,
                 prune_loss=prune_loss,
-                lambdas=lambdas,
+                lambda_causal=lambda_causal,
                 enforce_dag=enforce_dag,
             )
         )
     return rows
 
 
-def _validate_lambdas(lambda_cplx: float, lambda_atom: float) -> tuple[float, float, float]:
-    if not (0.0 <= lambda_cplx <= 1.0 and 0.0 <= lambda_atom <= 1.0):
-        raise ValueError("--lambda-cplx and --lambda-atom must each be in [0, 1].")
-    lambda_causal = 1.0 - lambda_cplx - lambda_atom
-    if lambda_causal < -1e-9:
-        raise ValueError(
-            f"--lambda-cplx + --lambda-atom must be <= 1; got {lambda_cplx + lambda_atom:.4f}"
-        )
-    return lambda_cplx, lambda_atom, max(0.0, lambda_causal)
+def _validate_lambda_causal(lambda_causal: float) -> float:
+    if lambda_causal < 0.0:
+        raise ValueError(f"--lambda-causal must be non-negative, got {lambda_causal}")
+    return lambda_causal
 
 
 def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = Path(args.output_dir).expanduser().resolve()
-    lambdas = _validate_lambdas(args.lambda_cplx, args.lambda_atom)
+    lambda_causal = _validate_lambda_causal(args.lambda_causal)
     graph_paths = _discover_prune_graphs(
         args.input_path,
         node_threshold=args.node_threshold,
@@ -665,9 +659,7 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     )
     if args.node_threshold is not None:
         logger.info("Node-threshold filter: %g", args.node_threshold)
-    logger.info(
-        "lambdas: (cplx=%.4f, atom=%.4f, causal=%.4f)", lambdas[0], lambdas[1], lambdas[2]
-    )
+    logger.info("lambda_causal: %.4f", lambda_causal)
 
     summary_rows: list[dict[str, Any]] = []
     n_graphs = len(graph_paths)
@@ -684,7 +676,7 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 random_state=args.random_state,
                 n_init=args.n_init,
                 enforce_dag=args.enforce_dag,
-                lambdas=lambdas,
+                lambda_causal=lambda_causal,
             )
         )
         logger.info(
@@ -709,10 +701,11 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             "graph_paths": [str(path) for path in graph_paths],
             "output_dir": str(output_dir),
             "objective": (
-                "L = lambda_cplx L_cplx + lambda_atom L_atom + lambda_causal L_causal, "
-                "simplex weights (default 1/3 each) per paper/formulation.tex Section "
-                "(Objective). prune_loss = 1 - flow_completeness is reported alongside "
-                "but NOT folded into L. Each per-axis loss is in [0, 1], so L is in [0, 1]."
+                "L = (L_atom_norm + lambda_causal * L_causal) / (1 + lambda_causal), the "
+                "Stage-2 objective L_atom + lambda_causal * L_causal (Methodology Eq. "
+                "Lstage2) rescaled to [0, 1] with the normalised atomicity term. "
+                "prune_loss = 1 - flow_completeness is reported alongside but NOT folded "
+                "into L; complexity K is a hard constraint, not a loss term."
             ),
             "selection_protocol": (
                 "Each solver sweeps its hyperparameter grid x the shared "
@@ -722,9 +715,7 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "method_grid": METHOD_GRID_DECAY,
             "lambdas": {
-                "lambda_cplx": lambdas[0],
-                "lambda_atom": lambdas[1],
-                "lambda_causal": lambdas[2],
+                "lambda_causal": lambda_causal,
             },
             "solvers": [
                 "ours-spectral-arith",
@@ -745,9 +736,7 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 "map_location": args.map_location,
                 "random_state": args.random_state,
                 "n_init": args.n_init,
-                "lambda_cplx": lambdas[0],
-                "lambda_atom": lambdas[1],
-                "lambda_causal": lambdas[2],
+                "lambda_causal": lambda_causal,
             },
         },
     )
@@ -766,8 +755,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Evaluate clustering solvers on saved prune-graph .pt files under the "
-            "simplex-weighted L = lambda_cplx L_cplx + lambda_atom L_atom + "
-            "lambda_causal L_causal objective from paper/formulation.tex."
+            "Stage-2 objective L = L_atom + lambda_causal * L_causal (Methodology "
+            "Eq. Lstage2), with complexity K as a hard constraint."
         )
     )
     parser.add_argument(
@@ -810,16 +799,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--n-init", type=int, default=20)
     parser.add_argument(
-        "--lambda-cplx",
+        "--lambda-causal",
         type=float,
-        default=1.0 / 3.0,
-        help="Simplex weight on L_cplx (default 1/3).",
-    )
-    parser.add_argument(
-        "--lambda-atom",
-        type=float,
-        default=1.0 / 3.0,
-        help="Simplex weight on L_atom (default 1/3). lambda_causal = 1 - lambda_cplx - lambda_atom.",
+        default=1.0,
+        help="Trade-off weight (>= 0) on L_causal in L = L_atom + lambda_causal * L_causal "
+        "(default 1.0). 0 = pure atomicity.",
     )
     return parser
 
@@ -836,8 +820,8 @@ def main() -> None:
     if not args.input_path:
         args.input_path = _default_input_paths()
     logger.info(
-        "=== Clustering evaluation (simplex-weighted L = lambda_cplx L_cplx + "
-        "lambda_atom L_atom + lambda_causal L_causal; per-solver best) ==="
+        "=== Clustering evaluation (L = L_atom + lambda_causal * L_causal; "
+        "per-solver best) ==="
     )
     result = run_evaluation(args)
     logger.info("output_dir: %s", result["output_dir"])

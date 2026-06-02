@@ -82,10 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--n-init", type=int, default=20)
 
-    # Objective weights (lambda_cplx, lambda_atom, lambda_causal); must sum to 1.
-    parser.add_argument("--lambda-cplx", type=float, default=1.0 / 3.0)
-    parser.add_argument("--lambda-atom", type=float, default=1.0 / 3.0)
-    parser.add_argument("--lambda-causal", type=float, default=1.0 / 3.0)
+    # Stage-2 trade-off weight on the causal loss: L = L_atom + lambda_causal * L_causal.
+    parser.add_argument("--lambda-causal", type=float, default=1.0)
 
     # Outputs.
     parser.add_argument("--supernodes-out", type=str, default="temp_graph_files/supernodes.json")

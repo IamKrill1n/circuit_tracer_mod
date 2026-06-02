@@ -187,7 +187,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             method="ilp",
             max_layer_span=args.max_layer_span,
             max_sn=args.max_sn,
-            lambdas=(args.lambda_cplx, args.lambda_atom, args.lambda_causal),
+            lambda_causal=args.lambda_causal,
             ilp_time_limit=args.ilp_time_limit,
         )
         resolved_k = sum(1 for s in rows if s.type == "features")
@@ -203,7 +203,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 mean_method=args.mean_method,
                 random_state=args.random_state,
                 n_init=args.n_init,
-                lambdas=(args.lambda_cplx, args.lambda_atom, args.lambda_causal),
+                lambda_causal=args.lambda_causal,
             )
         if resolved_k is None:
             resolved_k = 7

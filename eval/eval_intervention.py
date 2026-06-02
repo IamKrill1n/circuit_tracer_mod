@@ -1,10 +1,12 @@
 """Causal validation of supernode clusters via feature interventions.
 
 For each supernode produced by spectral and agglomerative clustering:
-  Exp B: steer the whole SN (value = factor * orig_activation; factor=-1 negates,
-         matching the paper) -> measure the effect on every other SN (downstream
-         feature SNs: activation ratio; logit SNs: Δ token probability) and on the
-         target token (Δ probability). factor=0 reproduces pure ablation/knockout.
+  Exp B: constrained-steer the whole SN (value = factor * orig_activation; factor=-1
+         negates, matching the paper; 0 ablates) over the direct-effect window
+         [l-below, l+above] (default [l-1, l]) -> measure the effect on every other SN
+         (downstream feature SNs: activation ratio; logit SNs: Δ token probability) and
+         on the target token (Δ probability). Edge faithfulness: fraction of summary edges
+         whose downstream sign matches sign(edge_weight)·sign(Δa_source), |weight|-weighted.
   Exp D: ablate each node individually -> measure intra-cluster cosine similarity
          of logit-delta vectors (vs. inter-cluster baseline)
 
@@ -161,23 +163,37 @@ def steer_source_effects(
     model: ReplacementModel,
     sng: SummaryGraph,
     source_sn: Supernode,
-    prompt: str,
+    inputs: str | torch.Tensor,
     orig_logits: torch.Tensor,
     orig_activations: torch.Tensor,
     factor: float,
+    layers_below: int = 1,
+    layers_above: int = 0,
 ) -> tuple[list[dict], list[dict]]:
-    """Steer one supernode -> effect on every other SN + the target token.
+    """Constrained-steer one supernode -> effect on every other SN + the target token.
 
-    Runs a single steering intervention and reports, for ``source_sn``:
+    Runs one *constrained* (direct-effect) steering pass over the window
+    [layer_min-layers_below, layer_max+layers_above] (default [l-1, l], the paper's range), so
+    only the source's own decode enters the residual stream — CLTs decode only into layers >= l,
+    so the l-1 slot carries no write. Reports, for ``source_sn``:
       - feature target SNs: activation ratio (new/orig) and signed delta,
       - logit target SNs: mean Δ token probability,
-      - the global target token: Δ probability.
-    Returns (effect_rows, target_token_rows). Rows omit graph/method, which the
-    eval caller attaches; app.py uses them directly. ``sn_adj[t, s]`` = source s → target t.
+      - the global target token: Δ probability,
+      - per-edge sign consistency: does sign(edge_weight)·sign(Δa_source) match the measured
+        effect's sign? The source's own change is known by construction (value=factor·orig ⇒
+        Δa_source=(factor-1)·orig); constrained patching alters the decode, not the encoder read,
+        so it is not recoverable from the cache.
+    Returns (effect_rows, target_token_rows). ``sn_adj[t, s]`` = source s → target t.
     """
     interventions = _steer_interventions(source_sn, orig_activations, factor)
+    n_layers = orig_activations.shape[0]
+    window = range(
+        max(0, source_sn.layer_min - layers_below),
+        min(n_layers, source_sn.layer_max + layers_above + 1),
+    )
     new_logits, new_acts = model.feature_intervention(
-        prompt, interventions, return_activations=True
+        inputs, interventions, constrained_layers=window,
+        freeze_attention=True, return_activations=True,
     )
     orig_probs = _last_probs(orig_logits)
     new_probs = _last_probs(new_logits)
@@ -185,6 +201,9 @@ def steer_source_effects(
     sn_adj = sng.adj_matrix  # [tgt, src]
     names = [s.name for s in sng.supernodes]
     src_idx = names.index(source_sn.name)
+
+    src_orig = _mean_activation(source_sn, orig_activations)
+    src_delta = (factor - 1.0) * src_orig  # the change the steering imposes on the source
 
     effect_rows: list[dict] = []
     for t_idx, tgt in enumerate(sng.supernodes):
@@ -203,11 +222,19 @@ def steer_source_effects(
         }
         if tgt.type == "logit":
             row["prob_delta"] = _logit_supernode_prob_delta(tgt, new_probs, orig_probs)
+            tgt_delta = row["prob_delta"]
         else:
             orig_mean = _mean_activation(tgt, orig_activations)
             new_mean = _mean_activation(tgt, new_acts)
             row["activation_ratio"] = new_mean / (orig_mean + 1e-9)
             row["activation_delta"] = new_mean - orig_mean
+            tgt_delta = row["activation_delta"]
+        # Edge-faithfulness sign test: direct effect is Δtgt ≈ edge_weight · Δa_source.
+        predicted = float(np.sign(edge_weight) * np.sign(src_delta))
+        measured = float(np.sign(tgt_delta))
+        row["predicted_sign"] = predicted
+        row["measured_sign"] = measured
+        row["sign_consistent"] = bool(predicted != 0.0 and measured != 0.0 and predicted == measured)
         effect_rows.append(row)
 
     target_rows: list[dict] = []
@@ -292,12 +319,14 @@ def _build_sngs(
 def _evaluate_sng(
     model: ReplacementModel,
     sng: SummaryGraph,
-    prompt: str,
+    inputs: str | torch.Tensor,
     orig_logits: torch.Tensor,
     orig_activations: torch.Tensor,
     graph_name: str,
     method: str,
     factor: float,
+    layers_below: int,
+    layers_above: int,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     edge_rows: list[dict] = []
     sn_rows: list[dict] = []
@@ -313,11 +342,12 @@ def _evaluate_sng(
         if not interventions:
             continue
 
-        # Exp D: per-node ablation to measure logit-push direction of each feature
+        # Exp D: per-node ablation to measure logit-push direction of each feature. Left
+        # unconstrained on purpose — this is a cluster-cohesion signature, not an edge test.
         deltas = []
         for layer, pos, feat, val in interventions:
             new_logits, _ = model.feature_intervention(
-                prompt, [(layer, pos, feat, val)], return_activations=False
+                inputs, [(layer, pos, feat, val)], return_activations=False
             )
             deltas.append(_last_logits(new_logits) - orig_last)
         sn_deltas[sn.name] = torch.stack(deltas)  # [n_nodes, vocab]
@@ -331,9 +361,10 @@ def _evaluate_sng(
             }
         )
 
-        # Exp B: steer the whole supernode -> effect on every other SN + the target token
+        # Exp B: constrained-steer the supernode -> effect on every other SN + the target token
         eff_rows, tgt_rows = steer_source_effects(
-            model, sng, sn, prompt, orig_logits, orig_activations, factor
+            model, sng, sn, inputs, orig_logits, orig_activations, factor,
+            layers_below=layers_below, layers_above=layers_above,
         )
         for r in eff_rows + tgt_rows:
             r["graph"] = graph_name
@@ -355,9 +386,16 @@ def evaluate_graph(
     prune_graph: PruneGraph,
     graph_name: str,
     factor: float,
+    layers_below: int,
+    layers_above: int,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     prompt: str = prune_graph.metadata["prompt"]
-    orig_logits, orig_activations = model.get_activations(prompt)
+    # The stored prompt begins with a literal "<bos>"; re-feeding it as a raw string would let
+    # the tokenizer prepend a *second* BOS (gemma default), shifting every position by one so each
+    # node's ctx_idx reads the wrong activation and steering silently no-ops. ensure_tokenized is
+    # idempotent on an existing BOS — tokenize once and reuse the tensor for every pass.
+    inputs = model.ensure_tokenized(prompt)
+    orig_logits, orig_activations = model.get_activations(inputs)
 
     sngs = _build_sngs(prune_graph)
     all_edge: list[dict] = []
@@ -366,7 +404,8 @@ def evaluate_graph(
     for method, sng in sngs.items():
         logger.info("  method=%s  n_supernodes=%d", method, len(sng.supernodes))
         edge_rows, sn_rows, logit_rows = _evaluate_sng(
-            model, sng, prompt, orig_logits, orig_activations, graph_name, method, factor
+            model, sng, inputs, orig_logits, orig_activations, graph_name, method, factor,
+            layers_below, layers_above,
         )
         all_edge.extend(edge_rows)
         all_sn.extend(sn_rows)
@@ -395,6 +434,19 @@ def _compute_summary(
         logit_items = [r for r in items if r["tgt_type"] == "logit"]
         mean_logit_sn = float(np.mean([abs(r["prob_delta"]) for r in logit_items])) if logit_items else float("nan")
 
+        # Edge faithfulness: over all real (nonzero) edges with a measurable source & target
+        # effect, fraction whose downstream sign matches sign(edge_weight)·sign(Δa_source),
+        # |edge_weight|-weighted so the structural edges dominate.
+        sign_items = [
+            r for r in items
+            if r["edge_weight"] != 0.0 and r["predicted_sign"] != 0.0 and r["measured_sign"] != 0.0
+        ]
+        total_w = sum(abs(r["edge_weight"]) for r in sign_items)
+        sign_consistency = (
+            sum(abs(r["edge_weight"]) for r in sign_items if r["sign_consistent"]) / total_w
+            if total_w else float("nan")
+        )
+
         tgt_items = [r for r in logit_rows if r["graph"] == graph and r["method"] == method]
         mean_target = float(np.mean([abs(r["prob_delta"]) for r in tgt_items])) if tgt_items else float("nan")
 
@@ -408,6 +460,8 @@ def _compute_summary(
                 "graph": graph,
                 "method": method,
                 "n_edges": len(feat_items),
+                "n_sign_edges": len(sign_items),
+                "sign_consistency": sign_consistency,
                 "spearman_edge_effect": rho_edge,
                 "mean_target_abs_prob_delta": mean_target,
                 "mean_logit_sn_abs_prob_delta": mean_logit_sn,
@@ -447,6 +501,19 @@ def main() -> None:
         help="Multiplicative steering factor (value = factor * orig_activation); "
         "-1 negates (paper), 0 reproduces ablation/knockout.",
     )
+    parser.add_argument(
+        "--layers-below",
+        type=int,
+        default=1,
+        help="Constrained-patching window low end: [l-below, l+above] per source. "
+        "Default 1 (with --layers-above 0 ⇒ the paper's [l-1, l] direct-effect window).",
+    )
+    parser.add_argument(
+        "--layers-above",
+        type=int,
+        default=0,
+        help="Constrained-patching window high end (see --layers-below).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -475,7 +542,8 @@ def main() -> None:
         logger.info("Processing %s ...", graph_name)
         prune_graph = load_prune_graph(str(path))
         edge_rows, sn_rows, logit_rows = evaluate_graph(
-            model, prune_graph, graph_name, args.steer_factor
+            model, prune_graph, graph_name, args.steer_factor,
+            args.layers_below, args.layers_above,
         )
         all_edge.extend(edge_rows)
         all_sn.extend(sn_rows)
@@ -489,12 +557,13 @@ def main() -> None:
     summary = _compute_summary(all_edge, all_sn, all_logit)
     _write_csv(args.output_dir / "summary.csv", summary)
 
-    header = f"{'graph':30s} {'method':15s} {'n_edges':>8s} {'ρ(edge,eff)':>12s} {'tgtΔp':>8s} {'logitΔp':>8s} {'intra':>7s} {'inter':>7s} {'gap':>7s}"
+    header = f"{'graph':30s} {'method':15s} {'n_edges':>8s} {'signOK':>7s} {'ρ(edge,eff)':>12s} {'tgtΔp':>8s} {'logitΔp':>8s} {'intra':>7s} {'inter':>7s} {'gap':>7s}"
     print(header)
     print("-" * len(header))
     for row in summary:
         print(
             f"{row['graph']:30s} {row['method']:15s} {row['n_edges']:>8d} "
+            f"{row['sign_consistency']:>7.3f} "
             f"{row['spearman_edge_effect']:>12.3f} {row['mean_target_abs_prob_delta']:>8.3f} "
             f"{row['mean_logit_sn_abs_prob_delta']:>8.3f} {row['mean_intra_cosine']:>7.3f} "
             f"{row['mean_inter_cosine']:>7.3f} {row['mean_cosine_gap']:>7.3f}"

@@ -279,3 +279,48 @@ def steer_interventions(
             if layer < n_layers and pos < n_pos and feat < d_tc:
                 out.append((layer, pos, feat, factor * orig_activations[layer, pos, feat].item()))
     return out
+
+
+def constrained_window(layer: int, n_layers: int, layers_below: int, layers_above: int) -> range:
+    """Constrained-patching window around a source ``layer``: [layer-below, layer+above].
+
+    Clamped to valid layers. Default (below=1, above=0) gives the paper's [l-1, l] range.
+    CLT features decode only into layers >= their own, so the l-1 slot carries no write —
+    the effective direct effect is the source layer's own decode.
+    """
+    return range(max(0, layer - layers_below), min(layer + layers_above + 1, n_layers))
+
+
+def steer_interventions_constrained(
+    supernodes: list[Supernode],
+    orig_activations: torch.Tensor,
+    factors: dict[str, float] | float,
+    layers_below: int = 1,
+    layers_above: int = 0,
+) -> list[tuple[range, list[tuple[int, int, int, float]]]]:
+    """Constrained (direct-effect) steering, grouped per activation layer.
+
+    Same per-feature value as ``steer_interventions`` (factor * orig_activation at the
+    feature's active position), but returns one group per source layer ``l`` together with
+    its constrained window ``[l-layers_below, l+layers_above]`` (see ``constrained_window``).
+    Each group is meant for a *separate* ``feature_intervention(..., constrained_layers=window)``
+    pass — ``feature_intervention`` takes a single global range, so per-feature windows
+    require per-layer passes. The default (below=1, above=0) gives the paper's [l-1, l]
+    window. ``orig_activations``: [n_layers, n_pos, d_transcoder].
+    """
+    n_layers, n_pos, d_tc = orig_activations.shape
+    by_layer: dict[int, list[tuple[int, int, int, float]]] = {}
+    for sn in supernodes:
+        factor = factors if isinstance(factors, (int, float)) else factors[sn.name]
+        for n in sn.features:
+            if n.feature_type != "cross layer transcoder":
+                continue
+            layer, feat = int(n.node_id.split("_")[0]), int(n.node_id.split("_")[1])
+            pos = n.ctx_idx
+            if layer < n_layers and pos < n_pos and feat < d_tc:
+                value = factor * orig_activations[layer, pos, feat].item()
+                by_layer.setdefault(layer, []).append((layer, pos, feat, value))
+    return [
+        (constrained_window(layer, n_layers, layers_below, layers_above), ivs)
+        for layer, ivs in sorted(by_layer.items())
+    ]

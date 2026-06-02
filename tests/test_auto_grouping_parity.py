@@ -68,9 +68,9 @@ def test_find_best_k_returns_L_metrics_and_picks_argmin() -> None:
         max_sn=None,
     )
     assert best_k in results
-    # Each entry should carry the closed-form objective terms and the partition.
+    # Each entry should carry the Stage-2 objective terms and the partition.
     for v in results.values():
-        assert {"L", "L_cplx", "L_atom", "L_causal", "prune_loss"} <= set(v.keys())
+        assert {"L", "L_atom", "L_atom_norm", "L_causal", "prune_loss"} <= set(v.keys())
         assert "final_supernodes" in v
         assert 0.0 <= float(v["L"]) <= 1.0
     # best_k must minimize L.
@@ -78,17 +78,17 @@ def test_find_best_k_returns_L_metrics_and_picks_argmin() -> None:
     assert best_L == min(float(v["L"]) for v in results.values())
 
 
-def test_find_best_k_respects_custom_lambdas() -> None:
+def test_find_best_k_high_lambda_causal_prefers_more_clusters() -> None:
     prune_graph = _build_test_graph()
-    # All weight on L_cplx -> argmin should pick the smallest k (fewer middle supernodes).
-    _, results_cplx = find_best_k(
-        prune_graph,
-        k_min_override=2,
-        k_max_override=3,
-        max_sn=None,
-        lambdas=(1.0, 0.0, 0.0),
+    # lambda_causal=0 minimizes only atomicity; a large lambda_causal also penalizes
+    # intra-supernode edge mass, so it never prefers fewer clusters than lambda=0.
+    best_lo, _ = find_best_k(
+        prune_graph, k_min_override=2, k_max_override=3, max_sn=None, lambda_causal=0.0
     )
-    assert results_cplx[2]["L"] <= results_cplx[3]["L"]
+    best_hi, _ = find_best_k(
+        prune_graph, k_min_override=2, k_max_override=3, max_sn=None, lambda_causal=100.0
+    )
+    assert best_hi >= best_lo
 
 
 def test_find_best_k_for_clusterer_picks_argmin_L() -> None:

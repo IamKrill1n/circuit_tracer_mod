@@ -208,19 +208,38 @@ def test_pi_is_dag_on_complex_input() -> None:
 # --- compute_L_causal integration -------------------------------------------
 
 
-def test_compute_L_causal_uses_post_pi_mass() -> None:
+def test_compute_L_causal_is_internal_mass_fraction() -> None:
+    # Eq. Lcausal: fraction of pruned edge mass absorbed *inside* a supernode.
+    from summarization.scoring import compute_L_causal
+
+    a = _feat_node("a", 0, layer=1)
+    b = _feat_node("b", 1, layer=2)
+    c = _feat_node("c", 2, layer=2)
+    ab = Supernode("AB", [a, b], "features", 1, 2)  # a, b merged: a->b edge is internal
+    c_sn = Supernode("C", [c], "features", 2, 2)
+    pruned_adj = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],  # to a
+            [2.0, 0.0, 0.0],  # to b: from a (2.0) — internal to AB
+            [1.0, 3.0, 0.0],  # to c: from a (1.0), from b (3.0) — external
+        ],
+        dtype=torch.float32,
+    )
+    sng = SummaryGraph(supernodes=[ab, c_sn], pruned_adj=pruned_adj)
+
+    internal = 2.0           # only a->b lives inside a supernode
+    total = 2.0 + 1.0 + 3.0  # all pruned edge mass
+    assert compute_L_causal(sng) == pytest.approx(internal / total)
+
+
+def test_compute_L_causal_zero_for_all_singletons() -> None:
     from summarization.scoring import compute_L_causal
 
     a = Supernode("A", [_feat_node("a", 0, layer=1)], "features", 1, 1)
     b = Supernode("B", [_feat_node("b", 1, layer=2)], "features", 2, 2)
-    block = np.array([[0.0, 1.0], [3.0, 0.0]])  # antiparallel
+    block = np.array([[0.0, 1.0], [3.0, 0.0]])  # no two nodes share a supernode
     sng = _sng_from_blocks([a, b], block)
-
-    total_pruned_mass = float(np.abs(sng.pruned_adj.numpy()).sum())  # 4.0
-    surviving_sn_mass = float(np.abs(sng.adj_matrix).sum())          # 2.0 (post-π)
-    expected = 1.0 - surviving_sn_mass / total_pruned_mass
-
-    assert compute_L_causal(sng) == pytest.approx(expected)
+    assert compute_L_causal(sng) == pytest.approx(0.0)
 
 
 # --- Plain block-sum sanity --------------------------------------------------
