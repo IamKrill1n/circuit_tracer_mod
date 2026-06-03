@@ -625,16 +625,11 @@ if "attr_graph" in st.session_state:
     alpha = st.slider("alpha", 0.0, 1.0, 0.5, step=0.05, key="pr_alpha")
     keep_all = st.checkbox("keep_all_tokens_and_logits", value=True, key="pr_keep")
     filter_act = st.checkbox(
-        "filter_act_density (Neuronpedia clerp + density filter, post-prune)", value=False, key="pr_filter"
+        "filter_act_density (activation-density filter from feature dashboards, post-prune)", value=False, key="pr_filter"
     )
     f_c1, f_c2 = st.columns(2)
     act_lb = f_c1.number_input("act_density_lb", value=2e-5, format="%.2e", key="pr_lb")
     act_ub = f_c2.number_input("act_density_ub", value=0.1, format="%.4f", key="pr_ub")
-    f_c3, f_c4 = st.columns(2)
-    act_model_id = f_c3.text_input("neuronpedia model_id", value="gemma-2-2b", key="pr_np_model")
-    act_source_set = f_c4.text_input(
-        "neuronpedia source_set", value="", key="pr_np_source", help="e.g. clt-hp; required when filter_act_density is on"
-    )
 
     if st.button("Run prune", type="primary"):
         try:
@@ -677,11 +672,9 @@ if "attr_graph" in st.session_state:
                     keep_all=keep_all,
                 )
             if filter_act:
-                with st.spinner("Annotating + filtering by activation density (Neuronpedia)…"):
+                with st.spinner("Filtering by activation density (feature dashboards)…"):
                     pg = filter_act_density(
                         pg,
-                        source_set=act_source_set or None,
-                        model_id=act_model_id or None,
                         act_density_lb=float(act_lb),
                         act_density_ub=float(act_ub),
                     )
@@ -978,13 +971,14 @@ if "sng" in st.session_state:
             freeze_attn = st.checkbox("freeze attention", value=True, key="st_freeze")
             w_lo, w_hi = st.columns(2)
             layers_below = w_lo.number_input(
-                "layers below (l−)", min_value=0, max_value=12, value=1, step=1, key="st_below"
+                "layers below (l−)", min_value=0, max_value=12, value=0, step=1, key="st_below"
             )
             layers_above = w_hi.number_input(
-                "layers above (l+)", min_value=0, max_value=12, value=0, step=1, key="st_above",
+                "layers above (l+)", min_value=0, max_value=12, value=1, step=1, key="st_above",
                 help="Constrained direct-effect window [l−below, l+above] around a feature's "
-                "layer l; default [l−1, l] (paper). One pass per source layer. CLT features "
-                "decode only into layers ≥ l, so the l−1 slot carries no write.",
+                "layer l; default [l, l+1] (paper Fig. 9: own-layer decode + first cross-layer "
+                "write). One pass per source layer. CLT features decode only into layers ≥ l, "
+                "so any slot below l is empty.",
             )
             edge_thr = st.slider(
                 "graph edge threshold (frac of max)", 0.0, 1.0, 0.1, 0.05, key="st_edge_thr"
@@ -1014,7 +1008,7 @@ if "sng" in st.session_state:
                     steered = [s for s in sng.supernodes if s.name in steered_factors]
 
                     # Constrained (direct-effect) patching: each feature active at layer l is
-                    # patched only over [l-below, l+above] (default [l-1, l]). feature_intervention
+                    # patched only over [l-below, l+above] (default [l, l+1], paper Fig. 9). feature_intervention
                     # takes ONE global constrained_layers range, so per-feature windows require one pass per
                     # source layer. Clean (unsteered) logits are the baseline; each group's
                     # effect is its (constrained_logits - baseline). With a single source

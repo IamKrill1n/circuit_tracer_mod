@@ -1,4 +1,3 @@
-from api import get_feature
 from config import get_env
 from dataclasses import replace
 from typing import List, Dict, Any
@@ -7,39 +6,9 @@ import re
 
 import torch
 
+from summarization.feature_source import fetch_feature_info
 from summarization.prune import PruneGraph, remove_dangling_nodes
 from summarization.utils import _build_index_sets
-
-
-def _fetch_feature_json(model_id: str, source_set: str, node_id: str) -> dict | None:
-    """Fetch a CLT feature's Neuronpedia payload; None if the request fails.
-
-    node_id format is ``{layer}_{index}_{ctx_idx}``; the Neuronpedia layer key is
-    ``{layer}-{source_set}``.
-    """
-    layer, index = node_id.split("_")[:2]
-    layer_key = layer + "-" + source_set
-    status, data = get_feature(modelId=model_id, layer=layer_key, index=int(index))
-    if status != 200:
-        print(f"Failed node={node_id} modelId={model_id} layer={layer_key} status={status} body={data[:200]}")
-        return None
-    return json.loads(data)
-
-
-def _resolve_neuronpedia_ids(
-    metadata: dict[str, Any], model_id: str | None, source_set: str | None
-) -> tuple[str, str]:
-    """Derive the Neuronpedia modelId + source_set from graph metadata (args win)."""
-    raw_model_id = metadata.get("model_name") or metadata.get("scan", "")
-    # Strip HF "<org>/" prefix (e.g. "google/gemma-2-2b" -> "gemma-2-2b") to match Neuronpedia.
-    model_id = model_id or (raw_model_id.split("/", 1)[-1] if raw_model_id else "")
-    info = metadata.get("info", {})
-    source_set = (
-        source_set
-        or info.get("neuronpedia_source_set")
-        or (info.get("source_urls", [""])[0].split("/")[-1] if info.get("source_urls") else "")
-    )
-    return model_id or "", source_set or ""
 
 
 def _subset_prune_graph(prune_graph: PruneGraph, nodes: list, kept: torch.Tensor) -> PruneGraph:
@@ -62,22 +31,22 @@ def _subset_prune_graph(prune_graph: PruneGraph, nodes: list, kept: torch.Tensor
 def filter_act_density(
     prune_graph: PruneGraph,
     *,
-    source_set: str | None = None,
-    model_id: str | None = None,
+    scan: str | None = None,
+    features_dir: str | None = None,
     act_density_lb: float = 2e-5,
     act_density_ub: float = 0.1,
 ) -> PruneGraph:
-    """Annotate clerps from Neuronpedia and drop features with out-of-band activation density.
+    """Drop CLT features whose activation density is out of band, using the feature dashboards.
 
     Returns a new ``PruneGraph``. Embedding/logit nodes are always kept; dangling
-    feature/error nodes left after dropping are pruned. Requires a Neuronpedia
-    source_set (from ``prune_graph.metadata`` or passed explicitly).
+    feature/error nodes left after dropping are pruned. ``scan`` is the transcoder repo id
+    (from ``prune_graph.metadata["scan"]`` or passed explicitly).
     """
-    model_id, source_set = _resolve_neuronpedia_ids(prune_graph.metadata, model_id, source_set)
-    if not source_set:
+    scan = scan or prune_graph.metadata.get("scan", "")
+    if not scan:
         raise ValueError(
-            "filter_act_density requires a Neuronpedia source_set. "
-            "Pass source_set=... (e.g. 'clt-hp') when the graph metadata lacks one."
+            "filter_act_density requires a transcoder scan. "
+            "Pass scan=... when the graph metadata lacks one."
         )
 
     nodes = [replace(n) for n in prune_graph.nodes]
@@ -94,15 +63,10 @@ def filter_act_density(
             continue
         if node.feature_type != "cross layer transcoder":
             continue
-        info = _fetch_feature_json(model_id, source_set, node.node_id)
+        info = fetch_feature_info(scan, node.node_id, features_dir=features_dir)
         if info is None:
             continue
-        explanations = info.get("explanations", [])
-        clerp = explanations[0].get("description", "") if explanations else ""
-        act_density = info.get("frac_nonzero", 0)
-        if nodes[i].clerp == "":
-            nodes[i] = replace(nodes[i], clerp=clerp)
-        if act_density > act_density_ub or act_density < act_density_lb:
+        if info.act_density > act_density_ub or info.act_density < act_density_lb:
             node_mask[i] = False
             edge_mask[i, :] = False
             edge_mask[:, i] = False
@@ -203,8 +167,7 @@ def classify_features(
     """
 
     feature_type = {}
-    modelId = metadata.get("scan", "")
-    source_set = metadata['info'].get("neuronpedia_source_set", "")
+    scan = metadata.get("scan", "")
     # Get info for each node and classify
     for node in node_ids:
         if attr[node].get("feature_type") == 'embedding':
@@ -214,32 +177,15 @@ def classify_features(
             feature_type[node] = "logit"
             continue
 
-        json_data = _fetch_feature_json(modelId, source_set, node)
-        if json_data is None:
+        info = fetch_feature_info(scan, node)
+        if info is None:
             continue
-        explanations = json_data.get("explanations", [])
-        clerp = ""
-        if isinstance(explanations, list) and explanations:
-            first_explanation = explanations[0]
-            if isinstance(first_explanation, dict):
-                clerp = first_explanation.get("description", "")
-        act_density = json_data.get("frac_nonzero", 0)
         # remove too frequently activated features
-        if act_density > 0.1:
+        if info.act_density > 0.1:
             feature_type[node] = "trash"
             continue
-        top_activations = json_data.get("activations", [])[:10]
-        top_tokens = [prompt['tokens'][prompt['maxValueTokenIndex']] for prompt in top_activations]
-        top_next_tokens = [prompt['tokens'][prompt['maxValueTokenIndex'] + 1] if prompt['maxValueTokenIndex'] + 1 < len(prompt['tokens']) else "" for prompt in top_activations]
-        
-        top_logits = json_data.get("pos_str", [])
-
-        feature_type[node] = heuristic_classify(clerp, top_tokens, top_next_tokens, top_logits)
-
-        # print("Clerp: ", clerp)
-        # print("Top tokens: ", top_tokens)
-        # print("Top next tokens: ", top_next_tokens)
-        # print("Activation density: ", act_density)
+        # clerp dropped (only supernode names are kept); classify from tokens + logits.
+        feature_type[node] = heuristic_classify("", info.top_tokens, info.top_next_tokens, info.top_logits)
 
     return feature_type
 
@@ -357,8 +303,7 @@ def classify_features_with_llm(
     if not node_ids:
         return {}
 
-    modelId = metadata.get("scan", "")
-    source_set = metadata['info'].get("neuronpedia_source_set", "")
+    scan = metadata.get("scan", "")
 
     result: Dict[str, str] = {}
 
@@ -376,35 +321,24 @@ def classify_features_with_llm(
     if not clt_ids:
         return result
 
-    # Fetch Neuronpedia data, apply density pre-filter, build LLM feature list
+    # Fetch dashboard data, apply density pre-filter, build LLM feature list
     features = []
     llm_ids = []
     for nid in clt_ids:
-        json_data = _fetch_feature_json(modelId, source_set, nid)
-        if json_data is None:
+        info = fetch_feature_info(scan, nid)
+        if info is None:
             continue
-        act_density = json_data.get("frac_nonzero", 0)
-        if act_density > 0.1:
+        if info.act_density > 0.1:
             result[nid] = "trash"
             continue
 
-        explanations = json_data.get("explanations", [])
-        clerp = explanations[0].get("description", "") if explanations else attr[nid].get("clerp", "")
-        top_activations = json_data.get("activations", [])[:10]
-        top_tokens = [p["tokens"][p["maxValueTokenIndex"]] for p in top_activations]
-        top_next_tokens = [
-            p["tokens"][p["maxValueTokenIndex"] + 1]
-            if p["maxValueTokenIndex"] + 1 < len(p["tokens"]) else ""
-            for p in top_activations
-        ]
-
         features.append({
             "id": nid,
-            "label": clerp,
-            "top_tokens": top_tokens,
-            "top_next_tokens": [t for t in top_next_tokens if t],
-            "top_logits": json_data.get("pos_str", [])[:10],
-            "act_density": round(act_density, 4),
+            "label": attr[nid].get("clerp", ""),  # per-feature clerp no longer fetched
+            "top_tokens": info.top_tokens,
+            "top_next_tokens": [t for t in info.top_next_tokens if t],
+            "top_logits": info.top_logits,
+            "act_density": round(info.act_density, 4),
         })
         llm_ids.append(nid)
 

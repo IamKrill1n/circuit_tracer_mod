@@ -168,12 +168,10 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         keep_all_tokens_and_logits=args.keep_all_tokens_and_logits,
     )
 
-    # Stage 1b (optional): Neuronpedia clerp annotation + activation-density filter.
+    # Stage 1b (optional): activation-density filter from the feature dashboards.
     if args.classify_filter:
         prune_graph = filter_act_density(
             prune_graph,
-            source_set=args.source_set,
-            model_id=args.model_id,
             act_density_lb=args.act_density_lb,
             act_density_ub=args.act_density_ub,
         )

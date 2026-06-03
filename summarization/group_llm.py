@@ -10,8 +10,8 @@ from typing import Any, Dict, List
 from google import genai
 from google.genai import types as genai_types
 
-from api import get_feature
 from config import get_env
+from summarization.feature_source import fetch_feature_info
 from summarization.summarize import Node, Supernode, SummaryGraph
 
 
@@ -95,58 +95,22 @@ def _openai_generate_with_retry(
             time.sleep(delay)
 
 
-def _parse_metadata(metadata: dict) -> tuple[str, str]:
-    """Return (model_id, source_set) extracted from graph metadata."""
-    # model_name is the Neuronpedia modelId (base LM); scan is the SAE scan ID
-    model_id = metadata.get("model_name") or metadata.get("scan", "")
-    info = metadata.get("info", {})
-    source_set = info.get("neuronpedia_source_set") or (
-        info.get("source_urls", [""])[0].split("/")[-1] if info.get("source_urls") else ""
-    )
-    return model_id, source_set
-
-
 def _fetch_feature_context(
-    model_id: str,
-    source_set: str,
+    scan: str,
     node_id: str,
     top_n: int = 2,
     top_logits_n: int = 10,
 ) -> dict[str, Any] | None:
-    """Fetch clerp, top-N activation contexts, and top positive logits for one feature.
+    """Top-N activation contexts + top positive logits for one feature from its dashboard.
 
-    Returns ``{"clerp": str, "contexts": [str, ...], "top_logits": [str, ...]}`` or
-    ``None`` on failure (network error, bad status, unexpected node format).
+    Returns ``{"clerp": str, "contexts": [str, ...], "top_logits": [str, ...]}`` or ``None``
+    for embeddings / fetch failures. ``clerp`` is always "" — per-feature clerps are no longer
+    fetched; ``_build_feature_block`` falls back to the node's own clerp / id.
     """
-    parts = node_id.split("_")
-    if len(parts) < 2:
+    info = fetch_feature_info(scan, node_id, top_n=top_n, top_logits_n=top_logits_n)
+    if info is None:
         return None
-
-    layer_num, index = parts[0], parts[1]
-    if layer_num == "E":
-        return None  # embedding node — no Neuronpedia feature
-
-    layer_key = f"{layer_num}-{source_set}"
-    status, data = get_feature(model_id, layer_key, int(index))
-    if status != 200:
-        return None
-
-    json_data = json.loads(data)
-
-    explanations = json_data.get("explanations", [])
-    clerp = explanations[0].get("description", "") if explanations else ""
-
-    raw_activations = json_data.get("activations", [])[:top_n]
-    contexts: list[str] = []
-    for act in raw_activations:
-        tokens: list[str] = act.get("tokens", [])
-        peak_idx: int = act.get("maxValueTokenIndex", 0)
-        marked = [f"«{t}»" if i == peak_idx else t for i, t in enumerate(tokens)]
-        contexts.append("".join(marked))
-
-    top_logits: list[str] = json_data.get("pos_str", [])[:top_logits_n]  # pos_str = top positive logits
-
-    return {"clerp": clerp, "contexts": contexts, "top_logits": top_logits}
+    return {"clerp": "", "contexts": info.contexts, "top_logits": info.top_logits}
 
 
 def _build_feature_block(
@@ -317,7 +281,7 @@ def generate_supernode_name(
     if is_gemini and not api_key:
         raise ValueError("Set GEMINI_API_KEY (or GENAI_API_KEY) in environment")
 
-    model_id, source_set = _parse_metadata(metadata)
+    scan = metadata.get("scan", "")
     prompt_tokens = metadata.get("prompt_tokens", [])
 
     feature_blocks: list[str] = []
@@ -326,7 +290,7 @@ def generate_supernode_name(
         if "embedding" in ft or "logit" in ft or node.node_id.startswith("E"):
             continue
 
-        info = _fetch_feature_context(model_id, source_set, node.node_id, top_n=2)
+        info = _fetch_feature_context(scan, node.node_id, top_n=2)
         feature_blocks.append(_build_feature_block(node, info, prompt_tokens))
 
     if not feature_blocks:
@@ -472,7 +436,7 @@ def score_supernode_coherence(
     if not api_key:
         raise ValueError("Set GEMINI_API_KEY or OPENAI_API_KEY in environment")
 
-    model_id, source_set = _parse_metadata(metadata)
+    scan = metadata.get("scan", "")
     prompt_context = _build_prompt_context(metadata, target_token)
 
     feature_count = 0
@@ -485,7 +449,7 @@ def score_supernode_coherence(
 
         feature_count += 1
 
-        info = _fetch_feature_context(model_id, source_set, node.node_id, top_n=2)
+        info = _fetch_feature_context(scan, node.node_id, top_n=2)
         feature_block = _build_feature_block(node, info)  # no prompt_tokens → Level A only
 
         user_message = prompt_context + f"Cluster name: '{supernode_name}'\n\nFeature:\n{feature_block}"

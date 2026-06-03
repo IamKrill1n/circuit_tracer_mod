@@ -24,12 +24,132 @@ We use the circuit tracer library to generate the attribution graphs for our pro
 We utilize an LLM to both label and score the supernodes in a summary graph.
 The scoring process is the opposite of the labeling process. We first prompt the LLM to label the supernodes in the summary graph, then we prompt the LLM to score each supernode based on its relevance to the final answer. The scoring is done on a scale of 0 to 1, where 0 indicates that the supernode is not relevant at all, and 1 indicates that the supernode is highly relevant to the final answer. The LLM's score for each supernode is then used as a measure of its importance in the reasoning process.
 \subsection{Steering evaluation}
-% Sinh viên trình bày chi tiết cách thức tiến hành thí nghiệm, ví dụ: các baseline chọn để so sánh là gì? tại sao lại chọn các baseline đấy? Tiến hành bao nhiêu thí nghiệm? mỗi thí nghiệm được thực hiện bao nhiêu lần? Các tham số của thuật toán được chọn như thế nào? Kịch bản thí nghiệm được tạo ra sao? Dữ liệu xử lý thế nào? … Có thể chia  chương này thành các chương nhỏ hơn để tiện trình bày. 
+% Sinh viên trình bày chi tiết cách thức tiến hành thí nghiệm, ví dụ: các baseline chọn để so sánh là gì? tại sao lại chọn các baseline đấy? Tiến hành bao nhiêu thí nghiệm? mỗi thí nghiệm được thực hiện bao nhiêu lần? Các tham số của thuật toán được chọn như thế nào? Kịch bản thí nghiệm được tạo ra sao? Dữ liệu xử lý thế nào? … Có thể chia  chương này thành các chương nhỏ hơn để tiện trình bày.
 
-\section{Tên của kết quả thí nghiệm 1}
+A summary graph is faithful only if its supernode edges reflect genuine causal
+dependencies in the replacement model. We test this directly with a steering
+intervention: we perturb one supernode at its source and check whether every other
+supernode moves in the direction its incoming edge predicts. The experiment grades
+the Stage~2 partition together with the Stage~3 edges $W_H$ at once, so it scores
+the summary graph as a whole rather than any single stage.
 
-Các chương tiếp theo sinh viên trình bày các kết quả thí nghiệm thu được. Mỗi kết quả nên cho vào một chương. Đối với mỗi kết quả thí nghiệm, cần trình bày các bảng biểu, đồ thị minh hoạ cho kết quả thí nghiệm. Sinh viên cần nêu nhận xét chi tiết về kết quả thí nghiệm, so sánh các phương pháp với nhau, giải thích tại sao kết quả lại như vậy. 
+\paragraph{Intervention protocol.}
+For each non-fixed supernode $C$ of a summary graph we negate every member feature,
+setting its activation to $M \cdot a$ with the steer factor $M = -1$ and $a$ the
+original activation, then run one forward pass with all members of $C$ steered
+together. The perturbation is applied as \emph{constrained} (direct-effect)
+patching, following the methodology of~\cite{ameisen2025circuit}: each steered
+feature writes its decoder vector only over the layer window $[l, l+1]$ around its
+own layer $l$ --- its own-layer reconstruction plus the first cross-layer write ---
+while the attention patterns and LayerNorm scales are frozen at their clean values.
+Freezing attention and normalization isolates the \emph{direct} effect that the
+summary edges model and suppresses the indirect paths the attribution graph does
+not represent.
 
-\section{Tên của kết quả thí nghiệm 2}
+\paragraph{Measured response.}
+After the intervention we read the activation change $\Delta a_{C'}$ of every other
+feature supernode $C'$ and the probability change $\Delta p_{C'}$ of every logit
+supernode and of the target token. For a steered source $C$ and a downstream
+supernode $C'$ joined by the summary edge $W_{H,\,C \to C'}$, the edge
+\emph{predicts} that the downstream response carries the sign
+$\operatorname{sgn}(W_{H,\,C \to C'}) \cdot \operatorname{sgn}(\Delta a_C)$, where
+$\Delta a_C$ is the activation change of the steered supernode itself (negative
+under negation).
 
+\paragraph{Metrics.}
+We summarize each graph with three quantities, all oriented so that higher is
+better. \emph{Edge sign-consistency} is the fraction of summary edges whose measured
+downstream sign matches the predicted one, weighted by edge magnitude:
+\begin{equation}
+\mathrm{SC} \;=\;
+\frac{\displaystyle\sum_{(C, C') \in E_H} |W_{H,\,C \to C'}| \cdot
+      \mathbf{1}\!\bigl[\operatorname{sgn}(\Delta m_{C'}) =
+      \operatorname{sgn}(W_{H,\,C \to C'})\,\operatorname{sgn}(\Delta a_C)\bigr]}
+     {\displaystyle\sum_{(C, C') \in E_H} |W_{H,\,C \to C'}|}
+\;\in\; [0, 1],
+\label{eq:sign-consistency}
+\end{equation}
+where $\Delta m_{C'}$ is $\Delta a_{C'}$ for a feature target and $\Delta p_{C'}$ for
+a logit target; $\mathrm{SC} = 1$ means every edge fires in the predicted direction.
+\emph{Monotonicity} is the Spearman correlation $\rho$ between the edge magnitude
+$|W_{H,\,C \to C'}|$ and the measured effect magnitude over the feature-to-feature
+edges, testing whether heavier edges produce larger downstream changes.
+\emph{Output effect} is the mean absolute target-token probability shift
+$|\Delta p|$ across all single-supernode interventions, measuring how much causal
+weight a supernode carries toward the model's answer.
+
+\paragraph{Baseline and parameters.}
+We compare the exact ILP clusterer (Section~\ref{sec:objective}) against a
+$K$-means baseline that partitions the same role vectors $r(u)$ of
+Eq.~\eqref{eq:role} with Euclidean $K$-means. The ILP chooses its supernode count
+$K$ endogenously, whereas $K$-means takes $K$ as input; we therefore set the
+baseline's $K$ equal to the ILP's $K$ on each graph, so the two methods differ only
+in how they assign features and not in granularity, making the comparison fair at a
+fixed budget. The experiment runs on the $100$ pruned attribution graphs from the
+analogies dataset (softmax token weighting, pruning $\alpha = 0.5$, node threshold
+$\eta_V = 0.02$). Each graph is processed once: the intervention is deterministic
+given a partition, the ILP is solved to optimality ($\theta = 0$, $\lambda = 1$,
+layer span $\le 4$, $30$\,s time limit), and $K$-means uses $20$ restarts under a
+fixed seed.
+
+\section{Validate summary graph with interventions}
+% Các chương tiếp theo sinh viên trình bày các kết quả thí nghiệm thu được. Mỗi kết quả nên cho vào một chương. Đối với mỗi kết quả thí nghiệm, cần trình bày các bảng biểu, đồ thị minh hoạ cho kết quả thí nghiệm. Sinh viên cần nêu nhận xét chi tiết về kết quả thí nghiệm, so sánh các phương pháp với nhau, giải thích tại sao kết quả lại như vậy.
+
+Both clusterers produce causally faithful summary graphs: negating a supernode moves
+its downstream neighbours in the predicted direction for the large majority of edges,
+and the effect grows with edge weight. Table~\ref{tab:intervention} reports the two
+methods at equal granularity.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Steering-intervention faithfulness on the $100$ analogy graphs, ILP versus a
+$K$-matched $K$-means baseline. Values are means over the $100$ graphs; arrows mark
+the direction of improvement and bold the better method per column. The three causal
+columns ---sign-consistency $\mathrm{SC}$ (Eq.~\eqref{eq:sign-consistency}),
+monotonicity $\rho$, and output effect $|\Delta p|$--- all favour $K$-means, and every
+per-graph difference is significant (paired Wilcoxon $p < 0.01$). The right-most column
+is diagnostic: the mean number of supernode edges left visible in $H$, a measure of
+exposed structure rather than of quality. $K$ is identical for the two methods by
+construction.}
+\label{tab:intervention}
+\begin{tabular}{l c c c c c}
+\toprule
+Clusterer & $K$ & $\mathrm{SC}\uparrow$ & $\rho\uparrow$ & $|\Delta p|\uparrow$ & edges/graph \\
+\midrule
+ILP ($\lambda = 1$)            & 15.3 & 0.878 & 0.442 & 0.175 & 14.6 \\
+$K$-means (role vectors)       & 15.3 & \textbf{0.941} & \textbf{0.539} & \textbf{0.190} & 13.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At equal $K$ the $K$-means baseline is the more faithful of the two on every causal
+metric. Its edges are more sign-consistent ($0.941$ vs.\ $0.878$), more monotone
+($\rho = 0.539$ vs.\ $0.442$), and its supernodes shift the target probability more
+($0.190$ vs.\ $0.175$); all three gaps hold across the $100$ graphs at
+$p < 0.01$. The pooled, edge-weighted sign-consistency over all $4{,}799$ tested
+supernode pairs tells the same story ($0.927$ vs.\ $0.861$).
+
+The one axis on which the ILP leads is the amount of causal structure it exposes: it
+leaves $14.6$ supernode edges visible per graph against the baseline's $13.0$. This is
+the intended effect of the causal-preservation loss $L_{\text{causal}}$ (D3), which
+penalizes merging directly connected features and so keeps their edge in $H$ instead of
+absorbing it into a supernode. The same mechanism explains the sign-consistency gap:
+the ILP surfaces more --- and individually weaker --- edges and is then graded on all of
+them, whereas $K$-means hides its weakest, most ambiguous edges inside clusters and is
+graded only on the strong ones that remain. The comparison therefore measures per-edge
+faithfulness at fixed $K$, not the overall quality of the abstraction, and it is partly
+biased toward the method that exposes less structure.
+
+Two caveats further temper the result. First, $K$-means optimizes role-vector cohesion
+directly, which is close to what the steering metric rewards, so it is partly graded on
+its own objective. Second, the comparison fixes the trade-off weight at $\lambda = 1$,
+and that weight is precisely the knob moving the ILP along the structure-versus-cohesion
+axis; a sweep over $\lambda$ is needed to locate the operating point at which the two
+effects balance. We conclude that both abstractions are faithful and that, at this
+single operating point, the simple baseline is at least as faithful per edge while the
+ILP retains more of the circuit's causal wiring.
+\section{LLM score}
+% Draft
+% Table compare human evaluation score and LLM score for the supernodes in the summary graph.
 \end{document}

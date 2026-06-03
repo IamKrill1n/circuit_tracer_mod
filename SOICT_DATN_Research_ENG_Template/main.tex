@@ -28,6 +28,7 @@
 \usepackage[ruled,vlined]{algorithm2e}  % Hỗ trợ viết các giải thuật
 \usepackage{capt-of} % Cho phép sử dụng caption lớn đối với landscape page
 \usepackage{multirow} % Merge cells
+\usepackage{booktabs} % Đường kẻ bảng tối giản (toprule/midrule/bottomrule)
 \usepackage{fancyhdr} % Cho phép tùy biến header và footer
 % \usepackage[natbib,backend=biber,style=ieee]{biblatex} % Giúp chèn tài liệu tham khảo
 
@@ -137,6 +138,9 @@
 	pdfauthor={\AUTHOR}}
 	
 \usepackage[all]{hypcap} % Cho phép tham chiếu chính xác đến hình ảnh và bảng biểu
+
+\usepackage{tikz} % Vẽ sơ đồ pipeline
+\usetikzlibrary{calc, positioning, arrows.meta, shapes.geometric}
 
 \graphicspath{{figures/}{../figures/}} % Thư mục chứa các hình ảnh
 

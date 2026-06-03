@@ -1,4 +1,3 @@
-import json
 import pytest
 import torch
 
@@ -8,8 +7,19 @@ from summarization.classify import (
     classify_features,
     filter_act_density,
 )
+from summarization.feature_source import FeatureInfo
 from summarization.prune import PruneGraph
 from summarization.utils import _node_from_json_dict
+
+
+def _feature_info(act_density, top_tokens=(), top_next_tokens=(), top_logits=()):
+    return FeatureInfo(
+        act_density=act_density,
+        top_logits=list(top_logits),
+        contexts=[],
+        top_tokens=list(top_tokens),
+        top_next_tokens=list(top_next_tokens),
+    )
 
 
 def test_normalize_text_basic():
@@ -81,76 +91,61 @@ def test_classify_features_embedding_and_logit_passthrough():
 
 
 def test_classify_features_trash_when_high_act_density(monkeypatch):
-    def fake_get_feature(modelId, layer, index):
-        data = {
-            "explanations": [{"description": "anything"}],
-            "frac_nonzero": 0.2,  # > 0.1 => trash
-            "activations": [],
-            "pos_str": [],
-        }
-        return 200, json.dumps(data)
+    def fake_fetch(scan, node_id, **kwargs):
+        return _feature_info(act_density=0.2)  # > 0.1 => trash
 
-    monkeypatch.setattr("summarization.classify.get_feature", fake_get_feature)
+    monkeypatch.setattr("summarization.classify.fetch_feature_info", fake_fetch)
 
     node_ids = ["25_9974_1"]
     attr = {"25_9974_1": {"feature_type": "cross layer transcoder"}}
-    metadata = {"scan": "gemma-2-2b", "info": {"neuronpedia_source_set": "gemmascope-transcoder-16k"}}
+    metadata = {"scan": "gemma-2-2b"}
 
     out = classify_features(node_ids=node_ids, attr=attr, metadata=metadata)
     assert out["25_9974_1"] == "trash"
 
 
 def test_classify_features_calls_heuristic_path(monkeypatch):
-    def fake_get_feature(modelId, layer, index):
-        # Build activations so top_tokens all "dog" -> heuristic input
-        activations = []
-        for _ in range(10):
-            activations.append(
-                {
-                    "tokens": ["x", "dog", "next"],
-                    "maxValueTokenIndex": 1,
-                }
-            )
-        data = {
-            "explanations": [{"description": "dog"}],
-            "frac_nonzero": 0.01,
-            "activations": activations,
-            "pos_str": ["a", "b", "c"],
-        }
-        return 200, json.dumps(data)
+    def fake_fetch(scan, node_id, **kwargs):
+        # clerp is dropped, so route through a clerp-independent signal:
+        # a repeated top logit (>=3) -> heuristic "output".
+        return _feature_info(
+            act_density=0.01,
+            top_tokens=["dog", "cat", "bird", "fish"],
+            top_next_tokens=["a", "b", "c", "d"],
+            top_logits=["tok", "tok", "tok"],
+        )
 
-    monkeypatch.setattr("summarization.classify.get_feature", fake_get_feature)
+    monkeypatch.setattr("summarization.classify.fetch_feature_info", fake_fetch)
 
     node_ids = ["3_42_0"]
     attr = {"3_42_0": {"feature_type": "cross layer transcoder"}}
-    metadata = {"scan": "gemma-2-2b", "info": {"neuronpedia_source_set": "clt-hp"}}
+    metadata = {"scan": "gemma-2-2b"}
 
     out = classify_features(node_ids=node_ids, attr=attr, metadata=metadata)
-    assert out["3_42_0"] == "input"
+    assert out["3_42_0"] == "output"
 
 
-def test_classify_features_skip_on_non_200(monkeypatch):
-    def fake_get_feature(modelId, layer, index):
-        return 500, "error"
+def test_classify_features_skip_on_fetch_failure(monkeypatch):
+    def fake_fetch(scan, node_id, **kwargs):
+        return None
 
-    monkeypatch.setattr("summarization.classify.get_feature", fake_get_feature)
+    monkeypatch.setattr("summarization.classify.fetch_feature_info", fake_fetch)
 
     node_ids = ["1_2_3"]
     attr = {"1_2_3": {"feature_type": "cross layer transcoder"}}
-    metadata = {"scan": "gemma-2-2b", "info": {"neuronpedia_source_set": "clt-hp"}}
+    metadata = {"scan": "gemma-2-2b"}
 
     out = classify_features(node_ids=node_ids, attr=attr, metadata=metadata)
     assert "1_2_3" not in out
 
 
-def test_filter_act_density_drops_out_of_band_and_sets_clerp(monkeypatch):
-    def fake_get_feature(modelId, layer, index):
+def test_filter_act_density_drops_out_of_band(monkeypatch):
+    def fake_fetch(scan, node_id, **kwargs):
         # index 10 -> in band (keep); index 20 -> too frequent (drop)
-        desc = "in band" if index == 10 else "too frequent"
-        frac = 0.01 if index == 10 else 0.5
-        return 200, json.dumps({"explanations": [{"description": desc}], "frac_nonzero": frac})
+        index = int(node_id.split("_")[1])
+        return _feature_info(act_density=0.01 if index == 10 else 0.5)
 
-    monkeypatch.setattr("summarization.classify.get_feature", fake_get_feature)
+    monkeypatch.setattr("summarization.classify.fetch_feature_info", fake_fetch)
 
     node_ids = ["E_0_0", "0_10_0", "1_20_0", "L_1"]
     raw = {
@@ -178,7 +173,6 @@ def test_filter_act_density_drops_out_of_band_and_sets_clerp(monkeypatch):
         pruned_adj=adj,
         metadata={
             "scan": "gemma-2-2b",
-            "info": {"neuronpedia_source_set": "clt-hp"},
             "prompt_tokens": ["<bos>", "hi"],
         },
     )
@@ -190,15 +184,15 @@ def test_filter_act_density_drops_out_of_band_and_sets_clerp(monkeypatch):
     assert {"E_0_0", "L_1"}.issubset(ids)  # boundary nodes always kept
 
     by_id = {n.node_id: n for n in out.nodes}
-    assert by_id["0_10_0"].clerp == "in band"  # clerp from Neuronpedia explanation
+    assert by_id["0_10_0"].clerp == ""  # per-feature clerp no longer fetched
     assert by_id["E_0_0"].clerp == "Emb: hi"  # embedding clerp from prompt_tokens[ctx_idx]
     assert out.pruned_adj.shape[0] == len(out.nodes)
 
 
-def test_filter_act_density_requires_source_set():
+def test_filter_act_density_requires_scan():
     node = _node_from_json_dict(
         {"node_id": "0_10_0", "node_idx": 0, "feature_type": "cross layer transcoder", "layer": 0, "ctx_idx": 0}
     )
     pg = PruneGraph(nodes=[node], pruned_adj=torch.zeros((1, 1)), metadata={})
-    with pytest.raises(ValueError, match="source_set"):
+    with pytest.raises(ValueError, match="scan"):
         filter_act_density(pg)

@@ -22,9 +22,9 @@ def cluster_graph_ilp(
     prune_graph: PruneGraph,
     *,
     theta: float = 0.0,
-    lambda_causal: float = 0.0,
+    lambda_causal: float = 1.0,
     max_sn: int | None = None,
-    max_layer_span: int = 4,
+    max_layer_span: int = 1000,
     time_limit: float = 30.0,
 ) -> list[list[str]]:
     """Cluster a pruned graph by exactly minimising the Stage-2 objective.
@@ -47,7 +47,7 @@ def cluster_graph_ilp(
     a positive one. The causal term adds a non-negative cost for merging any directly
     connected pair, so ``lambda_causal`` trades atomicity (D2) against keeping edge
     weight visible across supernodes (D3). Acyclicity (C1) is deferred to Stage 3.
-
+    
     Parameters
     ----------
     theta:

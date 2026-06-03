@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neuronpedia Decoupling Scheme</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#0b66c3; --keep:#1f8a4c; --drop:#b5532b;
+          --del:#9aa0a6; --bg:#fbfbfa; --card:#fff; --border:#e2e2dd; --code:#f3f3ee; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+         color: var(--fg); background: var(--bg); margin: 0; line-height: 1.55; }
+  main { max-width: 1060px; margin: 0 auto; padding: 32px 28px 80px; }
+  h1 { font-size: 1.7rem; margin: 0 0 4px; }
+  h2 { font-size: 1.22rem; margin: 38px 0 12px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+  h3 { font-size: 1.02rem; margin: 22px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+          padding: 16px 18px; margin: 14px 0; }
+  .summary { border-left: 4px solid var(--accent); }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: #f3f6fa; font-weight: 600; }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 0.86em;
+         font-family: "SF Mono", Menlo, Consolas, monospace; }
+  pre { background: var(--code); border: 1px solid var(--border); border-radius: 8px;
+        padding: 12px 14px; overflow-x: auto; font-size: 0.84rem; line-height: 1.45; }
+  .tag { display: inline-block; font-size: 0.72rem; font-weight: 700; padding: 2px 8px;
+         border-radius: 999px; color: #fff; letter-spacing: .02em; }
+  .t-keep { background: var(--keep); }
+  .t-drop { background: var(--drop); }
+  .t-del  { background: var(--del); }
+  .ok { color: var(--keep); font-weight: 600; }
+  .no { color: var(--drop); font-weight: 600; }
+  ul, ol { margin: 8px 0 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .note { font-size: 0.85rem; color: var(--muted); }
+  .step { display: flex; gap: 12px; align-items: baseline; }
+  .step .n { flex: 0 0 26px; height: 26px; line-height: 26px; text-align: center; border-radius: 50%;
+             background: var(--accent); color: #fff; font-weight: 700; font-size: 0.82rem; }
+  .filepath { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 0.82rem; color: var(--accent); }
+  @media (max-width: 760px){ .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Decoupling the summarization pipeline from Neuronpedia</h1>
+<p class="sub">Review of current dependencies + a replacement scheme using the existing HF/Cloudfront feature‑dashboard source. Neuronpedia is retained <strong>only</strong> for uploading the finished summary graph.</p>
+
+<div class="card summary">
+  <h3 style="margin-top:0">Summary</h3>
+  <ul>
+    <li><strong>One reader to replace.</strong> Every read of Neuronpedia goes through <code>api.get_feature(modelId, layer, index)</code> (REST). It supplies four fields the pipeline consumes: <code>explanations[0].description</code> (clerp), <code>frac_nonzero</code> (activation density), <code>activations</code> (contexts), <code>pos_str</code> (top logits).</li>
+    <li><strong>We already own an alternate source.</strong> <code>api.get_feature_dashboard(scan, layer, feat_idx)</code> fetches a feature dashboard from <em>local dir → HuggingFace → Cloudfront</em> and returns a <code>FeatureDashboard</code> (<span class="filepath">circuit_tracer/frontend/feature_models.py</span>). It already provides <span class="ok">3 of the 4</span> fields. <strong>Verified working</strong> for both <code>mntss/clt-gemma-2-2b-2.5M</code> and <code>mwhanna/qwen3-4b-transcoders</code>.</li>
+    <li><strong>The Qwen analogies graphs never worked through Neuronpedia anyway</strong> — their scan (<code>mwhanna/qwen3-4b-transcoders</code>) is not a Neuronpedia source, so the current read path silently returns nothing for them. The dashboard source fixes this.</li>
+    <li><strong>The only gap is the clerp</strong> (auto‑interp text), which the dashboard does not carry. Fill it with a cheap offline token proxy by default, and an opt‑in local LLM auto‑interp (reusing the Gemini/OpenAI client the pipeline already uses) for nicer labels.</li>
+    <li><strong>Scope is small.</strong> Two live helpers (<code>classify._fetch_feature_json</code>, <code>group_llm._fetch_feature_context</code>) plus their metadata resolvers. <code>NEURONPEDIA_API_KEY</code> stops being required for everything except upload.</li>
+  </ul>
+</div>
+
+<h2>1. Dependency inventory</h2>
+<p class="note">Tags: <span class="tag t-drop">REPLACE</span> read path to remove · <span class="tag t-keep">KEEP</span> the one allowed upload use · <span class="tag t-del">DEAD</span> defined but unused / legacy.</p>
+
+<table>
+  <thead><tr><th>API function</th><th>Where called (live)</th><th>What it returns / does</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>get_feature</code></td>
+      <td><code>classify._fetch_feature_json</code> → <code>filter_act_density</code> (pipeline stage 1b, app.py)<br><code>group_llm._fetch_feature_context</code> → <code>label_summarization_graph</code> / <code>score_*</code> (app.py, run_llm_labels.py, run_llm_scores.py)</td>
+      <td>clerp, <code>frac_nonzero</code>, <code>activations</code> (tokens + <code>maxValueTokenIndex</code>), <code>pos_str</code></td>
+      <td><span class="tag t-drop">REPLACE</span></td>
+    </tr>
+    <tr>
+      <td><code>get_feature</code> / <code>generate_autointerp</code></td>
+      <td><code>utils.get_clerp</code> — <em>not referenced anywhere</em></td>
+      <td>fetch or LLM‑generate a clerp</td>
+      <td><span class="tag t-del">DEAD</span></td>
+    </tr>
+    <tr>
+      <td><code>get_feature</code></td>
+      <td><code>classify.classify_features</code> / <code>classify_features_with_llm</code> — <em>tests only</em></td>
+      <td>clerp, density, contexts, logits → heuristic/LLM type</td>
+      <td><span class="tag t-drop">REPLACE</span><br><span class="note">(migrate for parity)</span></td>
+    </tr>
+    <tr>
+      <td><code>save_subgraph</code></td>
+      <td><code>pipeline.run_pipeline</code>, <code>app.py</code></td>
+      <td>uploads pinned ids + supernodes + clerps to Neuronpedia</td>
+      <td><span class="tag t-keep">KEEP</span></td>
+    </tr>
+    <tr>
+      <td><code>steer_logits</code>, <code>generate_graph</code></td>
+      <td>none (we attribute &amp; steer locally via <code>ReplacementModel</code>)</td>
+      <td>remote graph gen / steering</td>
+      <td><span class="tag t-del">DEAD</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="card">
+  <strong>Resolver helpers that also assume Neuronpedia ids:</strong>
+  <code>classify._resolve_neuronpedia_ids</code> and <code>group_llm._parse_metadata</code> derive <code>(model_id, source_set)</code> from metadata. The dashboard source needs neither — only <code>metadata["scan"]</code> (the HF transcoder repo id), which is already populated on both the <code>.pt</code> path (<span class="filepath">attr_graph.from_graph</span>, line 197–203) and the frontend‑JSON path. <code>model_id</code> stays only for the upload call.
+</div>
+
+<h2>2. Field mapping: Neuronpedia → feature dashboard</h2>
+<table>
+  <thead><tr><th>Pipeline needs</th><th>Neuronpedia (<code>get_feature</code>)</th><th>Dashboard (<code>get_feature_dashboard</code>)</th><th></th></tr></thead>
+  <tbody>
+    <tr><td>activation density</td><td><code>frac_nonzero</code></td><td><code>activation_frequency</code></td><td class="ok">✓ direct</td></tr>
+    <tr><td>top promoted logits</td><td><code>pos_str</code></td><td><code>top_logits</code></td><td class="ok">✓ direct</td></tr>
+    <tr><td>activation contexts</td><td><code>activations[*].tokens</code> + <code>maxValueTokenIndex</code></td><td><code>examples_quantiles[?name="Top"].examples[*].tokens</code> + <code>tokens_acts_list</code> (peak = argmax)</td><td class="ok">✓ derive</td></tr>
+    <tr><td>top tokens / top next tokens</td><td>derived from <code>activations</code></td><td>derived from the same example tokens (peak idx, peak+1)</td><td class="ok">✓ derive</td></tr>
+    <tr><td>clerp (auto‑interp label)</td><td><code>explanations[0].description</code></td><td><em>not present</em></td><td class="no">✗ gap</td></tr>
+  </tbody>
+</table>
+
+<h3>Verification (run against the real HF repos)</h3>
+<pre>scan=mntss/clt-gemma-2-2b-2.5M  layer=0 idx=1285
+  activation_frequency: 0.0104     top_logits: ['’',' is',' "', ...]
+  Top example peak token: 'Bubbles'  ctx: "&lt;bos&gt;Bubbles collapse without weight…"
+
+scan=mwhanna/qwen3-4b-transcoders layer=0 idx=3170      # analogies graphs — NOT on Neuronpedia
+  activation_frequency: 4.6e-06    top_logits: ['Standard','决心','#ifndef', ...]
+  Top example peak token: 'system'  ctx: "…planning and governance processes…"</pre>
+<p class="note">Note the index identity that makes lookup trivial: a node id <code>L_i_ctx</code> maps to the dashboard via <code>_cantor_pair(L, i)</code>, and that integer is exactly the <code>feature</code> field already stored on each node (e.g. <code>0_1285_1</code> → 827540). The on‑disk/HF layout is <code>features/&lt;cantor&gt;.json</code>.</p>
+
+<h2>3. Closing the clerp gap</h2>
+<div class="grid">
+  <div class="card">
+    <h3 style="margin-top:0">Option A — token proxy <span class="note">(default, fully offline)</span></h3>
+    <p>Synthesize a label from data the dashboard already has: the dominant peak‑activating token across the top examples, optionally suffixed with the top promoted logit. e.g. <code>«Dallas» → say " Austin"</code>.</p>
+    <ul>
+      <li>Zero extra cost / no API key.</li>
+      <li>Enough for the heuristic classifier's real signals (input‑match, "say", logit concentration) and as a safe fallback.</li>
+      <li><code>group_llm</code> already treats clerp as one signal among contexts + logits and falls back to <code>node.clerp</code>/<code>node_id</code>.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Option B — local auto‑interp <span class="note">(opt‑in, nicer labels)</span></h3>
+    <p>Generate a clerp from the top contexts + top logits using the <em>existing</em> Gemini/OpenAI client (same one <code>group_llm</code> uses), cached to disk by <code>(scan, layer, idx)</code>.</p>
+    <ul>
+      <li>Replaces both <code>get_feature</code>‑for‑clerp and <code>generate_autointerp</code>.</li>
+      <li>Cache means each feature is interpreted once across runs.</li>
+      <li>Reuses code paths already in the repo — no new external dependency.</li>
+    </ul>
+  </div>
+</div>
+<p class="note">Both coexist: proxy is the default so the pipeline runs offline; <code>--autointerp</code> upgrades labels when an LLM key is present.</p>
+
+<h2>4. Proposed design</h2>
+<p>Add one small provider module and route the two live helpers (and the legacy ones) through it. Minimal blast radius: keep the call‑site shapes, swap only the data source.</p>
+
+<div class="card">
+<strong><span class="filepath">summarization/feature_source.py</span></strong> — single normalized provider
+<pre>@dataclass
+class FeatureInfo:
+    clerp: str
+    act_density: float
+    top_logits: list[str]
+    contexts: list[str]          # peak token wrapped in «», like group_llm
+    top_tokens: list[str]        # peak token per top example
+    top_next_tokens: list[str]   # token after peak
+
+def fetch_feature_info(
+    scan: str,
+    node_id: str,                # "L_i_ctx"; embedding ids ("E…") return None
+    *,
+    features_dir: str | Path | None = None,   # local cache for get_feature_dashboard
+    top_n: int = 10,
+    autointerp: AutoInterp | None = None,      # None → token-proxy clerp
+) -> FeatureInfo | None:
+    layer, feat_idx = int(node_id.split("_")[0]), int(node_id.split("_")[1])
+    fd = get_feature_dashboard(scan, layer, feat_idx, features_dir=features_dir)
+    top = next((q for q in fd.examples_quantiles if q.quantile_name == "Top"),
+               fd.examples_quantiles[0])
+    # … derive contexts / top_tokens / top_next_tokens from top.examples …
+    clerp = autointerp(fd) if autointerp else _token_proxy(top_tokens, fd.top_logits)
+    return FeatureInfo(clerp, fd.activation_frequency, fd.top_logits[:top_n], …)</pre>
+</div>
+
+<div class="card">
+<strong>Minimal-change migration of the two readers</strong> — change the data source, not the call sites:
+<ul>
+  <li><code>classify._fetch_feature_json(model_id, source_set, node_id)</code> → take <code>scan</code> and build the <em>same-shaped</em> dict (<code>explanations</code>, <code>frac_nonzero</code>, <code>activations</code>, <code>pos_str</code>) from <code>fetch_feature_info</code>, so <code>filter_act_density</code> / <code>classify_features</code> need no further edits. Replace <code>_resolve_neuronpedia_ids</code> with <code>metadata["scan"]</code>.</li>
+  <li><code>group_llm._fetch_feature_context(model_id, source_set, node_id)</code> → return <code>{clerp, contexts, top_logits}</code> straight from <code>FeatureInfo</code>; replace <code>_parse_metadata</code>'s read use with <code>metadata["scan"]</code>.</li>
+</ul>
+</div>
+
+<h2>5. Migration steps</h2>
+<div class="card">
+  <div class="step"><span class="n">1</span><div>Add <code>feature_source.py</code> with <code>FeatureInfo</code> + <code>fetch_feature_info</code> + <code>_token_proxy</code>. <em>verify:</em> unit test that derives contexts/density/logits from a stubbed <code>FeatureDashboard</code>.</div></div>
+  <div class="step"><span class="n">2</span><div>Repoint <code>classify._fetch_feature_json</code> to the dashboard via <code>fetch_feature_info</code>; swap <code>_resolve_neuronpedia_ids</code> → <code>scan = metadata["scan"]</code>. <em>verify:</em> <code>filter_act_density</code> drops out‑of‑band features on a gemma graph with no network mock.</div></div>
+  <div class="step"><span class="n">3</span><div>Repoint <code>group_llm._fetch_feature_context</code>; swap <code>_parse_metadata</code> read use. <em>verify:</em> <code>label_summarization_graph</code> runs on the Qwen analogies graph (previously impossible).</div></div>
+  <div class="step"><span class="n">4</span><div>Update <span class="filepath">tests/test_classify.py</span> to monkeypatch <code>get_feature_dashboard</code> (or <code>fetch_feature_info</code>) instead of <code>get_feature</code>. <em>verify:</em> <code>pytest tests/test_classify.py</code> green.</div></div>
+  <div class="step"><span class="n">5</span><div>Add optional <code>AutoInterp</code> (Gemini/OpenAI) with disk cache; expose <code>--autointerp</code> in <code>__main__.py</code> / a toggle in <code>app.py</code>. Default off. <em>verify:</em> labels populate with a key; proxy labels without one.</div></div>
+  <div class="step"><span class="n">6</span><div>Drop <code>NEURONPEDIA_API_KEY</code> from the read path; gate it only behind <code>save_subgraph</code>. Remove/clearly mark dead <code>get_clerp</code>, <code>generate_autointerp</code>, <code>steer_logits</code>, <code>generate_graph</code> (mention, don't silently delete). <em>verify:</em> full pipeline runs end‑to‑end with the key unset until upload.</div></div>
+</div>
+
+<h2>6. Risks &amp; caveats</h2>
+<ul>
+  <li><strong>Density scale / thresholds.</strong> <code>activation_frequency</code> is the same quantity as <code>frac_nonzero</code>, but model‑dependent: the Qwen feature read 4.6e‑6, <em>below</em> <code>filter_act_density</code>'s default <code>act_density_lb=2e‑5</code> — it would be dropped. The lower bound likely needs a per‑model default (or relaxing) once Qwen graphs flow through. Flag, then tune against a held‑out set.</li>
+  <li><strong>Multi‑scan graphs.</strong> <code>attr_graph.from_graph</code> joins a list‑valued <code>scan</code> with <code>"-"</code>, which would corrupt the HF repo id. All current graphs are single‑scan, so fine — but guard/branch if a multi‑transcoder graph appears.</li>
+  <li><strong>Per‑feature HF latency.</strong> The HF path issues a ranged GET per feature. Mitigate with the existing <code>features_dir</code> local cache (download the scan's <code>features/</code> once) and in‑process memoization.</li>
+  <li><strong>"Top" quantile assumption.</strong> Mapping Neuronpedia's "top activations" onto the dashboard's <code>quantile_name == "Top"</code> bucket is what gives equivalent contexts; fall back to <code>examples_quantiles[0]</code> if absent.</li>
+  <li><strong>Clerp parity.</strong> Proxy/local clerps will read differently from Neuronpedia's. Acceptable for clustering/labelling (signal comes from logits + contexts), but downstream eval comparisons against Neuronpedia labels should expect drift.</li>
+</ul>
+
+<h2>Next steps</h2>
+<ol>
+  <li>Confirm the two design choices below, then I implement steps 1–4 (offline read path + tests) in one pass.</li>
+  <li>Decide the clerp default: proxy‑only first, or wire the opt‑in local auto‑interp in the same change.</li>
+  <li>Re‑tune <code>act_density_lb/ub</code> against a Qwen + gemma sample once the dashboard density is live.</li>
+  <li>Optionally prune the dead Neuronpedia surface (<code>get_clerp</code>, <code>generate_autointerp</code>, <code>steer_logits</code>, <code>generate_graph</code>) in a separate, clearly‑scoped commit.</li>
+</ol>
+
+</main>
+</body>
+</html>

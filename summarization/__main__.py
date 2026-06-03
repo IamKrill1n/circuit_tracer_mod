@@ -46,14 +46,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--edge-threshold", type=float, default=0.98)
     parser.add_argument("--keep-all-tokens-and-logits", action="store_true")
 
-    # Classify: optional Neuronpedia clerp annotation + activation-density filter.
+    # Classify: optional activation-density filter from the feature dashboards.
     parser.add_argument(
         "--classify-filter",
         action="store_true",
-        help="Annotate clerps and drop out-of-band activation-density features via Neuronpedia.",
+        help="Drop out-of-band activation-density features using the feature dashboards.",
     )
-    parser.add_argument("--model-id", type=str, default="gemma-2-2b", help="Neuronpedia modelId (classify/upload).")
-    parser.add_argument("--source-set", type=str, default="gemmascope-transcoder-16k", help="Neuronpedia source set.")
+    parser.add_argument("--model-id", type=str, default="gemma-2-2b", help="Neuronpedia modelId (upload).")
     parser.add_argument("--act-density-lb", type=float, default=2e-5)
     parser.add_argument("--act-density-ub", type=float, default=0.1)
 

@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chapter 2 (Literature Review) — Shortening Plan to 10 pages</title>
+<style>
+  :root { --ink:#1a1a1a; --muted:#5a5a5a; --line:#d8d8d8; --accent:#2a5d8f;
+          --keep:#1c7a3e; --cut:#b22222; --merge:#9a6b00; --bg:#fafafa; }
+  html { scroll-behavior:smooth; }
+  body { font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+         color:var(--ink); background:var(--bg); margin:0; padding:0 0 4rem; }
+  .wrap { max-width:980px; margin:0 auto; padding:2rem 1.6rem; }
+  h1 { font-size:1.7rem; margin:0 0 .3rem; }
+  h2 { font-size:1.25rem; margin:2.2rem 0 .6rem; padding-bottom:.25rem;
+       border-bottom:2px solid var(--accent); color:var(--accent); }
+  h3 { font-size:1.05rem; margin:1.4rem 0 .4rem; }
+  .sub { color:var(--muted); margin:0 0 1.2rem; }
+  .box { background:#fff; border:1px solid var(--line); border-radius:8px;
+         padding:1rem 1.2rem; margin:1rem 0; }
+  .summary { border-left:5px solid var(--accent); }
+  code { background:#eef2f6; padding:.05rem .35rem; border-radius:4px; font-size:.9em; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.92rem; }
+  th, td { border:1px solid var(--line); padding:.45rem .6rem; text-align:left; vertical-align:top; }
+  th { background:#eef2f6; }
+  td.num { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .tag { display:inline-block; font-size:.72rem; font-weight:700; padding:.08rem .45rem;
+         border-radius:999px; color:#fff; vertical-align:middle; }
+  .t-keep { background:var(--keep); }
+  .t-cut { background:var(--cut); }
+  .t-merge { background:var(--merge); }
+  .t-new { background:var(--accent); }
+  ul, ol { margin:.4rem 0 .9rem; padding-left:1.4rem; }
+  li { margin:.28rem 0; }
+  .pill { font-size:.78rem; color:var(--muted); }
+  .legend span { margin-right:1rem; }
+  .why { color:var(--muted); font-size:.9em; }
+  hr { border:0; border-top:1px solid var(--line); margin:2rem 0; }
+  .total td { font-weight:700; background:#f0f4f8; }
+  .next { background:#fff7e6; border:1px solid #f0d9a8; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Chapter 2 — Literature Review: plan to fit 10 pages</h1>
+<p class="sub">Goal: make <b>Circuit Tracing Backbone</b> the centerpiece (~half the chapter) and trim everything else to only what the summarization pipeline actually consumes.</p>
+
+<div class="box summary">
+  <h2 style="margin-top:0;border:none;color:var(--ink)">Summary</h2>
+  <p>The chapter's most important section — <b>§2.5 Circuit Tracing Backbone</b> — is still an empty outline of <b>3 subsections / 12 subsubsections</b>, while the supporting background sections are already drafted. If all 12 subsubsections are written in full <em>and</em> the supporting sections stay as-is, the chapter blows past 10 pages.</p>
+  <p>The governing principle is a clean <b>division of labor with Chapter 3</b>: §2.5 describes <b>what Ameisen et&nbsp;al. give us</b> (the substrate the pipeline runs on — replacement model → attribution graph → interventions), and Chapter 3 owns <b>our contribution</b> (the prune/cluster/summarize math). Anything whose math already lives in Chapter 3 gets <b>one conceptual sentence</b> in Chapter 2, never a re-derivation.</p>
+  <p>Concretely, the approach is four moves:</p>
+  <ol>
+    <li><b>Re-budget</b> the 10 pages so the backbone gets ~5 and the rest share ~4 (leaving ~1 page slack).</li>
+    <li><b>Collapse the backbone 12 → 7 subsubsections</b> by merging related ones and shrinking the two that duplicate Chapter 3 (the paper's pruning + manual supernode grouping) into a single motivating paragraph.</li>
+    <li><b>Compress the supporting sections</b> to only the foundations the pipeline touches (the thesis template explicitly forbids textbook padding).</li>
+    <li><b>Add the mandated</b> chapter <b>Overview</b> and <b>Chapter Summary</b> paragraphs.</li>
+  </ol>
+</div>
+
+<h2 id="diagnosis">1. Diagnosis — current state</h2>
+<table>
+  <thead><tr><th>Section</th><th>Current state</th><th>Problem</th></tr></thead>
+  <tbody>
+    <tr><td>2.1 Scope of Research</td><td><code>\ldots</code> placeholder</td><td>Unwritten</td></tr>
+    <tr><td>2.2 Transformer</td><td>One figure, no prose</td><td>General textbook material; only the residual-stream view is load-bearing</td></tr>
+    <tr><td>2.3 Mech. Interp. &amp; Circuits</td><td>3 full paragraphs</td><td>Good, slightly long</td></tr>
+    <tr><td>2.4 SAEs &amp; Transcoders</td><td>Prose + 2 equations</td><td>Good; only the transcoder factorization is essential downstream</td></tr>
+    <tr><td><b>2.5 Circuit Tracing Backbone</b></td><td><b>Outline only</b> (3 subsec / 12 subsubsec)</td><td><b>The priority — unwritten, and would overflow if written in full</b></td></tr>
+    <tr><td>2.6 Automated Interpretation</td><td>3 full paragraphs</td><td>Tangential — pipeline only consumes the resulting labels</td></tr>
+    <tr><td>2.7 Related Works</td><td>BibTeX draft only</td><td>Unwritten</td></tr>
+    <tr><td>Overview / Summary</td><td>Missing</td><td>Mandatory per template</td></tr>
+  </tbody>
+</table>
+
+<div class="box">
+  <b>The overlap that drives the cuts.</b> Chapter 3 already derives, in full math:
+  <ul>
+    <li>Pruning via <b>influence / relevance</b> Neumann series (eq:inf, eq:rel) — so the backbone's <code>Graph Pruning</code> subsubsection must not re-derive it.</li>
+    <li>Clustering via <b>role vectors + signed-cosine ILP</b> — and</li>
+    <li>Supernode aggregation via <b>block-sum → antiparallel collapse → back-edge removal</b> (eq:block-sum, eq:antiparallel) — so the backbone's <code>Supernode Grouping</code> subsubsection must shrink to "the paper does this <em>manually</em>; we automate it (Ch.3)".</li>
+  </ul>
+  Re-deriving any of these in §2.5 is both the main source of overflow and a direct duplication. Removing it is the single biggest win.
+</div>
+
+<h2 id="budget">2. Proposed page budget</h2>
+<p class="legend">
+  <span><span class="tag t-keep">KEEP</span> write/keep in full</span>
+  <span><span class="tag t-merge">MERGE/TRIM</span> compress or combine</span>
+  <span><span class="tag t-cut">CUT</span> remove or one sentence</span>
+  <span><span class="tag t-new">NEW</span> add (mandated)</span>
+</p>
+<table>
+  <thead><tr><th>Section</th><th>Action</th><th class="num">Target pages</th></tr></thead>
+  <tbody>
+    <tr><td>Overview (chapter intro)</td><td><span class="tag t-new">NEW</span></td><td class="num">0.2</td></tr>
+    <tr><td>2.1 Scope of Research</td><td><span class="tag t-merge">TRIM</span> 2–3 sentences (or fold into Overview)</td><td class="num">0.25</td></tr>
+    <tr><td>2.2 Transformer</td><td><span class="tag t-cut">CUT</span> to one paragraph (residual stream only)</td><td class="num">0.4</td></tr>
+    <tr><td>2.3 Mech. Interp. &amp; Circuits</td><td><span class="tag t-merge">TRIM</span> 3 → 2 paragraphs</td><td class="num">0.75</td></tr>
+    <tr><td>2.4 SAEs &amp; Transcoders</td><td><span class="tag t-merge">TRIM</span> shrink SAE, keep transcoder factorization</td><td class="num">0.75</td></tr>
+    <tr><td><b>2.5 Circuit Tracing Backbone</b></td><td><span class="tag t-keep">KEEP</span> <b>the centerpiece — write in full</b></td><td class="num"><b>5.0</b></td></tr>
+    <tr><td>2.6 Automated Interpretation</td><td><span class="tag t-cut">CUT</span> 3 → 1 paragraph</td><td class="num">0.45</td></tr>
+    <tr><td>2.7 Related Works</td><td><span class="tag t-keep">KEEP</span> write properly (strengths/weaknesses → motivation)</td><td class="num">1.0</td></tr>
+    <tr><td>Chapter Summary</td><td><span class="tag t-new">NEW</span></td><td class="num">0.2</td></tr>
+    <tr class="total"><td>Total</td><td></td><td class="num">~9.0</td></tr>
+  </tbody>
+</table>
+<p class="why">~1 page of slack absorbs the backbone figure(s) and equations and gives room to expand whichever backbone subsection needs it most.</p>
+
+<h2 id="backbone">3. The centerpiece: restructure §2.5 (12 → 7 subsubsections)</h2>
+<p>The 12 outlined subsubsections collapse to 7. Each kept item is justified by <b>what the pipeline consumes</b>; each merged/cut item by Chapter-3 overlap or irrelevance.</p>
+
+<h3>2.5.1 Replacement Model <span class="pill">(~2 pages)</span></h3>
+<table>
+  <thead><tr><th>Outlined item</th><th>Action</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>Cross-Layer Transcoders (CLTs)</td><td><span class="tag t-keep">KEEP</span></td><td>The feature nodes the pipeline clusters <em>are</em> CLT features. Non-negotiable.</td></tr>
+    <tr><td>Global Replacement Model<br>Local Replacement Model</td><td><span class="tag t-merge">MERGE</span> → one subsubsection "From global to local replacement model"</td><td>Global = swap every MLP with CLTs; local = freeze attention + LayerNorm scales for one prompt so feature→feature computation is <b>linear</b>. The two are one idea; linearity + frozen attention is what makes the graph a weighted DAG with exact edge weights = our adjacency <code>W</code>.</td></tr>
+    <tr><td>Error Nodes and Frozen Attention</td><td><span class="tag t-merge">MERGE</span> into the local-model paragraph (or keep ~1 short para)</td><td>Error node = residual the CLT fails to reconstruct, added back so the local model reproduces the original logits. Worth stating because <b>Stage 1 always prunes error nodes</b> — tie it to the pipeline, then move on.</td></tr>
+  </tbody>
+</table>
+
+<h3>2.5.2 Attribution Graphs <span class="pill">(~2 pages)</span></h3>
+<table>
+  <thead><tr><th>Outlined item</th><th>Action</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>Node Types (feature, error, embedding, logit)</td><td><span class="tag t-keep">KEEP</span> but short &amp; conceptual</td><td>The vertex set the pipeline operates on. Give the mechanistic meaning of each; note the <em>formal</em> partition <code>V = V_emb ∪ V_inter ∪ V_error ∪ V_logit</code> is in Ch.3 — don't repeat it.</td></tr>
+    <tr><td>Edges as Direct Linear Effects<br>Edge Weight Computation</td><td><span class="tag t-merge">MERGE</span> → "Edges and their weights"</td><td>Edge = direct linear effect of source on target through the linearized model; weight ≈ source activation × (decoder · encoder direction). Give the idea + cite; <b>do not fully re-derive</b>. This defines our signed adjacency <code>W</code>.</td></tr>
+    <tr><td>Graph Pruning<br>Supernode Grouping</td><td><span class="tag t-cut">CUT</span> → one motivating paragraph</td><td><b>Biggest cut.</b> State that Ameisen et&nbsp;al. prune by indirect (normalized) influence and group features into supernodes <b>manually, by inspection</b>. That manual step is exactly the gap this thesis closes — end with a pointer to Ch.3. The math stays in Ch.3.</td></tr>
+  </tbody>
+</table>
+
+<h3>2.5.3 Interventions <span class="pill">(~1 page)</span></h3>
+<table>
+  <thead><tr><th>Outlined item</th><th>Action</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>Constrained Activation Patching<br>Feature Steering<br>Mechanistic Faithfulness Validation</td><td><span class="tag t-merge">MERGE</span> → one subsection, ~one short paragraph each (or a single tight paragraph)</td><td>These are the <b>causal-validation tools the thesis reuses in Chapter 5</b> (<code>eval_intervention</code>, <code>eval_faithfulness</code>, <code>eval_steering</code>). Define them just enough to support the eval chapter; no exhaustive treatment.</td></tr>
+  </tbody>
+</table>
+
+<div class="box">
+  <b>Net effect:</b> 12 subsubsections → 7 (CLTs · global+local+error merged · node types · edges+weights merged · original-prune+supernode merged · interventions merged). The removed material is precisely the part that either (a) duplicates Chapter 3 or (b) is detail the pipeline never touches.
+</div>
+
+<h2 id="supporting">4. Trim plan for the supporting sections</h2>
+<ul>
+  <li><b>2.2 Transformer</b> <span class="tag t-cut">CUT</span> — keep <b>only</b> the residual-stream-as-additive view (the final representation is a sum of embedding + every head + every MLP). That additivity is what attribution exploits; attention/MLP internals are textbook material the template tells us to omit. Keep the figure small, or drop it.</li>
+  <li><b>2.3 Mech. Interp. &amp; Circuits</b> <span class="tag t-merge">TRIM</span> — 3 → 2 paragraphs: (1) feature + circuit (linear representation hypothesis), (2) superposition + polysemanticity as the barrier that motivates SAEs. Keep the superposition punchline; tighten the rest.</li>
+  <li><b>2.4 SAEs &amp; Transcoders</b> <span class="tag t-merge">TRIM</span> — shrink SAE to ~3 sentences (dictionary-learning idea); consider dropping the SAE ℓ₁-loss equation. <b>Keep the transcoder factorization equation</b>: edge weight = source activation × (source decoder · target encoder). That input-invariant dot product is literally where our edge weights come from — it must survive.</li>
+  <li><b>2.6 Automated Interpretation</b> <span class="tag t-cut">CUT</span> — 3 → 1 paragraph. The pipeline only consumes the resulting <b>Neuronpedia labels</b> (Stage-3 supernode naming). Reduce the explainer/simulator scoring loop to one sentence; cite and move on.</li>
+  <li><b>2.7 Related Works</b> <span class="tag t-keep">KEEP/WRITE</span> — cover ADAG / "Circuits Are Sparse in the Neuron Basis" (Arora et&nbsp;al. 2026) and Causal-DAG summarization (Youngmann et&nbsp;al., VLDB). For each: strengths → weaknesses → the gap our automated, faithfulness-driven attribution-graph summary fills. (The <code>transluce</code> skill backs the neuron-basis paper.)</li>
+</ul>
+
+<h2 id="remove">5. "Remove for the pipeline" — the explicit cut list</h2>
+<p>Direct answer to "remove unnecessary parts for our pipeline", ordered by space saved:</p>
+<ol>
+  <li><b>Paper's pruning math</b> (influence/relevance) in §2.5 → <span class="tag t-cut">remove</span>, it's Ch.3. One sentence.</li>
+  <li><b>Paper's supernode aggregation math</b> in §2.5 → <span class="tag t-cut">remove</span>, it's Ch.3. Folded into the same motivating sentence.</li>
+  <li><b>Transformer attention/MLP internals</b> → <span class="tag t-cut">remove</span>, keep residual-stream view only.</li>
+  <li><b>SAE training-loss detail</b> &amp; <b>auto-interp explainer/simulator detail</b> → <span class="tag t-cut">compress</span> to a sentence each.</li>
+  <li><b>Global vs Local as two headings</b> → <span class="tag t-merge">merge</span>; <b>Error Nodes</b> heading → fold in.</li>
+  <li><b>Three intervention headings</b> → <span class="tag t-merge">merge</span> into one subsection.</li>
+</ol>
+
+<div class="box next">
+  <h2 style="margin-top:0;border:none;color:var(--ink)">Next steps</h2>
+  <ol>
+    <li><b>Confirm scope of §2.5.3 Interventions:</b> full subsection (~1 pg) vs. a single compressed paragraph — depends on how heavily Chapter 5 leans on each intervention type.</li>
+    <li><b>Rewrite §2.5 first</b> (the priority) using the 7-subsubsection skeleton above, keeping the existing LaTeX <code>\subsection</code>/<code>\subsubsection</code> scaffolding where it survives. Invoke the <code>thesis</code> skill per-section for prose quality.</li>
+    <li><b>Apply the supporting-section trims</b> (§2.2, §2.3, §2.4, §2.6) and write §2.1 Scope + §2.7 Related Works.</li>
+    <li><b>Add</b> the chapter Overview and Chapter Summary paragraphs.</li>
+    <li><b>Verify the page count:</b> compile and count pages —
+      <code>conda run -n circuit ...</code> not needed; from <code>SOICT_DATN_Research_ENG_Template/</code> run <code>latexmk -pdf main.tex</code> (or <code>pdflatex</code>), then check the Chapter 2 page span. Rebalance the budget if it lands over 10.</li>
+  </ol>
+</div>
+
+</div>
+</body>
+</html>

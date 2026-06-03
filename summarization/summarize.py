@@ -276,9 +276,10 @@ def steer_interventions(
 def constrained_window(layer: int, n_layers: int, layers_below: int, layers_above: int) -> range:
     """Constrained-patching window around a source ``layer``: [layer-below, layer+above].
 
-    Clamped to valid layers. Default (below=1, above=0) gives the paper's [l-1, l] range.
-    CLT features decode only into layers >= their own, so the l-1 slot carries no write —
-    the effective direct effect is the source layer's own decode.
+    Clamped to valid layers. The paper's Fig. 9 default (below=0, above=1) gives the window
+    [l, l+1]: the feature's own-layer decode (l) plus its first cross-layer write (l+1); writes
+    above l+1 are dropped. CLT features decode only into layers >= their own, so any slot below
+    l is empty — that is why ``layers_below`` defaults to 0.
     """
     return range(max(0, layer - layers_below), min(layer + layers_above + 1, n_layers))
 
@@ -287,8 +288,8 @@ def steer_interventions_constrained(
     supernodes: list[Supernode],
     orig_activations: torch.Tensor,
     factors: dict[str, float] | float,
-    layers_below: int = 1,
-    layers_above: int = 0,
+    layers_below: int = 0,
+    layers_above: int = 1,
 ) -> list[tuple[range, list[tuple[int, int, int, float]]]]:
     """Constrained (direct-effect) steering, grouped per activation layer.
 
@@ -297,8 +298,9 @@ def steer_interventions_constrained(
     its constrained window ``[l-layers_below, l+layers_above]`` (see ``constrained_window``).
     Each group is meant for a *separate* ``feature_intervention(..., constrained_layers=window)``
     pass — ``feature_intervention`` takes a single global range, so per-feature windows
-    require per-layer passes. The default (below=1, above=0) gives the paper's [l-1, l]
-    window. ``orig_activations``: [n_layers, n_pos, d_transcoder].
+    require per-layer passes. The default (below=0, above=1) gives the paper's Fig. 9 window
+    [l, l+1]: own-layer decode plus the first cross-layer write. ``orig_activations``:
+    [n_layers, n_pos, d_transcoder].
     """
     n_layers, n_pos, d_tc = orig_activations.shape
     by_layer: dict[int, list[tuple[int, int, int, float]]] = {}

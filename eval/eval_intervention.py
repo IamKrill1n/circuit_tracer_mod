@@ -3,7 +3,7 @@
 For each supernode produced by spectral and agglomerative clustering:
   Exp B: constrained-steer the whole SN (value = factor * orig_activation; factor=-1
          negates, matching the paper; 0 ablates) over the direct-effect window
-         [l-below, l+above] (default [l-1, l]) -> measure the effect on every other SN
+         [l-below, l+above] (default [l, l+1], paper Fig. 9) -> measure the effect on every other SN
          (downstream feature SNs: activation ratio; logit SNs: Δ token probability) and
          on the target token (Δ probability). Edge faithfulness: fraction of summary edges
          whose downstream sign matches sign(edge_weight)·sign(Δa_source), |weight|-weighted.
@@ -53,6 +53,17 @@ DTYPE_MAP = {
     "float16": torch.float16,
     "bfloat16": torch.bfloat16,
 }
+
+# Ordering used for output; ILP is opt-in (only tractable on small graphs).
+ALL_METHODS = (
+    "spectral",
+    "agglomerative",
+    "ilp",
+    "baseline-modularity",
+    "baseline-spectral-cosine",
+    "baseline-kmeans",
+)
+DEFAULT_METHODS = tuple(m for m in ALL_METHODS if m != "ilp")
 
 
 def _clt_interventions(sn: Supernode, value: float = 0.0) -> list[tuple]:
@@ -167,15 +178,18 @@ def steer_source_effects(
     orig_logits: torch.Tensor,
     orig_activations: torch.Tensor,
     factor: float,
-    layers_below: int = 1,
-    layers_above: int = 0,
+    layers_below: int = 0,
+    layers_above: int = 1,
 ) -> tuple[list[dict], list[dict]]:
     """Constrained-steer one supernode -> effect on every other SN + the target token.
 
     Runs one *constrained* (direct-effect) steering pass over the window
-    [layer_min-layers_below, layer_max+layers_above] (default [l-1, l], the paper's range), so
-    only the source's own decode enters the residual stream — CLTs decode only into layers >= l,
-    so the l-1 slot carries no write. Reports, for ``source_sn``:
+    [layer_min-layers_below, layer_max+layers_above], so each source feature contributes its
+    decode only within that window (cross-layer writes above it are dropped) — CLTs decode only
+    into layers >= l, so any slot below the source layer is empty. The default (below=0,
+    above=1) spans [layer_min, layer_max+1]; for a single-layer supernode this is the paper's
+    Fig. 9 window [l, l+1] (own-layer decode + first cross-layer write). Reports, for
+    ``source_sn``:
       - feature target SNs: activation ratio (new/orig) and signed delta,
       - logit target SNs: mean Δ token probability,
       - the global target token: Δ probability,
@@ -267,53 +281,78 @@ def _sng_from_clusters(
 
 def _build_sngs(
     prune_graph: PruneGraph,
+    methods: list[str],
     random_state: int = 42,
     n_init: int = 20,
+    ilp_lambda_causal: float = 1.0,
+    ilp_max_sn: int | None = None,
+    ilp_max_layer_span: int = 4,
+    ilp_time_limit: float = 30.0,
+    match_baseline_k_to_ilp: bool = False,
 ) -> dict[str, SummaryGraph]:
-    best_k_s, _ = find_best_k(prune_graph)
-    spectral_sng = _sng_from_clusters(
-        prune_graph, cluster_graph_spectral(prune_graph, target_k=best_k_s)
-    )
+    """Build a SummaryGraph per requested clustering method. Only the requested methods are
+    computed, so selecting a single method skips the others' clustering work.
 
-    agg_clusterer = partial(cluster_graph_agglomerative, prune_graph)
-    best_k_a, _ = find_best_k_for_clusterer(
-        prune_graph=prune_graph, clusterer=agg_clusterer
-    )
-    agg_sng = _sng_from_clusters(
-        prune_graph, cluster_graph_agglomerative(prune_graph, target_k=best_k_a)
-    )
+    ``match_baseline_k_to_ilp`` runs the baselines at ILP's feature-supernode count (solving
+    ILP for K even when it is not itself a requested method), so a baseline can be compared to
+    ILP at equal granularity rather than at spectral's auto-k."""
+    wanted = set(methods)
+    sngs: dict[str, SummaryGraph] = {}
 
-    # Baselines (match eval_cluster.py). All three baselines run at K = best_k_s
-    # (our spectral's auto-k) so the per-method comparison is at the same supernode count.
-    mid_idx = _middle_indices(prune_graph)
-    middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
-    adjacency_mid = _adjacency_affinity(prune_graph)[np.ix_(mid_idx, mid_idx)]
-    phi_mid = compute_phi_vectors(prune_graph).detach().cpu().numpy()[mid_idx]
+    # ILP is solved if requested as a method, or if baselines must be K-matched to it.
+    ilp_k: int | None = None
+    if "ilp" in wanted or match_baseline_k_to_ilp:
+        from summarization.ilp_cluster import cluster_graph_ilp  # local: avoids import cycle
 
-    modularity_labels = _modularity_middle_labels(adjacency_mid, best_k_s)
-    modularity_sng = _sng_from_clusters(
-        prune_graph, labels_to_supernodes(prune_graph, middle_ids, modularity_labels)
-    )
+        clusters = cluster_graph_ilp(
+            prune_graph,
+            theta=0.0,
+            lambda_causal=ilp_lambda_causal,
+            max_sn=ilp_max_sn,
+            max_layer_span=ilp_max_layer_span,
+            time_limit=ilp_time_limit,
+        )
+        ilp_sng = _sng_from_clusters(prune_graph, clusters)
+        ilp_k = sum(1 for s in ilp_sng.supernodes if s.type not in ("emb", "logit"))
+        if "ilp" in wanted:
+            sngs["ilp"] = ilp_sng
 
-    spectral_cos_labels = _spectral_cosine_middle_labels(
-        phi_mid, best_k_s, random_state, n_init
-    )
-    spectral_cos_sng = _sng_from_clusters(
-        prune_graph, labels_to_supernodes(prune_graph, middle_ids, spectral_cos_labels)
-    )
+    if "spectral" in wanted:
+        best_k_s, _ = find_best_k(prune_graph)
+        sngs["spectral"] = _sng_from_clusters(
+            prune_graph, cluster_graph_spectral(prune_graph, target_k=best_k_s)
+        )
 
-    kmeans_labels = _kmeans_middle_labels(phi_mid, best_k_s, random_state, n_init)
-    kmeans_sng = _sng_from_clusters(
-        prune_graph, labels_to_supernodes(prune_graph, middle_ids, kmeans_labels)
-    )
+    if "agglomerative" in wanted:
+        agg_clusterer = partial(cluster_graph_agglomerative, prune_graph)
+        best_k_a, _ = find_best_k_for_clusterer(prune_graph=prune_graph, clusterer=agg_clusterer)
+        sngs["agglomerative"] = _sng_from_clusters(
+            prune_graph, cluster_graph_agglomerative(prune_graph, target_k=best_k_a)
+        )
 
-    return {
-        "spectral": spectral_sng,
-        "agglomerative": agg_sng,
-        "baseline-modularity": modularity_sng,
-        "baseline-spectral-cosine": spectral_cos_sng,
-        "baseline-kmeans": kmeans_sng,
-    }
+    # Baselines (match eval_cluster.py). They run at K = best_k_s (spectral's auto-k) so the
+    # per-method comparison is at the same supernode count — unless K-matched to ILP instead.
+    baseline_methods = {"baseline-modularity", "baseline-spectral-cosine", "baseline-kmeans"}
+    if wanted & baseline_methods:
+        baseline_k = ilp_k if (match_baseline_k_to_ilp and ilp_k is not None) else find_best_k(prune_graph)[0]
+        mid_idx = _middle_indices(prune_graph)
+        middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
+        adjacency_mid = _adjacency_affinity(prune_graph)[np.ix_(mid_idx, mid_idx)]
+        phi_mid = compute_phi_vectors(prune_graph).detach().cpu().numpy()[mid_idx]
+        baseline_labels = {
+            "baseline-modularity": _modularity_middle_labels(adjacency_mid, baseline_k),
+            "baseline-spectral-cosine": _spectral_cosine_middle_labels(
+                phi_mid, baseline_k, random_state, n_init
+            ),
+            "baseline-kmeans": _kmeans_middle_labels(phi_mid, baseline_k, random_state, n_init),
+        }
+        for name, labels in baseline_labels.items():
+            if name in wanted:
+                sngs[name] = _sng_from_clusters(
+                    prune_graph, labels_to_supernodes(prune_graph, middle_ids, labels)
+                )
+
+    return {m: sngs[m] for m in ALL_METHODS if m in sngs}
 
 
 def _evaluate_sng(
@@ -327,6 +366,7 @@ def _evaluate_sng(
     factor: float,
     layers_below: int,
     layers_above: int,
+    run_exp_d: bool = True,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     edge_rows: list[dict] = []
     sn_rows: list[dict] = []
@@ -342,24 +382,25 @@ def _evaluate_sng(
         if not interventions:
             continue
 
-        # Exp D: per-node ablation to measure logit-push direction of each feature. Left
-        # unconstrained on purpose — this is a cluster-cohesion signature, not an edge test.
-        deltas = []
-        for layer, pos, feat, val in interventions:
-            new_logits, _ = model.feature_intervention(
-                inputs, [(layer, pos, feat, val)], return_activations=False
+        if run_exp_d:
+            # Exp D: per-node ablation to measure logit-push direction of each feature. Left
+            # unconstrained on purpose — this is a cluster-cohesion signature, not an edge test.
+            deltas = []
+            for layer, pos, feat, val in interventions:
+                new_logits, _ = model.feature_intervention(
+                    inputs, [(layer, pos, feat, val)], return_activations=False
+                )
+                deltas.append(_last_logits(new_logits) - orig_last)
+            sn_deltas[sn.name] = torch.stack(deltas)  # [n_nodes, vocab]
+            sn_rows.append(
+                {
+                    "graph": graph_name,
+                    "supernode_id": sn.name,
+                    "method": method,
+                    "n_clt_features": len(interventions),
+                    "intra_cosine": _intra_cosine(sn_deltas[sn.name]),
+                }
             )
-            deltas.append(_last_logits(new_logits) - orig_last)
-        sn_deltas[sn.name] = torch.stack(deltas)  # [n_nodes, vocab]
-        sn_rows.append(
-            {
-                "graph": graph_name,
-                "supernode_id": sn.name,
-                "method": method,
-                "n_clt_features": len(interventions),
-                "intra_cosine": _intra_cosine(sn_deltas[sn.name]),
-            }
-        )
 
         # Exp B: constrained-steer the supernode -> effect on every other SN + the target token
         eff_rows, tgt_rows = steer_source_effects(
@@ -388,6 +429,10 @@ def evaluate_graph(
     factor: float,
     layers_below: int,
     layers_above: int,
+    methods: list[str],
+    run_exp_d: bool = True,
+    ilp_kwargs: dict | None = None,
+    match_baseline_k_to_ilp: bool = False,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     prompt: str = prune_graph.metadata["prompt"]
     # The stored prompt begins with a literal "<bos>"; re-feeding it as a raw string would let
@@ -397,7 +442,9 @@ def evaluate_graph(
     inputs = model.ensure_tokenized(prompt)
     orig_logits, orig_activations = model.get_activations(inputs)
 
-    sngs = _build_sngs(prune_graph)
+    sngs = _build_sngs(
+        prune_graph, methods, match_baseline_k_to_ilp=match_baseline_k_to_ilp, **(ilp_kwargs or {})
+    )
     all_edge: list[dict] = []
     all_sn: list[dict] = []
     all_logit: list[dict] = []
@@ -405,7 +452,7 @@ def evaluate_graph(
         logger.info("  method=%s  n_supernodes=%d", method, len(sng.supernodes))
         edge_rows, sn_rows, logit_rows = _evaluate_sng(
             model, sng, inputs, orig_logits, orig_activations, graph_name, method, factor,
-            layers_below, layers_above,
+            layers_below, layers_above, run_exp_d=run_exp_d,
         )
         all_edge.extend(edge_rows)
         all_sn.extend(sn_rows)
@@ -504,17 +551,63 @@ def main() -> None:
     parser.add_argument(
         "--layers-below",
         type=int,
-        default=1,
+        default=0,
         help="Constrained-patching window low end: [l-below, l+above] per source. "
-        "Default 1 (with --layers-above 0 ⇒ the paper's [l-1, l] direct-effect window).",
+        "Default 0 (with --layers-above 1 ⇒ the paper's Fig. 9 [l, l+1] direct-effect window).",
     )
     parser.add_argument(
         "--layers-above",
         type=int,
-        default=0,
+        default=1,
         help="Constrained-patching window high end (see --layers-below).",
     )
+    parser.add_argument(
+        "--methods",
+        default=",".join(DEFAULT_METHODS),
+        help=f"Comma-separated clustering methods to evaluate (from {', '.join(ALL_METHODS)}). "
+        "Default: all non-ILP methods.",
+    )
+    parser.add_argument(
+        "--skip-exp-d",
+        action="store_true",
+        help="Skip Exp D (per-node ablation cohesion); run only Exp B (edge/target steering).",
+    )
+    parser.add_argument(
+        "--ilp-lambda-causal",
+        type=float,
+        default=1.0,
+        help="ILP causal-preservation weight (only used when 'ilp' is in --methods).",
+    )
+    parser.add_argument(
+        "--ilp-max-sn", type=int, default=None, help="ILP complexity budget K<=max_sn."
+    )
+    parser.add_argument(
+        "--ilp-max-layer-span",
+        type=int,
+        default=4,
+        help="ILP: forbid merging features more than this many layers apart (tractability).",
+    )
+    parser.add_argument(
+        "--ilp-time-limit", type=float, default=30.0, help="ILP HiGHS time limit per graph (s)."
+    )
+    parser.add_argument(
+        "--match-baseline-k-to-ilp",
+        action="store_true",
+        help="Run baselines at ILP's feature-supernode count per graph (solving ILP for K even "
+        "if 'ilp' is not in --methods), for an equal-granularity comparison against ILP.",
+    )
     args = parser.parse_args()
+
+    methods = [m.strip() for m in args.methods.split(",") if m.strip()]
+    unknown = set(methods) - set(ALL_METHODS)
+    if unknown:
+        parser.error(f"unknown --methods {sorted(unknown)}; choose from {list(ALL_METHODS)}")
+    ilp_kwargs = {
+        "ilp_lambda_causal": args.ilp_lambda_causal,
+        "ilp_max_sn": args.ilp_max_sn,
+        "ilp_max_layer_span": args.ilp_max_layer_span,
+        "ilp_time_limit": args.ilp_time_limit,
+    }
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -544,6 +637,8 @@ def main() -> None:
         edge_rows, sn_rows, logit_rows = evaluate_graph(
             model, prune_graph, graph_name, args.steer_factor,
             args.layers_below, args.layers_above,
+            methods, run_exp_d=not args.skip_exp_d, ilp_kwargs=ilp_kwargs,
+            match_baseline_k_to_ilp=args.match_baseline_k_to_ilp,
         )
         all_edge.extend(edge_rows)
         all_sn.extend(sn_rows)

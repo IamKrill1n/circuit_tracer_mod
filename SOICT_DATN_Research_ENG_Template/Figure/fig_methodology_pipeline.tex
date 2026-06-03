@@ -1,0 +1,126 @@
+% Three-stage summarization pipeline figure (Input -> Prune -> Cluster -> Interpret).
+% Requires (loaded in main.tex): tikz + libraries calc, positioning, arrows.meta, shapes.geometric.
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  >=Stealth,
+  emb/.style   ={draw, diamond, aspect=1.2, inner sep=0pt, minimum size=4mm, fill=violet!25},
+  feat/.style  ={circle, draw, inner sep=0pt, minimum size=3mm, fill=white},
+  err/.style   ={regular polygon, regular polygon sides=3, draw, inner sep=0pt,
+                 minimum size=3.6mm, fill=red!18},
+  logit/.style ={draw, rounded corners=1pt, inner sep=1pt, minimum size=4mm,
+                 fill=black!75, text=white, font=\tiny},
+  sn/.style    ={ellipse, draw, thick, inner sep=1pt, minimum width=11mm,
+                 minimum height=6.5mm, fill=orange!18, font=\scriptsize},
+  dot/.style   ={circle, fill=black, inner sep=0pt, minimum size=1.4mm},
+  panel/.style ={draw, rounded corners=3pt, fill=gray!4,
+                 minimum width=31mm, minimum height=37mm},
+  parrow/.style={->, line width=1.1pt, gray!55!black},
+  ecap/.style  ={font=\scriptsize, align=center},
+  slab/.style  ={font=\small\bfseries, align=center},
+]
+
+% ---------- Panel A: input attribution graph ----------
+\begin{scope}[shift={(0,0)}]
+  \node[panel] (pA) {};
+  \node[emb]   (eA1) at (-0.85,-1.45) {};
+  \node[emb]   (eA2) at ( 0.00,-1.45) {};
+  \node[emb]   (eA3) at ( 0.85,-1.45) {};
+  \node[err]   (rA1) at (-1.15,-0.25) {};
+  \node[err]   (rA2) at ( 1.15, 0.55) {};
+  \node[feat]  (aA1) at (-0.80,-0.40) {};
+  \node[feat]  (aA2) at (-0.10,-0.40) {};
+  \node[feat]  (aA3) at ( 0.60,-0.40) {};
+  \node[feat]  (bA1) at (-0.55, 0.55) {};
+  \node[feat]  (bA2) at ( 0.25, 0.55) {};
+  \node[logit] (lA)  at ( 0.00, 1.45) {};
+  \foreach \s/\t in {eA1/aA1,eA1/aA2,eA2/aA1,eA2/aA2,eA2/aA3,eA3/aA2,eA3/aA3,
+                     rA1/aA1,rA1/bA1,aA1/bA1,aA2/bA1,aA2/bA2,aA3/bA2,aA1/bA2,
+                     rA2/bA2,rA2/lA,bA1/lA,bA2/lA,aA3/lA}
+     \draw[->, gray!45, line width=0.2pt] (\s)--(\t);
+\end{scope}
+
+% ---------- Panel B: pruned subgraph ----------
+\begin{scope}[shift={(4.6,0)}]
+  \node[panel] (pB) {};
+  \node[emb]   (eB1) at (-0.85,-1.45) {};
+  \node[emb]   (eB2) at ( 0.40,-1.45) {};
+  \node[feat]  (aB1) at (-0.60,-0.40) {};
+  \node[feat]  (aB2) at ( 0.40,-0.40) {};
+  \node[feat]  (bB1) at (-0.10, 0.55) {};
+  \node[logit] (lB)  at ( 0.00, 1.45) {};
+  \foreach \s/\t in {eB1/aB1,eB2/aB2,aB1/bB1,aB2/bB1,bB1/lB,aB2/lB}
+     \draw[->, black!80, line width=0.5pt] (\s)--(\t);
+\end{scope}
+
+% ---------- Panel C: supernode partition ----------
+\begin{scope}[shift={(9.2,0)}]
+  \node[panel] (pC) {};
+  \node[emb]   (eC1) at (-0.80,-1.45) {};
+  \node[emb]   (eC2) at ( 0.50,-1.45) {};
+  \node[sn]    (sC1) at (-0.35,-0.30) {};
+  \node[dot]   at (-0.55,-0.30) {}; \node[dot] at (-0.15,-0.30) {};
+  \node[sn]    (sC2) at ( 0.15, 0.60) {};
+  \node[dot]   at (-0.05, 0.60) {}; \node[dot] at ( 0.35, 0.60) {};
+  \node[logit] (lC)  at ( 0.00, 1.45) {};
+  \foreach \s/\t in {eC1/sC1,eC2/sC1,eC2/sC2,sC1/sC2,sC2/lC,sC1/lC}
+     \draw[->, black!80, line width=0.5pt] (\s)--(\t);
+\end{scope}
+
+% ---------- Panel D: labeled summary graph ----------
+\begin{scope}[shift={(13.8,0)}]
+  \node[panel] (pD) {};
+  \node[emb,label={[font=\tiny,text=violet!60!black]below:Dallas}]  (eD1) at (-0.70,-1.40) {};
+  \node[emb,label={[font=\tiny,text=violet!60!black]below:capital}] (eD2) at ( 0.70,-1.40) {};
+  \node[sn]    (snTex) at (-0.60,-0.25) {Texas};
+  \node[sn]    (snCap) at ( 0.65,-0.25) {capital};
+  \node[sn]    (snSay) at (-0.05, 0.70) {say Austin};
+  \node[logit, font=\tiny] (lD) at (0.00,1.50) {Austin};
+  \draw[->, black!80, line width=0.5pt] (eD1)--(snTex);
+  \draw[->, black!80, line width=0.5pt] (eD2)--(snCap);
+  \draw[->, black!80, line width=0.5pt] (snTex)--(snSay);
+  \draw[->, black!80, line width=0.5pt] (snCap)--(snSay);
+  \draw[->, black!80, line width=0.5pt] (snSay)--(lD);
+  \draw[->, black!80, line width=0.5pt] (snTex) to[bend left=18] (lD);
+\end{scope}
+
+% ---------- pipeline arrows ----------
+\draw[parrow] (pA.east)--(pB.west);
+\draw[parrow] (pB.east)--(pC.west);
+\draw[parrow] (pC.east)--(pD.west);
+
+% ---------- column headers ----------
+\node[slab] at ($(pA.north)+(0,0.50)$) {Input};
+\node[slab] at ($(pB.north)+(0,0.50)$) {Stage 1: Prune};
+\node[slab] at ($(pC.north)+(0,0.50)$) {Stage 2: Cluster};
+\node[slab] at ($(pD.north)+(0,0.50)$) {Stage 3: Interpret};
+
+% ---------- per-panel captions ----------
+\node[ecap, below=1.5mm of pA.south] {Attribution graph\\$G=(V,E,W)$\\\scriptsize dense, with error nodes};
+\node[ecap, below=1.5mm of pB.south] {Pruned subgraph\\$(V',E')$\\\scriptsize errors removed};
+\node[ecap, below=1.5mm of pC.south] {Supernodes\\partition $f:V'\!\to\!V_H$};
+\node[ecap, below=1.5mm of pD.south] {Summary graph $H$\\\scriptsize labeled DAG};
+
+% ---------- legend ----------
+\begin{scope}[shift={(0,-3.6)}]
+  \node[emb,scale=0.7]  (g1) at (-1.0,0) {}; \node[right=1mm of g1, font=\scriptsize] {embedding};
+  \node[feat]           (g2) at ( 2.3,0) {}; \node[right=1mm of g2, font=\scriptsize] {feature};
+  \node[err,scale=0.8]  (g3) at ( 4.6,0) {}; \node[right=1mm of g3, font=\scriptsize] {error (pruned in Stage 1)};
+  \node[logit]          (g4) at ( 9.0,0) {}; \node[right=1mm of g4, font=\scriptsize] {logit};
+  \node[sn,scale=0.7]   (g5) at (11.6,0) {}; \node[right=1mm of g5, font=\scriptsize] {supernode};
+\end{scope}
+
+\end{tikzpicture}}
+\caption[The three-stage summarization pipeline.]{The three-stage
+summarization pipeline. \textbf{Input:} the attribution graph $G$ is a dense
+DAG over embedding ($\diamond$), feature ($\circ$), error ($\triangle$), and
+logit ($\square$) nodes. \textbf{Stage~1 (prune)} discards every error node and
+every node off a strong input-to-logit pathway, leaving the compact subgraph
+$(V',E')$. \textbf{Stage~2 (cluster)} groups the surviving feature nodes into
+supernodes (ellipses); embedding and logit nodes stay singletons.
+\textbf{Stage~3 (interpret)} aggregates the pruned edges, forces the supernode
+graph to be acyclic, and labels each supernode, yielding the readable summary
+graph $H$ --- here the ``Dallas $\to$ Texas $\to$ Austin'' multi-step circuit.}
+\label{fig:methodology-pipeline}
+\end{figure}
