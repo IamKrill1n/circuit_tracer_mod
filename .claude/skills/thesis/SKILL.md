@@ -8,8 +8,7 @@ description: Improve graduation-thesis (SOICT/HUST DATN) writing quality for a r
 
 Use this skill to draft and revise a graduation thesis that follows the
 `SOICT_DATN_Research_ENG_Template/` template. Target a defense-committee reader:
-prioritize a clear thesis story, the template's mandated chapter structure,
-strict scientific Vietnamese-academic tone (written in English), and claims that
+prioritize a clear thesis story, the template's mandated chapter structure and claims that
 are backed by results.
 
 The template is the source of truth for structure and formatting. Read the

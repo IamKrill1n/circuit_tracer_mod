@@ -1,75 +1,93 @@
 \documentclass[../main.tex]{subfiles}
 \begin{document}
 
-% Lưu ý: Mẫu ĐATN này được thiết kế phù hợp với đồ án tốt nghiệp theo hướng nghiên cứu. Mẫu đề tài này là gợi ý tham khảo. Tuỳ từng đề tài, cấu trúc có thể thay đổi ít nhiều. Sinh viên cần tham khảo ý kiến của giáo viên hướng dẫn để đưa ra cấu trúc hợp lý nhất cho đề tài của mình. 
-
-% Trước khi viết ĐATN, sinh viên cần đọc kỹ hướng dẫn và quy định chi tiết về cách viết ĐATN trong Phụ lục A. 
-
-% Khi đóng quyển ĐATN, sinh viên cần lưu ý tuân thủ hướng dẫn ở phụ lục A.9
-
-% SV cần đặc biệt lưu ý cách hành văn. Mỗi đoạn văn không được quá dài và cần có ý tứ rõ ràng, bao gồm duy nhất một ý chính và các ý phân tích bổ trợ để làm rõ hơn ý chính. Các câu văn trong đoạn phải đầy đủ chủ ngữ vị ngữ, cùng hướng đến chủ đề chung. Câu sau phải liên kết với câu trước, đoạn sau liên kết với đoạn trước. Trong văn phong khoa học, sinh viên không được dùng từ trong văn nói, không dùng các từ phóng đại, thái quá, các từ thiếu khách quan, thiên về cảm xúc, về quan điểm cá nhân như “tuyệt vời”, “cực hay”, “cực kỳ hữu ích”, v.v. Các câu văn cần được tối ưu hóa, đảm bảo rất khó để thể thêm hoặc bớt đi được dù chỉ một từ. Cách diễn đạt cần ngắn gọn, súc tích, không dài dòng.
-
-% Chương 1 có độ dài từ 3 đến 6 trang với các nội dung sau đây
-
-
 \section{Problem Statement}
 \label{sec:dvd}
-% Phần này sinh viên mô tả bài toán cần giải quyết, lý do tại sao lại chọn bài toán đó, ý nghĩa/tầm quan trọng của bài toán.
+Large language models achieve strong results across natural-language tasks, yet their
+internal computation remains largely opaque. Mechanistic interpretability seeks to
+reverse-engineer that computation into human-understandable algorithms rather than only
+relating inputs to outputs. A central goal of this effort is circuit tracing, which
+identifies the pathways of activation inside a model that implement a particular behaviour.
+Recent work makes this concrete: Ameisen et al.~\cite{ameisen2025circuit} use a cross-layer
+transcoder as a replacement model to extract an \emph{attribution graph}, a directed graph
+whose nodes are interpretable features and whose edges are the linear effects between them,
+recording the steps the model takes to produce the next token for a given prompt. The
+attribution graph is a faithful, prompt-specific account of the model's computation, and
+it is the object this thesis studies.
 
-% Tiêu đề của chương này có thể để là ``đặt vấn đề'', hoặc lấy chính tên của bài toán mà sinh viên định giải quyết, ví dụ có thể đặt tiêu đề là ``Bài toán dự đoán …” 
+The attribution graph, however, is too large to read. A single prompt induces thousands of
+feature nodes joined by a dense web of edges, and making sense of one graph can take an
+expert hours, or becomes infeasible for long prompts. The graph must therefore be reduced
+to a compact form before a human can use it, but the reduction must not distort the
+computation it represents. This thesis addresses the resulting problem: how to summarize an
+attribution graph automatically into a small, human-readable graph that remains faithful to
+the model's behaviour.
 
-% Draft:
-% Mechanistic Interpretability -> Circuit Tracing -> SAE -> Attribution Graph -> The need for automated summary
+\section{Background and Problems of Research}
+\label{sec:giaiphap}
+The circuit-tracing methodology already provides a way to shrink an attribution graph, but
+it relies on human judgment at every step. After building the graph, Ameisen et
+al.~\cite{ameisen2025circuit} prune it by hand, keeping the nodes and edges that account
+for most of the influence on the output and discarding the rest, and then group the
+surviving features into \emph{supernodes} by inspection, collecting features that play the
+same role into a single labelled unit so the circuit can be drawn as a small diagram. Both
+steps are manual: pruning thresholds are tuned by hand, and grouping a single circuit can
+take hours of expert effort, so the analysis does not scale beyond a handful of prompts.
 
-Large language models (LLMs) have achieved remarkable success in various natural language processing tasks, but their inner workings remain largely opaque. Mechanistic interpretability aims to reverse engineer the interal mechanism of the neural network down to human-interpretable algorithm. One important goal of Mech interp is circuit tracing, which identifies specific pathways of activation within the model that correspond to particular linguistic phenomena. Many approaches compete to find the right building block for circuit tracing, namely neurons, attention heads. \cite{circuit_tracer} propose a novel method to use cross-layer transcoder as the replacement model to extract an attribution graph, describing the steps the model make to output the next token for a given input prompt. However, the attribution graph is often too large and complex, and studing them often requires manual effort which could take hours, or simply infisible for long prompts. Therefore, there is a need for an automated method to summarize the attribution graph, which can help researchers understand the model's behavior in a more efficient and effective way.
-
-
-% \section{Background and Problems of Research} 
-% \label{sec:giaiphap}
-% Sinh viên trước tiên cần trình bày tổng quan các kết quả của các nghiên cứu hiện nay cho bài toán giới thiệu ở phần \ref{sec:dvd}. Sau đấy, sinh viên đưa ra các hạn chế của các giải pháp hiện tại. 
-
-% Draft:
-
-
+Related efforts address other parts of the problem but leave the structural reduction open.
+ADAG~\cite{arora2026adag} uses a language model to describe an attribution graph in natural
+language, removing the labelling bottleneck, but it describes a graph whose structure is
+taken as given rather than compressing that structure. Work on circuits in the neuron
+basis~\cite{arora2026sparse} avoids transcoder training and reconstruction error, yet the
+authors note that the resulting circuits are still too large to read and call for principled
+grouping methods. General graph-summarization objectives, such as causal-DAG
+summarization~\cite{youngmann2025causal}, compress large directed graphs but assume
+unweighted, variable-level causal graphs and carry no notion of faithfulness to an
+underlying network. No existing method produces a compact and faithful structural summary
+of a signed attribution graph by jointly pruning and clustering its feature nodes under an
+explicit faithfulness objective.
 
 \section{Research Objectives and Conceptual Framework}
-% Trong chương này, sinh viên trước hết trình bày mục tiêu của đồ án là gì, sau đấy sinh viên đề xuất định hướng giải pháp của mình. Tốt nhất là với trình bày từng giải pháp đối với mỗi vấn đề nêu ra trong chương \ref{sec:giaiphap}. 
-This thesis aims to develop an automated method for summarizing attribution graphs, which can help researchers understand the model's behavior in a more efficient and effective way. To achieve this goal, we propose a novel method that leverages the structure of the attribution graph to identify key pathways of activation and generate concise summaries that capture the most important information. Our method is designed to be flexible and adaptable, allowing it to be applied to a wide range of models and tasks.
+This thesis aims to summarize attribution graphs automatically so that researchers can
+understand a model's behaviour without manual reduction. The objective is a method that
+takes an attribution graph and returns a small \emph{summary graph} of supernodes that is
+interpretable, faithful to the original computation, and produced without human
+intervention. The proposed solution responds directly to the limitations of the previous
+section. In place of hand-tuned pruning, it scores every node and edge by a combination of
+its downstream influence on the output and its upstream relevance to the input, and keeps
+only the important ones. In place of grouping features by inspection, it clusters them by a
+role similarity under an explicit objective that rewards atomic supernodes while preserving
+the causal edges between them. Finally, it aggregates the surviving edges into an acyclic,
+labelled supernode graph, so the output is a directed acyclic graph that a reader can follow
+at a glance. Each stage replaces one manual step with an automated, objective-driven
+procedure.
+
 \section{Contributions}
-% Trong phần này sinh viên liệt kê cụ thể, ngắn gọn các đóng góp của đồ án. Ví dụ: 
-
-% Đồ án này có 3 đóng góp chính như sau:
-
-% Draft:
-% Our contributions are as follows:
-% - We formulate the problem, and propose a novel method for solving it.
-% - We evaluate our method on well-known circuits, and show that it outperforms simple baselines.
-% - We show that our method produce steerable summaries, which can be used to understand the model's behavior in different ways.
-
-Our contributions are as follows:
-- We formulate the problem of summarizing attribution graphs, and propose a novel method for solving it.
-- We evaluate our method on well-known circuits, and show that it outperforms simple baselines.
-- We show that our method produce steerable summaries, which can be used to understand the model's behavior in different ways.
+This thesis makes three contributions:
+\begin{itemize}[leftmargin=*,topsep=2pt,itemsep=2pt]
+\item It formalizes the problem of summarizing an attribution graph, defining the summary
+graph together with explicit desiderata --- importance retention, atomicity,
+causal-information preservation, and interpretability --- and an objective that makes them
+measurable.
+\item It proposes an automated three-stage pipeline --- pruning, clustering, and
+interpreting --- that solves the problem, including an exact integer-program clusterer for
+small graphs and scalable spectral and agglomerative clusterers for larger ones.
+\item It evaluates the method on the BATS analogy and multi-hop reasoning datasets,
+showing through steering interventions that the resulting summaries are causally faithful
+and that the supernodes behave as the single mechanisms their labels claim.
+\end{itemize}
 
 \section{Organization of Thesis}
-% Phần còn lại của báo cáo đồ án tốt nghiệp này được tổ chức như sau. 
-
-% Chương 2 trình bày về v.v. 
-
-% Trong Chương 3, em/tôi giới thiệu về v.v.
-
-% Chú ý: Sinh viên cần viết mô tả thành đoạn văn đầy đủ về nội dung chương. Tuyệt đối không viết ý hay gạch đầu dòng. Chương 1 không cần mô tả trong phần này. 
-
-% Ví dụ tham khảo mô tả chương trong phần bố cục đồ án tốt nghiệp: Chương *** trình bày đóng góp chính của đồ án, đó là một nền tảng ABC cho phép khai phá và tích hợp nhiều nguồn dữ liệu, trong đó mỗi nguồn dữ liệu lại có định dạng đặc thù riêng. Nền tảng ABC được phát triển dựa trên khái niệm DEF, là các module ngữ nghĩa trợ giúp người dùng tìm kiếm, tích hợp và hiển thị trực quan dữ liệu theo mô hình cộng tác và mô hình phân tán.  
-
-% Chú ý: Trong phần nội dung chính, mỗi chương của đồ án nên có phần Tổng quan và Kết chương. Hai phần này đều có định dạng văn bản “Normal”, sinh viên không cần tạo định dạng riêng, ví dụ như không in đậm/in nghiêng, không đóng khung, v.v... 
-
-% Trong phần Tổng quan của chương N, sinh viên nên có sự liên kết với chương N-1 rồi trình bày sơ qua lý do có mặt của chương N và sự cần thiết của chương này trong đồ án. Sau đó giới thiệu những vấn đề sẽ trình bày trong chương này là gì, trong các đề mục lớn nào.
-
-% Ví dụ về phần Tổng quan: Chương 3 đã thảo luận về nguồn gốc ra đời, cơ sở lý thuyết và các nhiệm vụ chính của bài toán tích hợp dữ liệu. Chương 4 này sẽ trình bày chi tiết các công cụ tích hợp dữ liệu theo hướng tiếp cận “mashup”. Với mục đích và phạm vi của đề tài, sáu nhóm công cụ tích hợp dữ liệu chính được trình bày bao gồm: (i) nhóm công cụ ABC trong phần 4.1, (ii) nhóm công cụ DEF trong phần 4.2, nhóm công cụ GHK trong phần 4.3, v.v...
-
-% Trong phần Kết chương, sinh viên đưa ra một số kết luận quan trọng của chương. Những vấn đề mở ra trong Tổng quan cần được tóm tắt lại nội dung và cách giải quyết/thực hiện như thế nào. Sinh viên lưu ý không viết Kết chương giống hệt Tổng quan. Sau khi đọc phần Kết chương, người đọc sẽ nắm được sơ bộ nội dung và giải pháp cho các vấn đề đã trình bày trong chương. Trong Kết chương, Sinh viên nên có thêm câu liên kết tới chương tiếp theo.
-
-% Ví dụ về phần Kết chương: Chương này đã phân tích chi tiết sáu nhóm công cụ tích hợp dữ liệu. Nhóm công cụ ABC và DEF thích hợp với những bài toán tích hợp dữ liệu phạm vi nhỏ. Trong khi đó, nhóm công cụ GHK lại chứng tỏ thế mạnh của mình với những bài toán cần độ chính xác cao, v.v. Từ kết quả nghiên cứu và phân tích về sáu nhóm công cụ tích hợp dữ liệu này, tôi đã thực hiện phát triển phần mềm tự động bóc tách và tích hợp dữ liệu sử dụng nhóm công cụ GHK. Phần này được trình bày trong chương tiếp theo – Chương 5.
+The remainder of this thesis is organized as follows. Chapter~2 reviews the background the
+method depends on, tracing the line from superposition and sparse dictionary learning to the
+cross-layer transcoders and circuit-tracing pipeline that produce attribution graphs, and
+surveys the related work on describing and summarizing circuits from which the thesis takes
+its motivation. Chapter~3 presents the proposed method, formalizing the summary-graph
+problem and detailing its three stages of pruning, clustering, and interpreting. Chapter~4
+analyzes the method's theoretical properties, in particular how reconstruction error limits
+the influence score on which pruning relies. Chapter~5 evaluates the method empirically,
+defining the faithfulness metrics and reporting the steering-intervention study that
+validates the summary graphs against the underlying model. Chapter~6 discusses the findings
+and their limitations and concludes with directions for future work.
 
 \end{document}

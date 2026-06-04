@@ -1,6 +1,61 @@
 \documentclass[../main.tex]{subfiles}
 \begin{document}
 
-\section{Discussion and Limitations} 
+\section{Overview}
+The previous chapter validated the summary graph empirically; this chapter steps back to
+discuss what the findings mean, where the method falls short, and what they amount to as a
+whole. It first weighs the results and the method's limitations, then summarizes the
+thesis's contributions and outcomes and points to future work.
+
+\section{Discussion and Limitations}
+The central finding of Chapter~5 is that the summarization pipeline produces causally
+faithful summary graphs: across the analogy graphs, steering a supernode moves its
+downstream neighbours in the direction and roughly the magnitude its summary edge predicts,
+for both the exact integer-program clusterer and the $K$-means baseline. Faithfulness is
+therefore a property of the abstraction rather than of one particular clusterer, which is
+the outcome the objective was designed to produce. The comparison between the two clusterers
+is more nuanced than a single winner: at a fixed supernode count the simpler baseline is
+more faithful per edge, while the integer program exposes more of the circuit's causal
+wiring through its causal-preservation term. The two are different operating points on one
+trade-off, not a ranking, and the steering metric, which grades a method only on the edges
+it chooses to expose, is partly biased toward the method that exposes less structure.
+
+Several limitations bound these conclusions. The method summarizes one prompt at a time and
+inherits the scope of the underlying attribution graph, so it says nothing about mechanisms
+shared across prompts or about circuits that run through attention rather than the MLP
+features the replacement model captures. The exact clusterer solves an integer program whose
+size grows with the number of feature pairs and is tractable only on the small pruned graphs
+studied here; larger graphs fall back to the approximate spectral and agglomerative
+clusterers. The trade-off weight between atomicity and causal preservation was fixed at a
+single value in the evaluation, so the operating point at which the per-edge and structural
+effects balance has not yet been located; a sweep over this weight is the natural next
+experiment. Finally, the evaluation rests on the steering intervention alone: the
+complementary LLM-versus-human relevance comparison is still in progress, and feature
+meanings are taken from existing labels rather than verified, so the readability of the
+summaries has not been measured against human judgment.
+
 \section{Conclusion}
+This thesis formalized the problem of summarizing an attribution graph and proposed an
+automated three-stage pipeline --- pruning, clustering, and interpreting --- that replaces
+the manual reduction of the original circuit-tracing methodology. The problem was stated
+through four desiderata and a matching objective, the pipeline was built to optimize that
+objective with an exact integer program and scalable alternatives, and the resulting summary
+graphs were shown to be causally faithful under steering interventions on the BATS analogy
+and multi-hop datasets. Together these results turn a slow, expert-driven analysis into an
+objective-driven procedure that runs without human intervention while keeping the summary
+faithful to the model. Future work follows from the limitations above: sweeping the
+atomicity--causal trade-off to characterize the full Pareto front, scaling the exact solver
+or tightening the approximate clusterers for larger graphs, completing the human-judgment
+evaluation of readability, and extending the summary beyond a single prompt toward mechanisms
+that recur across many.
+
+\section{Chapter Summary}
+This chapter discussed the thesis's results and their limits and drew its conclusions. The
+summarization pipeline was shown to deliver faithful, automated summary graphs, with the
+choice of clusterer setting a trade-off between per-edge faithfulness and exposed structure
+rather than a strict ranking. The main limitations --- the single-prompt scope, the
+tractability ceiling of the exact solver, the unswept trade-off weight, and the
+still-incomplete readability evaluation --- define the agenda for future work, completing
+the account of the method begun in Chapter~3 and validated in Chapter~5.
+
 \end{document}

@@ -1,65 +1,82 @@
 \documentclass[../main.tex]{subfiles}
 \begin{document}
 
-% \textcolor{red}{Chú ý: Chương này là không bắt buộc. Nếu nghiên cứu chỉ có phân tích lý thuyết mà không có thực nghiệm thì sinh viên không cần trình bày chương này }
 \section{Overview}
-\section{Dataset}
-\subsection{Synthetic Analogies from BATS}
-The Bigger Analogy Test Set (BATS) is a widely used benchmark for word embeddings and language models to capture relational and semantic knowledge.
-We extract the entities in BATS lexicography category to create a synthetic dataset consist of 10 prompts per subcategory. The prompts in the dataset are of the format:
-The saying goes: A is to B as C is to D 
-Where A, B, C, D are entities in the BATS lexicography subcategory. The task is to predict D given A, B, and C.
-\subsection{Multihop reasoning dataset}
-We follow the multihop queries in \cite{circuit_tracer}. The dataset contains multiple queries that require reasoning across multiple steps to arrive at the correct answer. Each query is designed to test the model's ability to perform basic reasoning and inference. 
+The previous chapters defined the summarization method and analyzed its properties on
+paper. This chapter tests the central claim empirically: that the summary graph is
+\emph{faithful}, meaning its supernode edges reflect genuine causal dependencies in the
+replacement model rather than artifacts of clustering. It first describes the datasets
+(Section~\ref{sec:datasets}) and experimental setup (Section~\ref{sec:setup}), then defines
+the evaluation methodology (Section~\ref{sec:eval-method}) and baselines
+(Section~\ref{sec:baselines}). The main result is a steering-intervention study that grades
+the clustering and edge-construction stages together (Section~\ref{sec:intervention-results});
+a second, in-progress evaluation using an LLM to score supernode relevance is reported in
+draft (Section~\ref{sec:llm-results}).
 
-All the prompts in both datasets are chosen such that the model correctly output the answer with confidence > 20\%.
+\section{Datasets}
+\label{sec:datasets}
+\subsection{Synthetic analogies from BATS}
+The Bigger Analogy Test Set (BATS) is a benchmark for probing the relational and semantic
+knowledge of word embeddings and language models. We extract the entities in its
+lexicography category to build a synthetic dataset of ten prompts per subcategory. Each
+prompt has the form ``The saying goes: $A$ is to $B$ as $C$ is to $D$'', where $A$, $B$,
+$C$, $D$ are entities of one subcategory, and the task is to predict $D$ from $A$, $B$,
+and $C$.
+
+\subsection{Multi-hop reasoning}
+We follow the multi-hop queries of Ameisen et al.~\cite{ameisen2025circuit}. Each query
+requires reasoning across several steps to reach the answer and so tests the model's
+ability to chain basic inferences. In both datasets we keep only prompts the model answers
+correctly with confidence above $20\%$, so every attribution graph explains a prediction
+the model actually makes.
+
 \section{Experimental Setup}
-\subsection{Environment Setup}
-Experiments are conducted on a single PC with NVIDIA GeForce RTX 4090 GPU, 24GB VRAM, and 64GB RAM. The operating system is Ubuntu 22.04 LTS. We use Python 3.10 for all implementations and experiments.
-\subsection{Tools and Libraries}
-We use the circuit tracer library to generate the attribution graphs for our prompts. We also utilize features' metadata provided by the library and adapt the UI to visualize the attribution graphs. 
-\section{Evaluation Methodology}
-\subsection{Baseline Methods}
-\subsection{LLM score}
-We utilize an LLM to both label and score the supernodes in a summary graph.
-The scoring process is the opposite of the labeling process. We first prompt the LLM to label the supernodes in the summary graph, then we prompt the LLM to score each supernode based on its relevance to the final answer. The scoring is done on a scale of 0 to 1, where 0 indicates that the supernode is not relevant at all, and 1 indicates that the supernode is highly relevant to the final answer. The LLM's score for each supernode is then used as a measure of its importance in the reasoning process.
-\subsection{Steering evaluation}
-% Sinh viên trình bày chi tiết cách thức tiến hành thí nghiệm, ví dụ: các baseline chọn để so sánh là gì? tại sao lại chọn các baseline đấy? Tiến hành bao nhiêu thí nghiệm? mỗi thí nghiệm được thực hiện bao nhiêu lần? Các tham số của thuật toán được chọn như thế nào? Kịch bản thí nghiệm được tạo ra sao? Dữ liệu xử lý thế nào? … Có thể chia  chương này thành các chương nhỏ hơn để tiện trình bày.
+\label{sec:setup}
+\subsection{Environment}
+Experiments run on a single workstation with an NVIDIA GeForce RTX 4090 GPU (24\,GB
+VRAM) and 64\,GB of RAM, under Ubuntu 22.04 LTS. All code uses Python 3.10.
 
+\subsection{Tools and libraries}
+We generate the attribution graphs with the circuit-tracing library of Ameisen et
+al.~\cite{ameisen2025circuit}, reuse its feature metadata, and adapt its viewer to
+visualize the summary graphs.
+
+\section{Evaluation Methodology}
+\label{sec:eval-method}
+\subsection{Steering-intervention faithfulness}
 A summary graph is faithful only if its supernode edges reflect genuine causal
-dependencies in the replacement model. We test this directly with a steering
-intervention: we perturb one supernode at its source and check whether every other
-supernode moves in the direction its incoming edge predicts. The experiment grades
-the Stage~2 partition together with the Stage~3 edges $W_H$ at once, so it scores
-the summary graph as a whole rather than any single stage.
+dependencies. We test this directly with a steering intervention: we perturb one
+supernode at its source and check whether every other supernode moves in the direction
+its incoming edge predicts. The test grades the clustering partition together with the
+edges $W_H$ at once, so it scores the summary graph as a whole rather than any single
+stage.
 
 \paragraph{Intervention protocol.}
-For each non-fixed supernode $C$ of a summary graph we negate every member feature,
-setting its activation to $M \cdot a$ with the steer factor $M = -1$ and $a$ the
-original activation, then run one forward pass with all members of $C$ steered
-together. The perturbation is applied as \emph{constrained} (direct-effect)
-patching, following the methodology of~\cite{ameisen2025circuit}: each steered
-feature writes its decoder vector only over the layer window $[l, l+1]$ around its
-own layer $l$ --- its own-layer reconstruction plus the first cross-layer write ---
-while the attention patterns and LayerNorm scales are frozen at their clean values.
-Freezing attention and normalization isolates the \emph{direct} effect that the
-summary edges model and suppresses the indirect paths the attribution graph does
-not represent.
+For each non-fixed supernode $C$ we negate every member feature, setting its activation
+to $M \cdot a$ with steer factor $M = -1$ and $a$ the original activation, then run one
+forward pass with all members of $C$ steered together. The perturbation is applied as
+\emph{constrained} (direct-effect) patching, following Ameisen et
+al.~\cite{ameisen2025circuit}: each steered feature writes its decoder vector only over
+the layer window $[l, l+1]$ around its own layer $l$ --- its own-layer reconstruction
+plus the first cross-layer write --- while the attention patterns and LayerNorm scales
+are frozen at their clean values. Freezing attention and normalization isolates the
+\emph{direct} effect that the summary edges model and suppresses the indirect paths the
+attribution graph does not represent.
 
 \paragraph{Measured response.}
 After the intervention we read the activation change $\Delta a_{C'}$ of every other
 feature supernode $C'$ and the probability change $\Delta p_{C'}$ of every logit
-supernode and of the target token. For a steered source $C$ and a downstream
-supernode $C'$ joined by the summary edge $W_{H,\,C \to C'}$, the edge
-\emph{predicts} that the downstream response carries the sign
+supernode and of the target token. For a steered source $C$ and a downstream supernode
+$C'$ joined by the summary edge $W_{H,\,C \to C'}$, the edge \emph{predicts} that the
+downstream response carries the sign
 $\operatorname{sgn}(W_{H,\,C \to C'}) \cdot \operatorname{sgn}(\Delta a_C)$, where
-$\Delta a_C$ is the activation change of the steered supernode itself (negative
-under negation).
+$\Delta a_C$ is the activation change of the steered supernode itself (negative under
+negation).
 
 \paragraph{Metrics.}
-We summarize each graph with three quantities, all oriented so that higher is
-better. \emph{Edge sign-consistency} is the fraction of summary edges whose measured
-downstream sign matches the predicted one, weighted by edge magnitude:
+We summarize each graph with three quantities, all oriented so that higher is better.
+\emph{Edge sign-consistency} is the fraction of summary edges whose measured downstream
+sign matches the predicted one, weighted by edge magnitude:
 \begin{equation}
 \mathrm{SC} \;=\;
 \frac{\displaystyle\sum_{(C, C') \in E_H} |W_{H,\,C \to C'}| \cdot
@@ -69,49 +86,54 @@ downstream sign matches the predicted one, weighted by edge magnitude:
 \;\in\; [0, 1],
 \label{eq:sign-consistency}
 \end{equation}
-where $\Delta m_{C'}$ is $\Delta a_{C'}$ for a feature target and $\Delta p_{C'}$ for
-a logit target; $\mathrm{SC} = 1$ means every edge fires in the predicted direction.
+where $\Delta m_{C'}$ is $\Delta a_{C'}$ for a feature target and $\Delta p_{C'}$ for a
+logit target; $\mathrm{SC} = 1$ means every edge fires in the predicted direction.
 \emph{Monotonicity} is the Spearman correlation $\rho$ between the edge magnitude
-$|W_{H,\,C \to C'}|$ and the measured effect magnitude over the feature-to-feature
-edges, testing whether heavier edges produce larger downstream changes.
-\emph{Output effect} is the mean absolute target-token probability shift
-$|\Delta p|$ across all single-supernode interventions, measuring how much causal
-weight a supernode carries toward the model's answer.
+$|W_{H,\,C \to C'}|$ and the measured effect magnitude over the feature-to-feature edges,
+testing whether heavier edges produce larger downstream changes. \emph{Output effect} is
+the mean absolute target-token probability shift $|\Delta p|$ across all single-supernode
+interventions, measuring how much causal weight a supernode carries toward the model's
+answer.
 
-\paragraph{Baseline and parameters.}
-We compare the exact ILP clusterer (Section~\ref{sec:objective}) against a
-$K$-means baseline that partitions the same role vectors $r(u)$ of
-Eq.~\eqref{eq:role} with Euclidean $K$-means. The ILP chooses its supernode count
-$K$ endogenously, whereas $K$-means takes $K$ as input; we therefore set the
-baseline's $K$ equal to the ILP's $K$ on each graph, so the two methods differ only
-in how they assign features and not in granularity, making the comparison fair at a
-fixed budget. The experiment runs on the $100$ pruned attribution graphs from the
-analogies dataset (softmax token weighting, pruning $\alpha = 0.5$, node threshold
-$\eta_V = 0.02$). Each graph is processed once: the intervention is deterministic
-given a partition, the ILP is solved to optimality ($\theta = 0$, $\lambda = 1$,
-layer span $\le 4$, $30$\,s time limit), and $K$-means uses $20$ restarts under a
-fixed seed.
+\subsection{LLM scoring}
+The second evaluation uses a large language model to label each supernode and then score
+its relevance to the prediction on a $[0, 1]$ scale, with $0$ meaning irrelevant and $1$
+highly relevant to the final answer. The labeling and scoring prompts are kept separate so
+that the score does not simply restate the label. This evaluation is still in progress; its
+draft results are reported in Section~\ref{sec:llm-results}.
 
-\section{Validate summary graph with interventions}
-% Các chương tiếp theo sinh viên trình bày các kết quả thí nghiệm thu được. Mỗi kết quả nên cho vào một chương. Đối với mỗi kết quả thí nghiệm, cần trình bày các bảng biểu, đồ thị minh hoạ cho kết quả thí nghiệm. Sinh viên cần nêu nhận xét chi tiết về kết quả thí nghiệm, so sánh các phương pháp với nhau, giải thích tại sao kết quả lại như vậy.
+\section{Baselines}
+\label{sec:baselines}
+We compare the exact ILP clusterer (Section~\ref{sec:objective}) against a $K$-means
+baseline that partitions the same role vectors $r(u)$ of Eq.~\eqref{eq:role} with
+Euclidean $K$-means. The ILP chooses its supernode count $K$ endogenously, whereas
+$K$-means takes $K$ as input; we therefore set the baseline's $K$ equal to the ILP's $K$
+on each graph, so the two methods differ only in how they assign features and not in
+granularity, making the comparison fair at a fixed budget. The study runs on the $100$
+pruned attribution graphs from the analogies dataset (softmax token weighting, pruning
+$\alpha = 0.5$, node threshold $\eta_V = 0.02$). Each graph is processed once: the
+intervention is deterministic given a partition, the ILP is solved to optimality
+($\theta = 0$, $\lambda = 1$, layer span $\le 4$, $30$\,s time limit), and $K$-means uses
+$20$ restarts under a fixed seed.
 
-Both clusterers produce causally faithful summary graphs: negating a supernode moves
-its downstream neighbours in the predicted direction for the large majority of edges,
-and the effect grows with edge weight. Table~\ref{tab:intervention} reports the two
-methods at equal granularity.
+\section{Steering-intervention results}
+\label{sec:intervention-results}
+Both clusterers produce causally faithful summary graphs: negating a supernode moves its
+downstream neighbours in the predicted direction for the large majority of edges, and the
+effect grows with edge weight. Table~\ref{tab:intervention} reports the two methods at
+equal granularity.
 
 \begin{table}[h]
 \centering
 \small
 \caption{Steering-intervention faithfulness on the $100$ analogy graphs, ILP versus a
-$K$-matched $K$-means baseline. Values are means over the $100$ graphs; arrows mark
-the direction of improvement and bold the better method per column. The three causal
-columns ---sign-consistency $\mathrm{SC}$ (Eq.~\eqref{eq:sign-consistency}),
-monotonicity $\rho$, and output effect $|\Delta p|$--- all favour $K$-means, and every
-per-graph difference is significant (paired Wilcoxon $p < 0.01$). The right-most column
-is diagnostic: the mean number of supernode edges left visible in $H$, a measure of
-exposed structure rather than of quality. $K$ is identical for the two methods by
-construction.}
+$K$-matched $K$-means baseline. Values are means over the $100$ graphs; arrows mark the
+direction of improvement and bold the better method per column. The three causal columns
+--- sign-consistency $\mathrm{SC}$ (Eq.~\eqref{eq:sign-consistency}), monotonicity $\rho$,
+and output effect $|\Delta p|$ --- all favour $K$-means, and every per-graph difference is
+significant (paired Wilcoxon $p < 0.01$). The right-most column is diagnostic: the mean
+number of supernode edges left visible in $H$, a measure of exposed structure rather than
+of quality. $K$ is identical for the two methods by construction.}
 \label{tab:intervention}
 \begin{tabular}{l c c c c c}
 \toprule
@@ -126,30 +148,49 @@ $K$-means (role vectors)       & 15.3 & \textbf{0.941} & \textbf{0.539} & \textb
 At equal $K$ the $K$-means baseline is the more faithful of the two on every causal
 metric. Its edges are more sign-consistent ($0.941$ vs.\ $0.878$), more monotone
 ($\rho = 0.539$ vs.\ $0.442$), and its supernodes shift the target probability more
-($0.190$ vs.\ $0.175$); all three gaps hold across the $100$ graphs at
-$p < 0.01$. The pooled, edge-weighted sign-consistency over all $4{,}799$ tested
-supernode pairs tells the same story ($0.927$ vs.\ $0.861$).
+($0.190$ vs.\ $0.175$); all three gaps hold across the $100$ graphs at $p < 0.01$. The
+pooled, edge-weighted sign-consistency over all $4{,}799$ tested supernode pairs tells the
+same story ($0.927$ vs.\ $0.861$).
 
 The one axis on which the ILP leads is the amount of causal structure it exposes: it
-leaves $14.6$ supernode edges visible per graph against the baseline's $13.0$. This is
-the intended effect of the causal-preservation loss $L_{\text{causal}}$ (D3), which
-penalizes merging directly connected features and so keeps their edge in $H$ instead of
-absorbing it into a supernode. The same mechanism explains the sign-consistency gap:
-the ILP surfaces more --- and individually weaker --- edges and is then graded on all of
-them, whereas $K$-means hides its weakest, most ambiguous edges inside clusters and is
-graded only on the strong ones that remain. The comparison therefore measures per-edge
-faithfulness at fixed $K$, not the overall quality of the abstraction, and it is partly
-biased toward the method that exposes less structure.
+leaves $14.6$ supernode edges visible per graph against the baseline's $13.0$. This is the
+intended effect of the causal-preservation loss $L_{\text{causal}}$ (D3), which penalizes
+merging directly connected features and so keeps their edge in $H$ instead of absorbing it
+into a supernode. The same mechanism explains the sign-consistency gap: the ILP surfaces
+more --- and individually weaker --- edges and is then graded on all of them, whereas
+$K$-means hides its weakest, most ambiguous edges inside clusters and is graded only on the
+strong ones that remain. The comparison therefore measures per-edge faithfulness at fixed
+$K$, not the overall quality of the abstraction, and it is partly biased toward the method
+that exposes less structure.
 
 Two caveats further temper the result. First, $K$-means optimizes role-vector cohesion
-directly, which is close to what the steering metric rewards, so it is partly graded on
-its own objective. Second, the comparison fixes the trade-off weight at $\lambda = 1$,
-and that weight is precisely the knob moving the ILP along the structure-versus-cohesion
-axis; a sweep over $\lambda$ is needed to locate the operating point at which the two
-effects balance. We conclude that both abstractions are faithful and that, at this
-single operating point, the simple baseline is at least as faithful per edge while the
-ILP retains more of the circuit's causal wiring.
-\section{LLM score}
-% Draft
-% Table compare human evaluation score and LLM score for the supernodes in the summary graph.
+directly, which is close to what the steering metric rewards, so it is partly graded on its
+own objective. Second, the comparison fixes the trade-off weight at $\lambda = 1$, and that
+weight is precisely the knob moving the ILP along the structure-versus-cohesion axis; a
+sweep over $\lambda$ is needed to locate the operating point at which the two effects
+balance. We conclude that both abstractions are faithful and that, at this single operating
+point, the simple baseline is at least as faithful per edge while the ILP retains more of
+the circuit's causal wiring.
+
+\section{LLM-score evaluation (draft)}
+\label{sec:llm-results}
+This evaluation is in progress and reported in draft. The intended comparison contrasts the
+LLM relevance score of each supernode (Section~\ref{sec:eval-method}) with a human
+relevance judgment on the same supernodes, so that agreement between the two would justify
+using the LLM score as a scalable proxy for human-judged supernode quality. The protocol,
+the prompt design, and the human-rating procedure are fixed; the rated graphs and the
+agreement statistics are still being collected, so no quantitative claim is made here. We
+report this evaluation in full in a later revision.
+
+\section{Chapter Summary}
+This chapter validated the summary graph empirically. The steering intervention confirmed
+that both the exact ILP clusterer and the $K$-means baseline yield causally faithful
+abstractions, with downstream responses matching the sign and magnitude of the summary
+edges on the large majority of pairs across $100$ analogy graphs. The two methods trade
+off along a single axis at the tested operating point: $K$-means is more faithful per edge,
+while the ILP exposes more of the circuit's causal wiring through its causal-preservation
+loss. The result also identified the next step --- a sweep over the trade-off weight
+$\lambda$ --- and an evaluation still under way, the LLM-versus-human relevance comparison.
+The final chapter discusses what these findings mean and where the method falls short.
+
 \end{document}

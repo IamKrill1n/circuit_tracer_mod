@@ -63,6 +63,22 @@ def _parse_bin_payload(raw: bytes) -> bytes:
     return zlib.decompress(payload, wbits=zlib.MAX_WBITS | 32)  # auto-detect zlib/gzip
 
 
+# The HF index (offsets of every feature in every layer) is identical for all features of a scan.
+# Cache it so a graph's worth of feature lookups downloads it once, not once per feature.
+# Value is the parsed index, or None for scans not hosted on HF (→ Cloudfront fallback).
+_HF_INDEX_CACHE: dict[str, list | dict | None] = {}
+
+
+def _get_hf_index(scan: str) -> list | dict | None:
+    if scan not in _HF_INDEX_CACHE:
+        resp = requests.get(_hf_features_url(scan, "index.json.gz"), timeout=30)
+        if resp.status_code == 200:
+            _HF_INDEX_CACHE[scan] = json.loads(zlib.decompress(resp.content, wbits=zlib.MAX_WBITS | 32))
+        else:
+            _HF_INDEX_CACHE[scan] = None
+    return _HF_INDEX_CACHE[scan]
+
+
 def get_feature_dashboard(
     scan: str,
     layer: int,
@@ -86,11 +102,8 @@ def get_feature_dashboard(
             return FeatureDashboard.model_validate_json(local_path.read_text())
 
     # 2) HuggingFace binary chunks (preferred for HF-hosted scans like mntss/clt-gemma-2-2b-2.5M)
-    index_url = _hf_features_url(scan, "index.json.gz")
-    head = requests.head(index_url, timeout=10, allow_redirects=True)
-    if head.status_code == 200:
-        index_bytes = requests.get(index_url, timeout=30).content
-        index_data = json.loads(zlib.decompress(index_bytes, wbits=zlib.MAX_WBITS | 32))
+    index_data = _get_hf_index(scan)
+    if index_data is not None:
         # index may be a list (indexed by layer) or dict (string-keyed)
         entry = index_data[layer] if isinstance(index_data, list) else index_data[str(layer)]
         offsets = entry["offsets"]
