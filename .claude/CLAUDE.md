@@ -19,6 +19,8 @@ Credentials live in `.env` at the repo root (loaded via `config.py`):
 - `GEMINI_API_KEY` / `GENAI_API_KEY` — LLM auto-interpretation
 - `OPENAI_API_KEY`
 
+**No LaTeX compiler** is installed here — do not try to compile `.tex` or verify exact page counts. State this limitation when delivering LaTeX edits to `paper/` or the thesis template.
+
 ## Commands
 
 ```bash
@@ -41,6 +43,11 @@ pytest tests -m "not requires_disk"
 pytest tests/test_prune.py                          # single file
 pytest tests/test_prune.py::test_function_name      # single test
 ```
+
+## Testing
+
+- Default to **targeted** tests scoped to the change: `pytest tests/test_prune.py -k <name> -x -q`.
+- Do **not** run the full suite unless explicitly asked — it loads slow models and can take 20+ minutes. Use `-m "not requires_disk"` to skip disk-heavy tests; reserve a full run for an explicit final verification step.
 
 ## Architecture
 
@@ -108,3 +115,22 @@ Neuronpedia REST wrapper. Key function: `get_feature(modelId, layer, index)`.
 - **Backend parity**: nnsight and transformerlens outputs must match. Tests in `tests/test_transformerlens_nnsight_same_*.py` verify this.
 - **Seeds**: every stochastic operation must accept an explicit seed — never hardcode or silently default.
 - **Output format**: plans and experiment summaries → self-contained HTML with inline CSS. Math in chat → Unicode (∑ θ α), never LaTeX.
+
+## Data Pipeline & Model Identity
+
+- The pipeline runs **local attribution computation**, not Neuronpedia frontend-JSON downloads. Neuronpedia is used only for the upload path (`save_subgraph`).
+- Derive model identity (tokenizer) from the graph's `.pt` via `cfg.tokenizer_name` (the HF id). Do **not** assume `cfg.model_name` is HF-loadable — it's a TransformerLens alias.
+
+## Code Organization
+
+- `app.py` is **display-only**. Put evaluation/intervention logic in `eval/` (e.g. `eval_intervention.py`), not in `app.py`; the app should only render results.
+
+## Model & Tokenizer Notes
+
+- For Qwen3 chat prompts, use the **non-thinking** prefix to avoid `<think>` tokens, and preserve special tokens.
+- SHAP token attribution must align with the chat template. Known pitfalls: a **double-BOS off-by-one** position shift (silent steering no-op) and a **transposed SHAP values axis**.
+
+## Working Style & Scope
+
+- Before wiring a solution through many files, confirm the intended **design** — e.g. one fixed behavior vs. several selectable modes. Prefer minimal, approved scope.
+- Don't expand a focused task into unrelated type/dependency/formatting fixes; surface those separately instead.
