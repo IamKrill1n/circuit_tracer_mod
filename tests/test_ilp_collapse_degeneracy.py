@@ -1,0 +1,88 @@
+"""Characterization test: documents *why* the Stage-2 ILP collapses into mega-clusters
+when ``max_layer_span`` is loose, and which knob actually controls granularity.
+
+Root cause (summarization/scoring.py:46, summarization/ilp_cluster.py:133):
+the atomicity objective is ``sum_{same cluster} (theta - cos_ij)``. At ``theta=0``
+every pair with ``cos > 0`` carries a negative (merge-rewarding) coefficient and
+nothing penalises cluster *size*, so the optimum merges everything that span allows.
+``lambda_causal`` cannot counteract this for features with no direct edge: its
+coefficient is ``lambda_causal * |W_ij| / W_total``, which is identically 0 when
+``W_ij = 0``. ``theta`` (the resolution threshold) is the real lever.
+"""
+import numpy as np
+import pytest
+import torch
+
+import summarization.ilp_cluster as ic
+from summarization.ilp_cluster import cluster_graph_ilp
+from summarization.prune import PruneGraph
+from summarization.scoring import _cosine_similarity
+from summarization.summarize import Node
+
+
+def _make_graph(monkeypatch_phi: np.ndarray, adj: torch.Tensor) -> PruneGraph:
+    n = monkeypatch_phi.shape[0]
+    nodes = [
+        Node(node_id=f"{i}", node_idx=i, feature=i, layer=str(i), ctx_idx=0, feature_type="feature")
+        for i in range(n)
+    ]
+    # cluster_graph_ilp recomputes phi internally; pin it to our synthetic vectors.
+    # (*_a/**_k so it tolerates the normalize_weights kwarg cluster_graph_ilp passes.)
+    ic.compute_phi_vectors = lambda *_a, **_k: torch.tensor(monkeypatch_phi, dtype=torch.float32)
+    return PruneGraph(nodes=nodes, pruned_adj=adj, metadata={})
+
+
+def _n_feature_clusters(pg: PruneGraph, theta: float, lam: float) -> int:
+    clusters = cluster_graph_ilp(
+        pg, theta=theta, lambda_causal=lam, max_sn=None, max_layer_span=1000, time_limit=30.0
+    )
+    return len([c for c in clusters if c and c[0][0].isdigit()])
+
+
+def test_ilp_collapse_mechanism():
+    # 5 features sharing one positive component => all pairwise cos = 0.5 (> 0),
+    # with NO edges between them => the causal term is identically 0 for every pair.
+    n = 5
+    phi = np.zeros((n, n + 1))
+    phi[:, 0] = 1.0  # shared positive component -> positive pairwise cosine
+    for i in range(n):
+        phi[i, 1 + i] = 1.0  # idiosyncratic component
+    adj = torch.zeros(n, n, dtype=torch.float32)  # edge-free
+    pg = _make_graph(phi, adj)
+
+    # theta=0: positive cosines reward merging, nothing penalises size -> full collapse.
+    assert _n_feature_clusters(pg, theta=0.0, lam=0.0) == 1
+
+    # lambda_causal is powerless here: |W_ij| = 0 for every pair, so its coefficient
+    # (lambda_causal * |W_ij| / W_total) is 0 no matter how large lambda gets.
+    assert _n_feature_clusters(pg, theta=0.0, lam=1e9) == 1
+
+    # theta is the real lever. Below the 0.5 cosine it still merges; above it, splits.
+    assert _n_feature_clusters(pg, theta=0.45, lam=0.0) == 1
+    assert _n_feature_clusters(pg, theta=0.55, lam=0.0) == n
+
+
+def test_adaptive_theta_resolves_to_percentile():
+    # Adaptive theta "p<q>" must equal using the q-th percentile of the allowed-pair
+    # cosines as a fixed threshold -> identical partition.
+    rng = np.random.default_rng(0)
+    phi = rng.standard_normal((7, 10))
+    phi[:, 0] += 1.5  # shared positive component -> a spread of positive cosines
+    pg = _make_graph(phi, torch.zeros(7, 7, dtype=torch.float32))
+
+    cos = _cosine_similarity(phi)  # loose span -> allowed pairs are all off-diagonal pairs
+    iu, ju = np.triu_indices(7, k=1)
+    thr = float(np.percentile(cos[iu, ju], 65))
+
+    norm = lambda cl: sorted(sorted(c) for c in cl)
+    adaptive = cluster_graph_ilp(pg, theta="p65", lambda_causal=0.0, max_sn=None, max_layer_span=1000)
+    fixed = cluster_graph_ilp(pg, theta=thr, lambda_causal=0.0, max_sn=None, max_layer_span=1000)
+    assert norm(adaptive) == norm(fixed)
+
+
+def test_adaptive_theta_rejects_malformed():
+    pg = _make_graph(np.eye(3) + 0.1, torch.zeros(3, 3, dtype=torch.float32))
+    with pytest.raises(ValueError):
+        cluster_graph_ilp(pg, theta="65")  # missing 'p' prefix
+    with pytest.raises(ValueError):
+        cluster_graph_ilp(pg, theta="p150")  # percentile out of [0, 100]

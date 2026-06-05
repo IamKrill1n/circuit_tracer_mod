@@ -125,6 +125,19 @@ Neuronpedia REST wrapper. Key function: `get_feature(modelId, layer, index)`.
 
 - `app.py` is **display-only**. Put evaluation/intervention logic in `eval/` (e.g. `eval_intervention.py`), not in `app.py`; the app should only render results.
 
+## Claude Docs Directories
+
+Per the global output-format rule, plans/reports are self-contained HTML (inline CSS). Save them to the matching top-level folder — do **not** drop HTML/report files in the repo root:
+
+| Folder | Holds |
+|---|---|
+| `brainstorm/` | Early-stage idea exploration, scheme proposals, design comparisons |
+| `plans/` | Implementation plans (step-by-step, with verify checks) |
+| `debug/` | Diagnose / root-cause reports |
+| `reports/` | Experiment summaries, code reviews, architecture decisions |
+
+Name files descriptively (e.g. `debug/ilp_collapse_diagnosis.html`). `notes/` is pre-existing and out of scope for this scheme.
+
 ## Model & Tokenizer Notes
 
 - For Qwen3 chat prompts, use the **non-thinking** prefix to avoid `<think>` tokens, and preserve special tokens.

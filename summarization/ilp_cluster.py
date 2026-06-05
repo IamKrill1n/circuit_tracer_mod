@@ -21,10 +21,11 @@ MAX_ILP_CONSTRAINTS = 2_000_000
 def cluster_graph_ilp(
     prune_graph: PruneGraph,
     *,
-    theta: float = 0.0,
+    theta: float | str = 0.0,
     lambda_causal: float = 1.0,
     max_sn: int | None = None,
     max_layer_span: int = 1000,
+    normalize_weights: bool = False,
     time_limit: float = 30.0,
 ) -> list[list[str]]:
     """Cluster a pruned graph by exactly minimising the Stage-2 objective.
@@ -54,6 +55,10 @@ def cluster_graph_ilp(
         Resolution threshold in ``[-1, 1]`` on the signed cosine. ``theta = 0``
         (the default) makes the cosine sign itself the merge boundary, so no
         threshold needs to be invented; raise it to merge more conservatively.
+        May also be an *adaptive* percentile spec ``"p<q>"`` (e.g. ``"p65"``):
+        theta is then the q-th percentile of the allowed-pair cosine distribution
+        of *this* graph, so the boundary tracks each graph's similarity scale
+        instead of a fixed global value (the cosine scale varies widely per graph).
     lambda_causal:
         Trade-off weight ``>= 0`` on the causal-preservation loss (Eq. Lstage2).
         ``0`` (the default) leaves the objective pure correlation clustering; larger
@@ -66,6 +71,10 @@ def cluster_graph_ilp(
         Tractability prior: forbid merging two features more than this many
         layers apart. The methodology imposes no such constraint; raise it to
         relax. Combined with transitivity this bounds every cluster's layer span.
+    normalize_weights:
+        If True, min-max normalise the per-node influence/relevance weights before
+        they scale the role vectors (forwarded to ``compute_phi_vectors``). Default
+        False (raw weights).
 
     Returns the same ``list[list[str]]`` contract as ``cluster_graph_spectral``:
     feature clusters + embedding/error/logit singletons.
@@ -90,7 +99,7 @@ def cluster_graph_ilp(
         return [[middle_ids[0]]] + emb_singletons + logit_singletons
 
     n = len(middle_ids)
-    phi = compute_phi_vectors(prune_graph).detach().cpu().numpy()  # (N, 2N)
+    phi = compute_phi_vectors(prune_graph, normalize_weights=normalize_weights).detach().cpu().numpy()  # (N, 2N)
     cos = _cosine_similarity(phi[mid_idx])  # (n, n) signed cosine in [-1, 1]
     layers = np.array([layer_index_from_node(nodes_by_id[nid]) for nid in middle_ids])
 
@@ -104,6 +113,20 @@ def cluster_graph_ilp(
     ]
     col_x = {pair: k for k, pair in enumerate(pairs)}
     n_var_x = len(pairs)
+
+    # Resolve an adaptive theta given as "p<q>" to the q-th percentile of the allowed-pair
+    # cosines, so the merge boundary tracks this graph's similarity scale (a fixed global
+    # theta is mismatched: per-graph median off-diagonal cosine ranges ~0.2 to ~0.95).
+    if isinstance(theta, str):
+        if not (theta.startswith("p") and theta[1:].replace(".", "", 1).isdigit()):
+            raise ValueError(f"theta string must be 'p<percentile>' (e.g. 'p65'), got {theta!r}")
+        q = float(theta[1:])
+        if not 0.0 <= q <= 100.0:
+            raise ValueError(f"theta percentile must be in [0, 100], got {q}")
+        allowed_cos = np.array([cos[i, j] for (i, j) in pairs], dtype=np.float64)
+        theta_val = float(np.percentile(allowed_cos, q)) if allowed_cos.size else 0.0
+    else:
+        theta_val = float(theta)
 
     # Representative variables r_i (i is the lowest-index member of its cluster) are
     # only needed to count K for the complexity budget; skip them when max_sn is None.
@@ -130,7 +153,7 @@ def cluster_graph_ilp(
     c = np.zeros(n_var, dtype=np.float64)
     for pair, k in col_x.items():
         i, j = pair
-        c[k] = theta - float(cos[i, j])
+        c[k] = theta_val - float(cos[i, j])
     if lambda_causal > 0:
         prune_adj = prune_graph.pruned_adj.detach().cpu().numpy()  # adj[tgt, src]
         W_total = float(np.abs(prune_adj).sum())

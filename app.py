@@ -365,7 +365,7 @@ def _cluster_dispatch(
     enforce_dag: bool,
     random_state: int,
     n_init: int,
-    theta: float = 0.0,
+    theta: float | str = 0.0,
     lambda_causal: float = 0.0,
     ilp_time_limit: float = 30.0,
 ) -> list[list[str]]:
@@ -404,6 +404,7 @@ def _cluster_dispatch(
             lambda_causal=lambda_causal,
             max_sn=max_sn,
             max_layer_span=max_layer_span,
+            normalize_weights=normalize_weights,
             time_limit=ilp_time_limit,
         )
 
@@ -711,11 +712,12 @@ if "prune_graph" in st.session_state:
     max_sn = int(max_sn_raw) if max_sn_raw > 0 else None
 
     is_ours = method in ("ours-spectral", "ours-agglomerative")
+    is_ilp = method == "ours-ilp"
     mean_method = st.selectbox(
         "mean_method", ["arith", "geo", "harm"], disabled=not is_ours, key="cl_mean"
     )
     normalize_weights = st.checkbox(
-        "normalize_weights", value=False, disabled=not is_ours, key="cl_normw"
+        "normalize_weights", value=False, disabled=not (is_ours or is_ilp), key="cl_normw"
     )
     decay_rate_raw = st.number_input(
         "decay_rate (0 = disabled)",
@@ -724,18 +726,34 @@ if "prune_graph" in st.session_state:
     )
     decay_rate = float(decay_rate_raw) if decay_rate_raw > 0.0 else None
 
-    is_ilp = method == "ours-ilp"
     if is_ilp:
         st.caption(
             "ILP: exact min of L_atom + lambda_causal * L_causal on signed-cosine role "
             "vectors. target_k is ignored; max_sn is the hard complexity budget (0 = no cap)."
         )
-    i_c1, i_c2, i_c3 = st.columns(3)
-    ilp_theta = i_c1.number_input(
-        "theta (signed-cosine resolution)",
-        min_value=-1.0, max_value=1.0, value=0.0, step=0.05,
-        disabled=not is_ilp, key="cl_theta",
+    ilp_theta_mode = st.selectbox(
+        "theta mode",
+        ["fixed", "adaptive percentile"],
+        disabled=not is_ilp, key="cl_theta_mode",
+        help="fixed: a constant signed-cosine threshold. adaptive percentile: theta is the "
+        "q-th percentile of THIS graph's allowed-pair cosines, so the merge boundary tracks "
+        "each graph's similarity scale (a fixed theta is mismatched across graphs).",
     )
+    i_c1, i_c2, i_c3 = st.columns(3)
+    if ilp_theta_mode == "adaptive percentile":
+        ilp_theta_pct = i_c1.number_input(
+            "theta percentile q  (-> 'p<q>')",
+            min_value=0.0, max_value=100.0, value=65.0, step=5.0,
+            disabled=not is_ilp, key="cl_theta_pct",
+        )
+        theta_arg: float | str = f"p{ilp_theta_pct:g}"
+    else:
+        ilp_theta = i_c1.number_input(
+            "theta (signed-cosine resolution)",
+            min_value=-1.0, max_value=1.0, value=0.0, step=0.05,
+            disabled=not is_ilp, key="cl_theta",
+        )
+        theta_arg = float(ilp_theta)
     ilp_lambda = i_c2.number_input(
         "lambda_causal (>= 0; 0 = pure atomicity)",
         min_value=0.0, value=0.0, step=0.1,
@@ -770,7 +788,7 @@ if "prune_graph" in st.session_state:
                     enforce_dag=enforce_dag,
                     random_state=int(random_state),
                     n_init=int(n_init),
-                    theta=float(ilp_theta),
+                    theta=theta_arg,
                     lambda_causal=float(ilp_lambda),
                     ilp_time_limit=float(ilp_time_limit),
                 )
