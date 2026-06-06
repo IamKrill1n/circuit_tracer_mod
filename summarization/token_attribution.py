@@ -15,11 +15,37 @@ NormalizeMethod = Literal["softmax", "sparsemax", "entmax15", "entmax"]
 SPECIAL_TOKEN_RE = re.compile(r"<[^>]+>")
 SPARSEMAX_MASK_VALUE = -1e9
 DEFAULT_ENTMAX_ALPHA = 1.3
+# Chat-template role labels (Qwen) — scaffold, not content. Masking "system" → "..."
+# breaks "<|im_start|>system\n" and inflates its SHAP value, so we pin these in the
+# masker and zero them in normalization. Note: instruction/content words ("one word
+# only", "Fact:") are deliberately NOT pinned — they are content, not template.
+ROLE_SCAFFOLD_TOKENS = frozenset({"system", "user", "assistant"})
+
+
+def _is_scaffold_punct(token: str) -> bool:
+    """True for whitespace/punctuation-only segments (no alphanumerics) — format scaffold,
+    not content. Pinning these stops SHAP's masking from relocating mass onto newlines /
+    separators (the whack-a-mole leak); content words always contain alphanumerics."""
+    return not any(ch.isalnum() for ch in token)
+
+
+def _mask_token_for(tokenizer) -> str:
+    """SHAP mask string: prefer the model's own neutral token (mask/unk), else '_'.
+
+    gemma-2-2b has a single-token <unk> (id 3); Qwen3-4B has neither mask nor unk, so it
+    falls back to '_' (single token, semantically neutral). Avoids '...', whose ellipsis
+    'trailing-off' semantics nudge predictions instead of reading as absent content."""
+    return tokenizer.mask_token or tokenizer.unk_token or "_"
 
 
 def _special_token_mask(prompt_tokens: list[str]) -> torch.Tensor:
     return torch.tensor(
-        [bool(SPECIAL_TOKEN_RE.fullmatch(token)) for token in prompt_tokens],
+        [
+            bool(SPECIAL_TOKEN_RE.fullmatch(token))
+            or token.strip() in ROLE_SCAFFOLD_TOKENS
+            or _is_scaffold_punct(token)
+            for token in prompt_tokens
+        ],
         dtype=torch.bool,
     )
 
@@ -39,7 +65,9 @@ def _normalize_scores(
 
     non_special_mask = ~special_mask
     if not non_special_mask.any():
-        raise ValueError("All prompt tokens are special tokens; cannot normalize attribution scores.")
+        raise ValueError(
+            "All prompt tokens are special tokens; cannot normalize attribution scores."
+        )
 
     masked_scores = values.to(torch.float32).clone()
     if method == "softmax":
@@ -120,11 +148,12 @@ def _strip_leading_bos_for_shap(
 
 
 def _apply_shap_notebook_generation_defaults(model: Any) -> None:
-    """Align `model.generate` with `token_attribution_compare/shap.ipynb` when unset.
+    """Set deterministic greedy defaults for `model.generate` when unset.
 
-    SHAP's TeacherForcing calls `generate` with `task_specific_params['text-generation']`.
-    If that dict is missing or empty, use the same defaults as the comparison notebook
-    so the generated target sentence Y matches `shap.Explainer(model, tokenizer)`.
+    SHAP's TeacherForcing uses `task_specific_params['text-generation']` to pick the
+    target Y. Generation only runs when no explicit target is forced (single-arg
+    `explainer(X)`); greedy decoding keeps that fallback reproducible. When a target
+    token is supplied, `explainer(X, Y)` forces Y and generation is skipped entirely.
     """
     if getattr(model.config, "is_decoder", None) is not True:
         model.config.is_decoder = True
@@ -133,11 +162,8 @@ def _apply_shap_notebook_generation_defaults(model: Any) -> None:
     tg = model.config.task_specific_params.get("text-generation")
     if not tg:
         model.config.task_specific_params["text-generation"] = {
-            "do_sample": True,
+            "do_sample": False,
             "max_new_tokens": 1,
-            "temperature": 1,
-            "top_k": 50,
-            "no_repeat_ngram_size": 2,
         }
 
 
@@ -163,7 +189,15 @@ def _make_chat_template_masker(tokenizer):
                 [bool(SPECIAL_TOKEN_RE.fullmatch(seg.strip())) for seg in self._segments_s],
                 dtype=bool,
             )
-            return (base[0] | special_pos | regex_pos).reshape(1, -1)
+            role_pos = np.array(
+                [seg.strip() in ROLE_SCAFFOLD_TOKENS for seg in self._segments_s],
+                dtype=bool,
+            )
+            ws_punct_pos = np.array(
+                [_is_scaffold_punct(seg) for seg in self._segments_s],
+                dtype=bool,
+            )
+            return (base[0] | special_pos | regex_pos | role_pos | ws_punct_pos).reshape(1, -1)
 
         def __call__(self, mask, s):
             inv = self.invariants(s)[0]
@@ -173,7 +207,9 @@ def _make_chat_template_masker(tokenizer):
                 mask_arr = mask_arr | inv
             return super().__call__(mask_arr, s)
 
-    return _ChatTemplateText(tokenizer, mask_token="...", collapse_mask_token=True)
+    return _ChatTemplateText(
+        tokenizer, mask_token=_mask_token_for(tokenizer), collapse_mask_token=True
+    )
 
 
 def _build_shap_lm_explainer(
@@ -206,7 +242,7 @@ def _build_shap_lm_explainer(
     if pin_special_tokens:
         masker = _make_chat_template_masker(tokenizer)
     else:
-        masker = Text(tokenizer, mask_token="...", collapse_mask_token=True)
+        masker = Text(tokenizer, mask_token=_mask_token_for(tokenizer), collapse_mask_token=True)
     if keep_prefix is not None:
         if keep_prefix < 0:
             raise ValueError(f"keep_prefix must be >= 0, got {keep_prefix}")
@@ -264,7 +300,11 @@ def _extract_shap_values(raw_explanation: Any) -> torch.Tensor:
 
     tensor_values = torch.as_tensor(values, dtype=torch.float32).squeeze()
     if tensor_values.ndim == 2:
-        if n_input is not None and tensor_values.shape[1] == n_input and tensor_values.shape[0] != n_input:
+        if (
+            n_input is not None
+            and tensor_values.shape[1] == n_input
+            and tensor_values.shape[0] != n_input
+        ):
             tensor_values = tensor_values.sum(dim=0)
         else:
             tensor_values = tensor_values.sum(dim=-1)
@@ -283,10 +323,11 @@ def get_token_attribution(
     masker_keep_prefix: int | None = None,
     entmax_alpha: float | None = None,
     pin_special_tokens: bool = False,
+    target_token_id: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Same pipeline as ``shap.Explainer(model, tokenizer)`` on an HF causal LM.
 
-    Uses Teacher forcing + log-odds of **generated** ``Y`` (see ``shap.models.TeacherForcing``),
+    Uses Teacher forcing + log-odds of target ``Y`` (see ``shap.models.TeacherForcing``),
     identical to the high-level SHAP constructor when given ``mask_token='...'`` and
     ``collapse_mask_token=True``.
 
@@ -298,6 +339,10 @@ def get_token_attribution(
     entmax_alpha
         Alpha for ``normalize_method='entmax'``. Ignored by other methods.
         Uses ``DEFAULT_ENTMAX_ALPHA`` when unset.
+    target_token_id
+        When given, forces the explained target ``Y`` to this token (aligning SHAP
+        with the graph's target logit, i.e. ``logit_weights="target"``). When None,
+        SHAP explains the model's own greedy generation.
     Returns
     -------
     tuple[torch.Tensor, torch.Tensor]
@@ -315,6 +360,20 @@ def get_token_attribution(
             prompt, list(prompt_tokens), tokenizer
         )
 
+    # Force the explained target Y to the graph's target token. The two-arg call
+    # explainer(X, Y) makes SHAP swap in TextGeneration(target_sentences=Y), so log-odds
+    # are computed for this exact token and free generation is skipped (see Explainer.__call__).
+    explain_args: tuple[Any, ...] = ([work_prompt],)
+    if target_token_id is not None:
+        target_text = tokenizer.decode([int(target_token_id)])
+        roundtrip = tokenizer(target_text, add_special_tokens=False)["input_ids"]
+        if roundtrip != [int(target_token_id)]:
+            raise ValueError(
+                f"target_token_id {int(target_token_id)} does not round-trip "
+                f"(decoded {target_text!r} -> {roundtrip}); SHAP target would be misaligned."
+            )
+        explain_args = ([work_prompt], [target_text])
+
     explainer = _build_shap_lm_explainer(
         model_name=model_name,
         device=device_str,
@@ -322,7 +381,7 @@ def get_token_attribution(
         pin_special_tokens=pin_special_tokens,
     )
     try:
-        shap_values = explainer([work_prompt], batch_size=1)
+        shap_values = explainer(*explain_args, batch_size=1)
     except RuntimeError as exc:
         # SHAP TeacherForcing may fail for keep_prefix > 1 due to batch-shape mismatch.
         # Fall back to standard masking and emulate prefix pinning post-hoc.
@@ -335,7 +394,7 @@ def get_token_attribution(
             keep_prefix=None,
             pin_special_tokens=pin_special_tokens,
         )
-        shap_values = explainer([work_prompt], batch_size=1)
+        shap_values = explainer(*explain_args, batch_size=1)
     values = _extract_shap_values(shap_values)
     expected = len(work_tokens)
     if values.shape[0] == expected + 1:
@@ -364,9 +423,7 @@ def get_token_attribution(
             device=normalized.device,
         )
         normalized = torch.cat([prefix, normalized], dim=0)
-        values = torch.cat(
-            [prefix.to(dtype=values.dtype, device=values.device), values], dim=0
-        )
+        values = torch.cat([prefix.to(dtype=values.dtype, device=values.device), values], dim=0)
     return values, normalized
 
 
@@ -383,7 +440,7 @@ def get_token_attribution_from_graph(
 
     Returns the **normalized** weight vector (same length as ``metadata['prompt_tokens']``).
     """
-    prompt, prompt_tokens, _target_token_id = _cached_prompt_payload_from_graph(str(graph_path))
+    prompt, prompt_tokens, target_token_id = _cached_prompt_payload_from_graph(str(graph_path))
     _raw, normalized = get_token_attribution(
         prompt=prompt,
         prompt_tokens=list(prompt_tokens),
@@ -393,8 +450,95 @@ def get_token_attribution_from_graph(
         masker_keep_prefix=masker_keep_prefix,
         entmax_alpha=entmax_alpha,
         pin_special_tokens=pin_special_tokens,
+        target_token_id=target_token_id,
     )
     return normalized
+
+
+def _logprob_of_target(
+    model: Any, inputs_embeds: torch.Tensor, target_token_id: int
+) -> torch.Tensor:
+    """log P(target) at the last position from input embeddings (grad flows to inputs_embeds)."""
+    logits = model(inputs_embeds=inputs_embeds).logits  # (1, seq, vocab)
+    logprobs = torch.log_softmax(logits[0, -1].float(), dim=-1)
+    return logprobs[int(target_token_id)]
+
+
+def _l1_normalize_magnitude(values: torch.Tensor, special_mask: torch.Tensor) -> torch.Tensor:
+    """Magnitude-proportional weights: |attr| with scaffold zeroed, summing to 1 over the rest.
+
+    Gradient magnitudes are tiny and tightly clustered, so a softmax/entmax normalizer
+    collapses them to ~uniform; L1 of the absolute value preserves relative importance.
+    """
+    weight = values.abs().to(torch.float32).clone()
+    weight[special_mask] = 0.0
+    total = weight.sum()
+    if not torch.isfinite(total) or total <= 0:
+        non_special = ~special_mask
+        fallback = torch.zeros_like(weight)
+        fallback[non_special] = 1.0 / float(non_special.sum().item())
+        return fallback
+    return weight / total
+
+
+def get_integrated_gradients_token_attribution(
+    prompt: str,
+    prompt_tokens: list[str],
+    model_name: str,
+    target_token_id: int | None = None,
+    *,
+    device: str | torch.device = "cpu",
+    ig_steps: int = 32,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Integrated-gradients token attribution for the target logit — a content-focused
+    alternative to SHAP for initializing prune token weights.
+
+    Differentiates log P(target) at the last position w.r.t. the input embeddings
+    (target defaults to the model's argmax; pass the graph's target token to align with
+    ``logit_weights="target"``), integrating from a zero-embedding baseline over
+    ``ig_steps`` midpoint Riemann steps.
+
+    Returns ``(raw, normalized)``, both length ``len(prompt_tokens)`` and aligned to it.
+    ``raw`` is the signed per-token attribution; ``normalized`` is magnitude-proportional
+    (|attr| with scaffold zeroed, summing to 1) — a drop-in replacement for the SHAP weight
+    vector. NB: softmax/entmax collapse gradient magnitudes to ~uniform, so L1 is used.
+    """
+    if ig_steps < 1:
+        raise ValueError(f"ig_steps must be >= 1, got {ig_steps}")
+    tokenizer = _cached_tokenizer(model_name)
+    model = _cached_model(model_name, str(device))
+    embed_layer = model.get_input_embeddings()
+
+    # Align 1:1 with prompt_tokens: same tokenizer on the same string (special tokens kept).
+    input_ids = tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"]
+    input_ids = input_ids.to(model.device)
+    if input_ids.shape[1] != len(prompt_tokens):
+        raise ValueError(
+            f"Tokenized prompt length ({input_ids.shape[1]}) != len(prompt_tokens) "
+            f"({len(prompt_tokens)}); gradient attribution would be misaligned."
+        )
+
+    inputs_embeds = embed_layer(input_ids).detach()  # (1, seq, d)
+    if target_token_id is None:
+        with torch.no_grad():
+            target_token_id = int(model(inputs_embeds=inputs_embeds).logits[0, -1].argmax().item())
+
+    with torch.enable_grad():
+        baseline = torch.zeros_like(inputs_embeds)
+        grad_sum = torch.zeros_like(inputs_embeds)
+        for step in range(ig_steps):
+            alpha = (step + 0.5) / ig_steps  # midpoint Riemann rule
+            interp = (baseline + alpha * (inputs_embeds - baseline)).requires_grad_(True)
+            target = _logprob_of_target(model, interp, target_token_id)
+            grad_sum += torch.autograd.grad(target, interp)[0]
+        avg_grad = grad_sum / ig_steps
+        attr = ((inputs_embeds - baseline) * avg_grad)[0].sum(dim=-1)  # (seq,)
+
+    attr = attr.detach().float().cpu()
+    special_mask = _special_token_mask(prompt_tokens)
+    normalized = _l1_normalize_magnitude(attr, special_mask)
+    return attr, normalized
+
 
 if __name__ == "__main__":
     from attribute_utils import format_qwen
@@ -402,14 +546,23 @@ if __name__ == "__main__":
     _model = "Qwen/Qwen3-4B"
     _tok = _cached_tokenizer(_model)
     _prompt = format_qwen(
-        [{"role" : "system", "content": "Answer in one word and no more"},{"role": "user", "content": "The capital of France is"}],
+        [
+            {"role": "system", "content": "Answer in one word and no more"},
+            {"role": "user", "content": "The capital of France is"},
+        ],
         add_generation_prompt=True,
         enable_thinking=False,
     )
     _ids = _tok(_prompt, add_special_tokens=False)["input_ids"]
     _ptok = _tok.convert_ids_to_tokens(_ids)
+    # Greedy next-token = the graph's target logit; force it as the SHAP target.
+    _mdl = _cached_model(_model, "cuda")
+    with torch.no_grad():
+        _logits = _mdl(torch.tensor([_ids], device="cuda")).logits[0, -1]
+    _target = int(_logits.argmax().item())
     print("prompt:", repr(_prompt))
     print("tokens:", _ptok)
+    print("target:", _target, repr(_tok.decode([_target])))
     raw, normalized = get_token_attribution(
         prompt=_prompt,
         prompt_tokens=list(_ptok),
@@ -418,6 +571,16 @@ if __name__ == "__main__":
         entmax_alpha=1.3,
         device="cuda",
         pin_special_tokens=True,
+        target_token_id=_target,
     )
-    print("raw:", raw)
-    print("normalized:", normalized)
+    print("shap raw:", raw)
+    print("shap normalized:", normalized)
+
+    _graw, _gnorm = get_integrated_gradients_token_attribution(
+        prompt=_prompt,
+        prompt_tokens=list(_ptok),
+        model_name=_model,
+        target_token_id=_target,
+        device="cuda",
+    )
+    print("ig normalized:", _gnorm)

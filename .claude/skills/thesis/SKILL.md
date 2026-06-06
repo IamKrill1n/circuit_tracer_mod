@@ -32,8 +32,7 @@ files (see `SOICT_DATN_Research_ENG_Template/main.tex`):
 
 ## Global Writing Rules (from the template)
 
-These rules come directly from the template instructions and override generic
-paper-writing habits.
+These rules come directly from the template instructions and override generic paper-writing habits.
 
 1. One paragraph carries exactly one main idea, stated up front, then supporting
    analysis that refines it. Do not let a paragraph run long or mix ideas.
@@ -58,7 +57,7 @@ bullets).
 
 - **Overview** of chapter N: connect back to chapter N−1, justify why chapter N
   exists and why it is needed, then introduce what this chapter presents and
-  under which top-level sections. Chapter 1 does not need an Overview.
+  under which top-level sections. Chapter 1 does not need an Overview. Always start with: Chapter N-1 established/discussed ... Chapter N ...
 - **Chapter Summary**: state the chapter's key conclusions, recap how the
   problems opened in the Overview were resolved, and add a linking sentence to
   the next chapter. The Summary must not duplicate the Overview verbatim.

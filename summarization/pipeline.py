@@ -43,7 +43,11 @@ def _acquire_graph(args: argparse.Namespace):
 
     dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
     model = ReplacementModel.from_pretrained(
-        args.model, args.transcoder, dtype=dtype_map[args.dtype], lazy_encoder=True, backend=args.backend
+        args.model,
+        args.transcoder,
+        dtype=dtype_map[args.dtype],
+        lazy_encoder=True,
+        backend=args.backend,
     )
     try:
         graph = attribute(
@@ -68,7 +72,12 @@ def _acquire_graph(args: argparse.Namespace):
 
 
 def _shap_token_weights(
-    ag: AttrGraph, *, model_name: str, normalize_method: str, entmax_alpha: float | None, device: str
+    ag: AttrGraph,
+    *,
+    model_name: str,
+    normalize_method: str,
+    entmax_alpha: float | None,
+    device: str,
 ) -> list[float]:
     """SHAP token attribution for the graph's prompt, mapped to embedding-node order.
 
@@ -82,6 +91,9 @@ def _shap_token_weights(
     if not prompt or not prompt_tokens:
         raise ValueError("Graph metadata lacks prompt / prompt_tokens for SHAP token attribution.")
 
+    # Force SHAP's target Y to the graph's target logit token (aligns with logit_weights="target").
+    target_token_id = next((n.feature for n in ag.nodes if n.is_target_logit), None)
+
     # pin_special_tokens keeps BOS / chat scaffold aligned 1:1 with prompt_tokens.
     _raw, normalized = get_token_attribution(
         prompt=prompt,
@@ -91,6 +103,7 @@ def _shap_token_weights(
         device=device,
         entmax_alpha=entmax_alpha,
         pin_special_tokens=True,
+        target_token_id=target_token_id,
     )
     norm = [float(x) for x in normalized.detach().cpu().tolist()]
     weights: list[float] = []
@@ -149,7 +162,9 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     # Stage 0b (optional): SHAP token weights from the graph's prompt.
     token_weights = _parse_token_weights(args.token_weights)
     if args.auto_token_weights and token_weights is None:
-        shap_model = args.token_attr_model or getattr(graph.cfg, "tokenizer_name", None) or args.model
+        shap_model = (
+            args.token_attr_model or getattr(graph.cfg, "tokenizer_name", None) or args.model
+        )
         token_weights = _shap_token_weights(
             ag,
             model_name=shap_model,
