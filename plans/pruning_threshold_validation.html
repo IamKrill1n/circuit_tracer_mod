@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Validating the Pruning Threshold</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#1f6feb; --bg:#fafafa; --card:#fff; --border:#e3e3e3; --good:#157347; --warn:#b54708; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+         color: var(--fg); background: var(--bg); margin: 0; line-height: 1.55; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 1.7rem; margin: 0 0 4px; }
+  h2 { font-size: 1.25rem; margin: 34px 0 10px; border-bottom: 2px solid var(--border); padding-bottom: 6px; }
+  h3 { font-size: 1.05rem; margin: 20px 0 6px; }
+  code { background: #f0f0f3; padding: 1px 5px; border-radius: 4px; font-size: 0.88em; }
+  pre { background: #1e1e1e; color: #e8e8e8; padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.84rem; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+  .summary { border-left: 4px solid var(--accent); }
+  .pillar { border-left: 4px solid var(--good); }
+  .threat { border-left: 4px solid var(--warn); }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 0.9rem; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: #f3f4f6; }
+  .muted { color: var(--muted); }
+  .tag { display: inline-block; background: var(--accent); color: #fff; font-size: 0.72rem;
+         padding: 1px 8px; border-radius: 10px; vertical-align: middle; }
+  ol.steps > li { margin: 10px 0; }
+  .verify { color: var(--good); font-size: 0.86rem; }
+  math { font-size: 1.05em; }
+  .formula { background:#fff; border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin:8px 0; overflow-x:auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Validating the Pruning Threshold</h1>
+<p class="muted">From a subjective θ = 0.01 / 0.02 to a defensible, rule-derived choice.</p>
+
+<div class="card summary">
+  <h3 style="margin-top:0">Summary</h3>
+  <p>The threshold feels arbitrary because we're defending <em>the number</em>. Stop. Defend the
+  <strong>selection procedure</strong> — the same move Anthropic makes: they never claim 0.8 is optimal,
+  they "chart a frontier between the number of {nodes, edges} and {replacement, completeness} scores"
+  and read a point off it. A number that <em>falls out of a stated rule</em> is principled; a number
+  we typed is not.</p>
+  <p>Plan: (1) state precisely what θ parameterizes, (2) sweep θ over the analogies dataset,
+  (3) chart <strong>graph size vs. causal faithfulness</strong>, (4) select θ by a pre-registered rule
+  (faithfulness floor, corroborated by the curve's knee), (5) show the choice is <strong>robust</strong>
+  and <strong>beats baselines</strong> — all aggregated with error bars, not on one example.</p>
+</div>
+
+<h2>1 &nbsp;What θ actually means <span class="tag">be precise first</span></h2>
+<p>In <code>find_threshold</code> (<code>summarization/graph_utils.py:75</code>), the node mask is
+<code>node_score &ge; find_threshold(node_score, θ)</code>, where the cutoff is the score at the
+cumulative-mass index:</p>
+<div class="formula">
+<math display="block">
+  <mrow>
+    <mi>k</mi><mo>*</mo><mo>=</mo>
+    <munder><mi>min</mi><mrow><mi>k</mi></mrow></munder>
+    <mrow><mo>{</mo><mi>k</mi><mo>:</mo>
+      <mfrac>
+        <mrow><munderover><mo>&sum;</mo><mrow><mi>i</mi><mo>=</mo><mn>0</mn></mrow><mi>k</mi></munderover><msub><mi>s</mi><mrow><mo>(</mo><mi>i</mi><mo>)</mo></mrow></msub></mrow>
+        <mrow><munderover><mo>&sum;</mo><mrow><mi>i</mi></mrow><mi>N</mi></munderover><msub><mi>s</mi><mi>i</mi></msub></mrow>
+      </mfrac>
+      <mo>&ge;</mo><mi>&theta;</mi><mo>}</mo></mrow>
+    <mo>,</mo>&nbsp;&nbsp; keep nodes with&nbsp;
+    <msub><mi>s</mi><mi>i</mi></msub><mo>&ge;</mo><msub><mi>s</mi><mrow><mo>(</mo><mi>k</mi><mo>*</mo><mo>)</mo></mrow></msub>
+  </mrow>
+</math>
+</div>
+<p>So θ is the <strong>cumulative fraction of (rank-normalized, combined influence×relevance) score mass</strong>
+retained by the top nodes — not a raw edge weight. Larger θ ⇒ keep more nodes.</p>
+<ul>
+  <li><strong>Why 0.01–0.02 is reasonable here:</strong> because scores are <em>rank</em>-normalized
+  (<code>normalization="rank"</code>), the mass is near-uniform across nodes, so a 1–2% cumulative cut
+  still yields ~8–27 feature nodes — not one. This is <em>not</em> comparable to Anthropic's 0.8, which is
+  cumulative <em>influence</em> mass.</li>
+  <li><strong>Action:</strong> say this explicitly in the paper. Otherwise a reviewer who knows the
+  Anthropic methods will expect θ ≈ 0.8 and assume a bug.</li>
+  <li><strong>Already half-principled:</strong> θ is a <em>fraction of retained relevance/influence</em>,
+  not an opaque cutoff. The only open question is <em>which</em> fraction — that's what §3–§6 settle.</li>
+</ul>
+
+<h2>2 &nbsp;The precedent we're matching</h2>
+<p>Anthropic (Attribution Graphs, <em>Methods</em> → Graph Pruning) justify their threshold
+<strong>pragmatically via a tradeoff curve</strong>, not an optimum:</p>
+<ul>
+  <li>Default θ = 0.8 → ~<strong>10× fewer nodes</strong> at the cost of only ~<strong>20% completeness</strong>.</li>
+  <li>Acronym example: θ = 0.8 → 55 nodes, completeness 0.70; θ = 0.95 → 236 nodes, completeness 0.87.</li>
+  <li>Their stated justification: "chart a frontier between the number of {nodes, edges} and
+  {replacement, completeness} scores." No magic number is derived.</li>
+</ul>
+<p>So the bar to clear is <em>not</em> "prove 0.01 is optimal." It's "show 0.01 sits at a sensible point
+on a size–faithfulness frontier, by a rule we fix in advance." We can clear that bar more rigorously than
+the original (aggregate + causal + baselines), which is itself a contribution.</p>
+
+<h2>3 &nbsp;The argument: four pillars</h2>
+
+<div class="card pillar">
+  <h3 style="margin-top:0">A. Size–faithfulness frontier + knee</h3>
+  <p>Sweep θ; for each, plot a faithfulness metric (y) against graph size (x = # feature nodes or # edges).
+  The curve is concave: show 0.01/0.02 lands <strong>at/just past the knee</strong> — beyond it, extra nodes
+  buy negligible faithfulness. "Most of the recoverable behavior in the smallest graph" is the whole claim.</p>
+</div>
+
+<div class="card pillar">
+  <h3 style="margin-top:0">B. Causal faithfulness floor <span class="tag">headline</span></h3>
+  <p>Pre-register an acceptance rule and let θ be its <em>consequence</em>:</p>
+  <div class="formula">
+    <math display="block">
+      <mrow>
+        <msup><mi>&theta;</mi><mo>*</mo></msup><mo>=</mo>
+        <munder><mi>min</mi><mi>&theta;</mi></munder>
+        <mrow><mo>{</mo><mi>&theta;</mi><mo>:</mo>&nbsp;
+          <munder><mi>median</mi><mrow><mi>p</mi><mo>&isin;</mo><mi>D</mi></mrow></munder>
+          <mfrac><mrow><mi>P</mi><mo>(</mo>target&nbsp;|&nbsp;pruned<mo>)</mo></mrow>
+                <mrow><mi>P</mi><mo>(</mo>target&nbsp;|&nbsp;baseline<mo>)</mo></mrow></mfrac>
+          <mo>&ge;</mo><mi>&tau;</mi><mo>}</mo></mrow>
+      </mrow>
+    </math>
+  </div>
+  <p>e.g. τ = 0.8. Then the paper reads: "We retain the smallest circuit that preserves ≥ 80% of the
+  model's target probability (median over the analogies set); this yields θ ≈ 0.01–0.02." The number is now
+  <em>derived</em>. This is exactly what <code>eval/eval_faithfulness.py</code> computes — dropped CLT
+  features zero-ablated, errors/embeddings/logits untouched, baseline read from the AttrGraph's
+  <code>token_prob</code>.</p>
+</div>
+
+<div class="card pillar">
+  <h3 style="margin-top:0">C. Robustness band</h3>
+  <p>Show downstream conclusions (clustering, the supernode story, steering deltas) are <strong>invariant
+  across ~0.005–0.05</strong>. If the exact value doesn't change the findings, "arbitrary" loses its force —
+  the result is a stable plateau, not a knife-edge.</p>
+</div>
+
+<div class="card pillar">
+  <h3 style="margin-top:0">D. Baseline domination</h3>
+  <p>At <strong>equal node budget</strong>, our θ + scoring must beat (i) random node pruning and
+  (ii) uniform / Anthropic-style influence-only pruning. Same x (size), higher y (faithfulness). This
+  attributes the quality to <em>the method</em>, not just to keeping enough nodes.
+  <code>eval/analyze_prune.py</code> already compares normalization schemes vs. baselines.</p>
+</div>
+
+<p><strong>Aggregate everything.</strong> Each curve/number is a median (or mean ± IQR/SE) over the
+analogies dataset — never one prompt. A threshold defended across N prompts is the single biggest
+credibility lever.</p>
+
+<h2>4 &nbsp;Which faithfulness axis to trust</h2>
+<table>
+  <tr><th>Metric</th><th>Source</th><th>Role</th></tr>
+  <tr><td>P(target | pruned) / P(target | baseline)</td><td><code>eval_faithfulness.py</code> (runs the model, ablates dropped features)</td><td><strong>Gold / headline.</strong> Truly causal.</td></tr>
+  <tr><td><code>token_attribution_faithfulness</code></td><td><code>eval_prune.py</code> (masked row-normalized adjacency)</td><td>Proxy. Cheap, dense sweep.</td></tr>
+  <tr><td><code>completeness_score</code>, <code>replacement_score</code></td><td><code>eval_prune.py</code> (pruned features merged into error nodes)</td><td>Proxy. Mirrors Anthropic's axes for direct comparison.</td></tr>
+  <tr><td><code>relevance_conservation_rate</code></td><td><code>eval_prune.py</code></td><td>Proxy. Token-weighted relevance survival.</td></tr>
+</table>
+<p>Use the proxies to draw the dense frontier (fast, no GPU), then confirm the selected θ with the
+<strong>causal</strong> curve. If proxy and causal knees agree, that agreement is itself evidence the proxy
+is trustworthy.</p>
+
+<h2>5 &nbsp;Concrete recipe (existing scripts)</h2>
+<p class="muted">All under <code>conda run -n circuit …</code>. The sweep is the only thing to add — the
+metrics already exist.</p>
+<pre><code># 0. Sweep node_threshold across the analogies dataset -> manifest.json
+conda run -n circuit python eval/prune_graphs.py \
+    --node-thresholds 0.005 0.01 0.02 0.05 0.1 0.2 0.4 0.8 \
+    --normalization rank --combine-method geometric \
+    --out runs/threshold_sweep
+#    (check the real flag names with --help; mirror the keys eval_prune.py expects)
+
+# 1. Graph-internal proxy frontier (fast, CPU) + Pareto plot
+conda run -n circuit python eval/eval_prune.py \
+    --manifest runs/threshold_sweep/manifest.json --plot
+
+# 2. Causal faithfulness frontier (GPU) -- THE headline curve
+conda run -n circuit python eval/eval_faithfulness.py \
+    --manifest runs/threshold_sweep/manifest.json
+
+# 3. Baselines / normalization comparison at matched budgets
+conda run -n circuit python eval/analyze_prune.py --manifest runs/threshold_sweep/manifest.json
+</code></pre>
+<ol class="steps">
+  <li>Run the sweep. <span class="verify">verify: manifest lists one record per θ × prompt; PruneGraph .pt files exist.</span></li>
+  <li>Proxy frontier. <span class="verify">verify: <code>completeness/replacement/taf</code> rise then flatten vs. node count; knee visible near 0.01–0.05.</span></li>
+  <li>Causal frontier. <span class="verify">verify: median P(target) ratio vs. node count crosses τ at θ ≈ 0.01–0.02.</span></li>
+  <li>Baselines. <span class="verify">verify: our curve dominates random + uniform at equal node count.</span></li>
+  <li>Robustness. <span class="verify">verify: re-run clustering/steering at θ ∈ {0.005, 0.01, 0.02, 0.05}; conclusions stable.</span></li>
+</ol>
+
+<h2>6 &nbsp;What to write in the paper</h2>
+<p>Replace "we use θ = 0.01" with a <em>rule + evidence</em> paragraph:</p>
+<blockquote class="card" style="border-left:4px solid var(--accent); font-style:italic;">
+  "We do not tune the pruning threshold to a fixed value. Following the size–faithfulness tradeoff of
+  [Anthropic], we sweep θ and select the smallest threshold whose pruned circuit preserves at least τ = 0.8
+  of the model's target probability under feature ablation, taken as the median over the analogies set.
+  This rule yields θ ∈ [0.01, 0.02], which coincides with the knee of the node-count–vs–faithfulness
+  frontier (Fig. X) and lies on a plateau where clustering and steering results are unchanged (Fig. Y).
+  At matched node budgets our pruning dominates random and influence-only baselines (Fig. Z)."
+</blockquote>
+<p>That single paragraph converts the criticism into a strength: the threshold is a reproducible
+consequence of a pre-registered faithfulness target, triangulated three ways.</p>
+
+<h2>7 &nbsp;Reviewer objections, pre-answered</h2>
+<div class="card threat"><strong>"Validated on one example."</strong> → Every figure is a median ± spread over the analogies dataset.</div>
+<div class="card threat"><strong>"Graph-internal faithfulness ≠ real faithfulness."</strong> → The headline curve is causal (<code>eval_faithfulness.py</code>, actual ablated forward passes); proxies only fill in the dense sweep and are shown to agree.</div>
+<div class="card threat"><strong>"Cherry-picked metric."</strong> → completeness, replacement, token-faithfulness, and causal P(target) all knee in the same region.</div>
+<div class="card threat"><strong>"Threshold tuned on the test set."</strong> → It's fixed by a rule (τ), and §C shows a flat plateau, so there is effectively nothing to tune; optionally select τ on a split and report on a held-out split.</div>
+<div class="card threat"><strong>"Why not just use Anthropic's 0.8?"</strong> → Different normalization (rank vs. influence-mass): clarify the semantics (§1) and show the frontier, where 0.8 over-retains for our score definition.</div>
+
+<h2>8 &nbsp;Showing the <em>real</em> strength: the interpretability axis <span class="tag">read this</span></h2>
+<p>Faithfulness alone will <strong>not</strong> distinguish us from influence-only pruning — recovering
+P(target) is exactly what influence-only greedily maximizes. Our contribution is different: at equal size we
+discard <em>uninteresting</em> nodes (syntactic features, stop words, scaffolding) that influence-only keeps.
+So Pillar D must be scored on an <strong>interpretability axis</strong>, and the comparison is a
+faithfulness–interpretability <strong>Pareto</strong>, not a faithfulness race.</p>
+
+<div class="card threat">
+  <strong>Circularity warning.</strong> <code>relevance_conservation_rate</code> and
+  <code>token_attribution_faithfulness</code> (eval_prune.py) weight by the <em>same SHAP token weights our
+  pruning uses</em>. Winning on them is self-fulfilling — a reviewer will reject it. Keep them as diagnostics;
+  the win must use an interestingness label <strong>independent of the SHAP weights</strong>.
+</div>
+
+<table>
+  <tr><th>#</th><th>Metric (y-axis = interpretability)</th><th>Independent label source</th><th>Role</th></tr>
+  <tr><td>1</td><td><strong>Activation density of kept CLT features</strong> — median density, or high-density retention rate (fraction above a cutoff). Lower = better.</td><td><code>classify.filter_act_density</code> + feature dashboards (density)</td><td><strong>Primary.</strong> Cheap, SAE-standard, fully independent of SHAP.</td></tr>
+  <tr><td>2</td><td><strong>Fraction of kept CLT features labeled conceptual</strong> vs. syntactic/positional.</td><td>Neuronpedia auto-interp / Gemini via <code>group_llm</code></td><td>Most on-the-nose; matches the claim's wording.</td></tr>
+  <tr><td>3</td><td><strong>ROC-AUC of each method's per-node score</strong> as a classifier of interesting vs. uninteresting features.</td><td>label from #1 or #2</td><td><strong>Threshold-free.</strong> Isolates the scoring function's discriminative power as one number.</td></tr>
+  <tr><td>4</td><td><strong>Steering success at equal node budget</strong> — does steering on our circuit beat an influence-only circuit of the same size?</td><td><code>eval/eval_steering.py</code> (BATS analogies)</td><td>Behavioral capstone; the real payoff, fully non-circular.</td></tr>
+  <tr><td>5</td><td><strong>Precision of discards</strong> — of nodes we drop but influence-only keeps, fraction that are high-density/syntactic.</td><td>label from #1 or #2</td><td>Sharpest single statement of the literal claim.</td></tr>
+</table>
+
+<p><strong>Headline figure:</strong> scatter both methods on (x = causal P(target) ratio, y = high-density
+retention rate or % conceptual), at matched node budgets. Ours sits up-and-to-the-right on interpretability
+for a small x cost. <strong>Guardrail:</strong> score feature-level metrics on <em>CLT features only</em> —
+for embedding nodes the stop-word down-weighting is circular by construction; the non-trivial claim is that
+content-token routing drops syntactic <em>features</em>.</p>
+
+<p><strong>Recommendation:</strong> lead with density Pareto (#1) + AUC (#3), steering (#4) as capstone;
+demote the SHAP-weighted faithfulness metrics to diagnostics.</p>
+
+<h2 id="next">Next steps</h2>
+<ol class="steps">
+  <li>Confirm <code>prune_graphs.py</code> / <code>eval_prune.py</code> CLI flag names with <code>--help</code> and pick the θ grid.</li>
+  <li>Decide the faithfulness target τ (default 0.8) and the dataset split for selection vs. reporting.</li>
+  <li>Run §5 steps 0–3; produce the two headline figures (proxy frontier, causal frontier with τ line + chosen θ marked).</li>
+  <li>Run the robustness re-clustering at the band {0.005, 0.01, 0.02, 0.05} and baseline comparison.</li>
+  <li>Write the §6 paragraph and drop the three figures into the methods/experiments section.</li>
+  <li><strong>(§8) Strength vs. influence-only:</strong> compute activation density (#1) + ROC-AUC (#3) on CLT features at matched budgets; plot the faithfulness–interpretability Pareto; add steering (#4) if time allows.</li>
+</ol>
+
+</div>
+</body>
+</html>
