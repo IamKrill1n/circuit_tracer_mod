@@ -69,7 +69,9 @@ Stages: `Graph` → `AttrGraph` → `PruneGraph` → clusters → `SummaryGraph`
 | `cluster` | `cluster()` (dispatch: spectral / agglomerative / ilp), `find_best_k()`, `cluster_graph_spectral()`, `cluster_graph_agglomerative()`, `compute_phi_vectors()`. |
 | `ilp_cluster.cluster_graph_ilp()` | Stage-2 facility-location MILP (scipy HiGHS): minimizes atomicity + λ·causal loss under a complexity budget. |
 | `scoring` | Stage-2 loss terms: `compute_L_atom` (signed-cosine correlation clustering), `compute_L` (atom + causal), silhouette. |
-| `classify` | Neuronpedia feature labels + `filter_act_density()` activation-density filtering. |
+| `pipeline.run_pipeline()` | End-to-end orchestrator: attribute → (token_attribution) → prune → (classify) → cluster → summarize. `__main__.py` is a thin CLI over it. |
+| `feature_source` | Feature metadata (activation density, top logits, contexts) from HF/Cloudfront feature dashboards via `fetch_feature_info()`; replaces direct Neuronpedia reads. |
+| `classify` | Feature labelling + `filter_act_density()` activation-density filtering, backed by `feature_source`. |
 | `group_llm` | LLM (Gemini) supernode labelling and scoring. |
 | `cluster_viz.supernode_graph_figure()` | Plotly figure for the supernode graph. |
 | `token_attribution` | SHAP-based token importance for embedding nodes. |
@@ -81,7 +83,8 @@ Stages: `Graph` → `AttrGraph` → `PruneGraph` → clusters → `SummaryGraph`
 Standalone scripts — not a library. Each is runnable end-to-end:
 - `eval_faithfulness.py` — causal faithfulness of pruning (zero dropped CLT features, measure P(target) ratio)
 - `eval_intervention.py` — supernode causal validation via feature interventions
-- `eval_prune.py`, `prune_graphs.py` — pruning sweep + quality metrics
+- `prune_graphs.py` + `eval_prune.py` — two-stage pruning sweep (save `PruneGraph` `.pt`s, then score them)
+- `prune_eval_fused.py` — fused in-memory prune+score sweep (no `.pt`s saved; used when the two-stage path is too disk-heavy)
 - `analyze_prune.py` — compare pruning normalization schemes vs. baselines
 - `eval_cluster.py` — clustering quality
 - `eval_steering.py` — supernodes as steerable concepts on the BATS analogy dataset (ablate / steer)
@@ -97,7 +100,7 @@ LaTeX sources for the write-up live in `paper/` and `SOICT_DATN_Research_ENG_Tem
 
 ### External API (`api.py`)
 
-Neuronpedia REST wrapper. Key function: `get_feature(modelId, layer, index)`.
+Neuronpedia + HF feature-dashboard wrapper. Key functions: `get_feature(modelId, layer, index)` (Neuronpedia label), `get_feature_dashboard(...)` (HF/Cloudfront feature data), plus `generate_graph`, `save_subgraph`, `steer_logits`, and `generate_autointerp`.
 
 ## Key Conventions
 

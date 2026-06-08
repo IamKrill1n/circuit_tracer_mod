@@ -124,32 +124,29 @@ def _build_feature_block(
     info: dict[str, Any] | None,
     prompt_tokens: list[str] | None = None,
 ) -> str:
-    """One feature's description block. Pass *prompt_tokens* to add the Level-B line."""
+    """One feature's description block in the autointerp tagged format. Pass *prompt_tokens* for Level-B."""
     clerp = (info["clerp"] if info and info["clerp"] else None) or node.clerp or node.node_id
     lines = [f'Label: "{clerp}"']
 
-    # Explainer-method signals, in reasoning order: peak token, the token it precedes, logits.
-    top_tokens = info["top_tokens"] if info else []
-    if top_tokens:
-        lines.append(f"  Max-activating tokens: {', '.join(top_tokens)}")
-
+    # Four signal lists under tags, in reasoning order (peak token → token after → logits → texts).
     next_tokens = [t for t in (info["top_next_tokens"] if info else []) if t]
-    if next_tokens:
-        lines.append(f"  Following tokens: {', '.join(next_tokens)}")
-
-    top_logits = info["top_logits"] if info else []
-    if top_logits:
-        lines.append(f"  Top promoted tokens: {', '.join(top_logits)}")
-
-    contexts: list[str] = info["contexts"] if info else []
-    for i, ctx in enumerate(contexts, 1):
-        lines.append(f"  Context {i}: {ctx}")
+    sections = [
+        ("MAX_ACTIVATING_TOKENS", info["top_tokens"] if info else []),
+        ("TOKENS_AFTER_MAX_ACTIVATING_TOKEN", next_tokens),
+        ("TOP_POSITIVE_LOGITS", info["top_logits"] if info else []),
+        ("TOP_ACTIVATING_TEXTS", info["contexts"] if info else []),
+    ]
+    for tag, items in sections:
+        if items:
+            lines.append(f"<{tag}>")
+            lines.extend(str(x) for x in items)
+            lines.append(f"</{tag}>")
 
     # Level B (naming only): the token this feature fires on in the actual prompt.
     if prompt_tokens is not None:
         cidx = int(node.ctx_idx)
         if 0 <= cidx < len(prompt_tokens):  # same guard as classify.py
-            lines.append(f"  Fires in this prompt on: «{prompt_tokens[cidx]}»")
+            lines.append(f"Fires in this prompt on: «{prompt_tokens[cidx]}»")
 
     return "\n".join(lines)
 
@@ -234,15 +231,14 @@ def _parse_graph_score_response(text: str) -> dict[int, list[bool]]:
 # ---------------------------------------------------------------------------
 
 _LABEL_SYSTEM_PROMPT = """\
-You are an AI interpretability researcher. You will be given the prompt a language model \
-processed, the token it predicted next, and several clusters of SAE features that were active \
-during that computation. Each feature is described by:
-- A short auto-interpretation label
-- Its max-activating tokens (the peak token in each top example)
-- The tokens that immediately follow those peaks
-- Its top promoted output tokens (logits)
-- Up to 2 example activation contexts, where the peak-activating token is wrapped in «»
-- The token it fires on in the given prompt
+You are labeling neurons in a language model. You will be given the prompt a language model \
+processed, the token it predicted next, and several clusters of neurons that were active \
+during that computation. Each neuron is described by:
+- <MAX_ACTIVATING_TOKENS>: the peak token in each top example
+- <TOKENS_AFTER_MAX_ACTIVATING_TOKEN>: the token immediately following each peak
+- <TOP_POSITIVE_LOGITS>: its top promoted output tokens
+- <TOP_ACTIVATING_TEXTS>: example texts, with the activating span(s) wrapped in <<>>
+plus, for naming, the token it fires on in the given prompt (wrapped in «»).
 
 For each feature, reason in this order: (1) its max-activating tokens, (2) the tokens that \
 follow them, (3) its top promoted tokens, (4) its contexts. Then characterise each cluster as \
@@ -270,23 +266,50 @@ The model's predicted next token is " Austin".
 Cluster [0]:
 [Feature 0.0]
 Label: "Dallas"
-  Max-activating tokens: Dallas, Dallas
-  Top promoted tokens: Texas, TX, Dallas
-  Context 1: the «Dallas» Cowboys announced
+<MAX_ACTIVATING_TOKENS>
+Dallas
+Dallas
+</MAX_ACTIVATING_TOKENS>
+<TOP_POSITIVE_LOGITS>
+Texas
+TX
+Dallas
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+the <<Dallas>> Cowboys announced
+</TOP_ACTIVATING_TEXTS>
 Cluster [1]:
 [Feature 1.0]
 Label: "Texas"
-  Max-activating tokens: Texas, Texan
-  Top promoted tokens: Houston, Austin, Texas
-  Context 1: moved to «Texas» last spring
+<MAX_ACTIVATING_TOKENS>
+Texas
+Texan
+</MAX_ACTIVATING_TOKENS>
+<TOP_POSITIVE_LOGITS>
+Houston
+Austin
+Texas
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+moved to <<Texas>> last spring
+</TOP_ACTIVATING_TEXTS>
 [Feature 1.1]
 Label: "Texas legal contexts"
-  Max-activating tokens: Texas, Texas
-  Context 1: under «Texas» state law
+<MAX_ACTIVATING_TOKENS>
+Texas
+Texas
+</MAX_ACTIVATING_TOKENS>
+<TOP_ACTIVATING_TEXTS>
+under <<Texas>> state law
+</TOP_ACTIVATING_TEXTS>
 Cluster [2]:
 [Feature 2.0]
 Label: "say Austin"
-  Top promoted tokens: Austin, AUSTIN, austin
+<TOP_POSITIVE_LOGITS>
+Austin
+AUSTIN
+austin
+</TOP_POSITIVE_LOGITS>
 
 Output:
 {"clusters": [{"id": 0, "type": "Input", "name": "Dallas input token"}, {"id": 1, "type": "Abstract", "name": "Texas state concept"}, {"id": 2, "type": "Output", "name": "predict Austin as capital"}]}
@@ -303,10 +326,9 @@ You are an AI interpretability researcher evaluating SAE feature coherence.
 You will be given:
 - The prompt the model processed and its predicted next token (as context)
 - A supernode (cluster) name
-- A single feature from that cluster, described by:
-  - A short auto-interpretation label (clerp)
-  - Its top promoted output tokens
-  - Up to 2 example activation contexts, where the peak-activating token is wrapped in «»
+- A single feature from that cluster, described by a short auto-interpretation label plus, in tags,
+  its <MAX_ACTIVATING_TOKENS>, <TOKENS_AFTER_MAX_ACTIVATING_TOKEN>, <TOP_POSITIVE_LOGITS>, and
+  <TOP_ACTIVATING_TEXTS> (example texts with the activating span(s) wrapped in <<>>)
 
 Your task: Decide if this feature belongs in a cluster with the given name.
 
@@ -328,7 +350,8 @@ You are an AI interpretability researcher evaluating SAE feature-cluster coheren
 
 You will be given the prompt a language model processed, its predicted next token, and several \
 named clusters of SAE features. Each feature is described by its label, max-activating tokens, \
-the tokens that follow them, its top promoted tokens, and example activation contexts.
+the tokens that follow them, its top promoted tokens, and example activation texts (with the \
+activating span(s) wrapped in <<>>).
 
 For each cluster, decide for every listed feature whether it belongs in a cluster with that \
 name: 'true' if the feature's meaning aligns with the cluster name, 'false' if it conflicts \

@@ -14,7 +14,7 @@ subgraph. \textbf{Clustering} groups the surviving feature nodes into supernodes
 read as a single mechanism. \textbf{Interpreting} forces the supernode graph to be a
 directed acyclic graph and labels each supernode, so the reader can follow the causal
 story at a glance. Section~\ref{sec:problem} first formalizes the task as finding a summary
-graph of an attribution graph and states the desiderata, objectives, and constraints each
+graph of an attribution graph and states the desiderata and constraints each
 stage must meet; Section~\ref{sec:method} then presents the three stages in turn.
 Figure~\ref{fig:methodology-pipeline} previews the whole pipeline on the running
 ``Dallas $\to$ Austin'' example.
@@ -85,10 +85,10 @@ inspect in one sitting. The DAG structure is a hard constraint, since causal
 relationships cannot be read off a graph that contains cycles.
 \end{description}
 
-\subsection{Objectives and constraints}\label{sec:objective}
-The pipeline searches for a summary graph that minimizes the desiderata losses subject
-to two hard constraints that make $H$ interpretable (D4); a candidate $H$ is admissible
-only if it satisfies both.
+\subsection{Constraints}\label{sec:constraints}
+Two hard constraints turn the interpretability requirement (D4) into conditions
+every admissible $H$ must meet; unlike the proxy losses introduced with each stage,
+they are enforced rather than minimized.
 \begin{description}[leftmargin=2.0em,style=nextline,topsep=2pt,itemsep=3pt]
 \item[(C1) Acyclicity.] $H$ must be a directed acyclic graph: its edge set $E_H$
 induces no directed cycle. Causal relationships cannot be read off a graph that
@@ -97,54 +97,23 @@ contains cycles; this constraint is enforced in the interpreting stage.
 $K_{\max}$: $K = |V_H| \le K_{\max}$, so the reader can inspect $H$ in one sitting.
 \end{description}
 
-Within the admissible set, the pipeline minimizes three losses, one per
-desideratum. Pruning minimizes the pruning loss $L_{\text{prune}}$ (D1), which
-depends only on the pruned subgraph $(V', E')$ and is therefore scored separately
-(Section~\ref{sec:stage1}). Clustering minimizes the two partition-dependent losses
-below: the \emph{atomicity loss} $L_{\text{atom}}$ (D2) and the
-\emph{causal-preservation loss} $L_{\text{causal}}$ (D3).
-
-The atomicity loss is the signed-cosine \emph{correlation-clustering} loss over
-the free feature nodes. With the same-cluster indicator
-$x_{ij} = \mathbf{1}[f(i) = f(j)]$, a resolution threshold $\theta \in [-1, 1]$,
-and the role-similarity entries $s_{ij}$ of the matrix $S$ defined in the clustering
-stage (Eq.~\eqref{eq:sim}),
-\begin{equation}
-L_{\text{atom}}(f)
-\;=\;
-\sum_{\{i, j\} \subseteq V'_{\text{mid}}} x_{ij}\,(\theta - s_{ij}).
-\label{eq:Latom}
-\end{equation}
-A similar pair ($s_{ij} > \theta$) contributes a negative term, so merging it is
-rewarded; a dissimilar pair ($s_{ij} < \theta$) contributes a positive term, so
-merging it is penalized. Minimizing $L_{\text{atom}}$ therefore penalizes
-\emph{over-merging} (dissimilar features placed together) and \emph{under-merging}
-(similar features kept apart) at once.
-
-The causal-preservation loss is the fraction of pruned edge weight absorbed
-\emph{inside} a supernode --- weight between two members of the same supernode,
-which the interpreting stage collapses into the node and which therefore never
-appears in $H$:
-\begin{equation}
-L_{\text{causal}}(f)
-\;=\;
-\frac{\sum_{(u, v) \in E':\, f(u) = f(v)} |W_{vu}|}
-     {\sum_{(u, v) \in E'} |W_{vu}|}
-\;\in\; [0, 1].
-\label{eq:Lcausal}
-\end{equation}
-Clustering minimizes the two as a single weighted objective with one trade-off weight
-$\lambda \ge 0$ on the causal term,
-\begin{equation}
-L(f) \;=\; L_{\text{atom}}(f) \;+\; \lambda\, L_{\text{causal}}(f),
-\label{eq:Lstage2}
-\end{equation}
-subject to the constraints (C1)--(C2). The weight $\lambda$ governs a genuine
-trade-off: merging role-similar features that are also directly connected improves
-atomicity (D2) but hides their edge (D3).
-
 \section{Method}
 \label{sec:method}
+
+A summary graph should be \emph{faithful} and \emph{interpretable}, but neither can
+be evaluated while $H$ is being built: faithfulness is defined by how the replacement
+model responds to interventions on $H$, and interpretability by a reader's
+judgement, so both become available only once $H$ exists, and Chapter~5 evaluates
+them directly. The pipeline therefore does not optimize the two properties
+themselves. Each stage instead minimizes a cheap, computable \emph{proxy} expected
+to track one of them, subject to the hard constraints C1 and C2. Pruning minimizes
+the pruning loss $L_{\text{prune}}$ (D1), a faithfulness proxy; clustering minimizes
+the atomicity loss $L_{\text{atom}}$ (D2), an interpretability proxy, traded against
+the causal-preservation loss $L_{\text{causal}}$ (D3), a faithfulness proxy. Each
+loss is defined with the stage that minimizes it. The three stages are solved in
+sequence --- pruning fixes $V'$, clustering partitions it, and interpreting builds
+$H$ from that partition --- so each proxy is minimized given the output of the stage
+before it.
 
 \subsection{Prune}\label{sec:stage1}
 Pruning keeps the nodes and edges that carry the main computation and discards
@@ -297,12 +266,52 @@ threshold $\theta$ is the only granularity knob for the signed variant, and
 $\theta = 0$ is the natural default, since the sign of the cosine then decides whether
 a pair should merge.
 
+\paragraph{Clustering objective.}
+Clustering minimizes two partition-dependent proxies. The \emph{atomicity loss}
+$L_{\text{atom}}$ (D2) makes each supernode read as a single mechanism; it is the
+signed-cosine \emph{correlation-clustering} loss over the free feature nodes. With
+the same-cluster indicator $x_{ij} = \mathbf{1}[f(i) = f(j)]$, a resolution
+threshold $\theta \in [-1, 1]$, and the role similarity $s_{ij} := S^{\cos}_{ij}$ of
+Eq.~\eqref{eq:sim},
+\begin{equation}
+L_{\text{atom}}(f)
+\;=\;
+\sum_{\{i, j\} \subseteq V'_{\text{mid}}} x_{ij}\,(\theta - s_{ij}).
+\label{eq:Latom}
+\end{equation}
+A similar pair ($s_{ij} > \theta$) contributes a negative term, so merging it is
+rewarded; a dissimilar pair ($s_{ij} < \theta$) contributes a positive term, so
+merging it is penalized. Minimizing $L_{\text{atom}}$ therefore penalizes
+\emph{over-merging} (dissimilar features placed together) and \emph{under-merging}
+(similar features kept apart) at once. The \emph{causal-preservation loss}
+$L_{\text{causal}}$ (D3) keeps causal edge weight visible between supernodes instead
+of hidden inside them; it is the fraction of pruned edge weight absorbed
+\emph{inside} a supernode --- weight between two members of the same supernode,
+which the interpreting stage collapses into the node and which therefore never
+appears in $H$:
+\begin{equation}
+L_{\text{causal}}(f)
+\;=\;
+\frac{\sum_{(u, v) \in E':\, f(u) = f(v)} |W_{vu}|}
+     {\sum_{(u, v) \in E'} |W_{vu}|}
+\;\in\; [0, 1].
+\label{eq:Lcausal}
+\end{equation}
+Clustering minimizes the two as a single weighted objective with one trade-off weight
+$\lambda \ge 0$ on the causal term,
+\begin{equation}
+L(f) \;=\; L_{\text{atom}}(f) \;+\; \lambda\, L_{\text{causal}}(f),
+\label{eq:Lstage2}
+\end{equation}
+where $\lambda$ governs a genuine trade-off: merging role-similar features that are
+also directly connected improves atomicity (D2) but hides their edge (D3).
+
 \paragraph{Exact ILP solver.}
 The exact solver chooses the partition $f$ by minimizing the weighted objective
-$L(f) = L_{\text{atom}}(f) + \lambda\, L_{\text{causal}}(f)$ of
-Eq.~\eqref{eq:Lstage2} on the signed cosine, subject to the complexity budget (C2);
-the acyclicity constraint (C1) is deferred to the interpreting stage. Both losses are
-linear in the same-cluster indicators $x_{ij}$: $L_{\text{atom}}$ is linear by
+$L(f)$ of Eq.~\eqref{eq:Lstage2} on the signed cosine, subject to the complexity
+budget (C2); the acyclicity constraint (C1) is deferred to the interpreting stage.
+Both losses are linear in the same-cluster indicators $x_{ij}$: $L_{\text{atom}}$ is
+linear by
 Eq.~\eqref{eq:Latom}, and the absorbed-mass numerator of $L_{\text{causal}}$ is
 $\sum_{(u, v) \in E'} |W_{vu}|\, x_{uv}$, since a feature edge is internal to a
 supernode exactly when its endpoints share one. The objective is therefore linear,
@@ -393,11 +402,12 @@ $H$ or any quantity above.
 \section{Chapter Summary}
 This chapter formalized the summarization task and presented the three-stage method
 that solves it. The summary graph $H$ was defined as a labeled DAG of supernodes
-together with the partition map from the pruned attribution graph, and four
+together with the partition map from the pruned attribution graph, and the four
 desiderata --- importance retention, atomicity, causal-information preservation, and
-interpretability --- were turned into the pruning loss $L_{\text{prune}}$, the
-atomicity loss $L_{\text{atom}}$, and the causal-preservation loss $L_{\text{causal}}$
-under the acyclicity and budget constraints. Pruning meets D1 by importance-thresholded
+interpretability --- became three computable proxies for the summary's faithfulness
+and interpretability (the pruning loss $L_{\text{prune}}$, the atomicity loss
+$L_{\text{atom}}$, and the causal-preservation loss $L_{\text{causal}}$) together
+with the acyclicity and budget constraints that every admissible $H$ must satisfy. Pruning meets D1 by importance-thresholded
 selection, which also explains why every error node is removed. Clustering meets D2 and
 trades it against D3 through the weighted objective $L_{\text{atom}} + \lambda
 L_{\text{causal}}$, comparing features by a role similarity for which four variants were
@@ -405,7 +415,7 @@ given: the signed cosine consumed by the exact ILP and the three nonnegative
 multi-kernel means consumed by the scalable spectral and agglomerative clusterers.
 Interpreting meets D4 by aggregating the pruned edges into a block-sum adjacency and
 removing cycles, yielding the DAG $H$. The next chapter analyzes the method's
-theoretical properties, and Chapter~5 validates the resulting summary graphs
-empirically.
+theoretical properties, and Chapter~5 tests directly whether these proxies yield
+faithful, interpretable summary graphs.
 
 \end{document}

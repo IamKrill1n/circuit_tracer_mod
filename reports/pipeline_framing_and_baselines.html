@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline framing &amp; baselines — review</title>
+<style>
+  :root{--ink:#1a1a1a;--mut:#5b6470;--line:#e2e6ea;--bg:#fafbfc;--acc:#1f5fa6;--warn:#a6431f;--ok:#1f7a4d;--box:#f3f6f9;}
+  *{box-sizing:border-box}
+  body{font:16px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--ink);
+       max-width:860px;margin:0 auto;padding:40px 28px 80px;background:#fff}
+  h1{font-size:26px;line-height:1.25;margin:0 0 4px}
+  h2{font-size:21px;margin:38px 0 8px;padding-top:14px;border-top:2px solid var(--line)}
+  h3{font-size:17px;margin:24px 0 6px;color:var(--acc)}
+  p,li{color:var(--ink)}
+  .sub{color:var(--mut);margin:0 0 26px;font-size:14px}
+  .summary{background:var(--box);border:1px solid var(--line);border-left:4px solid var(--acc);
+           border-radius:8px;padding:18px 22px;margin:24px 0}
+  .summary h2{border:0;margin:0 0 10px;padding:0;font-size:18px}
+  .formula{background:var(--bg);border:1px solid var(--line);border-radius:6px;
+           padding:10px 14px;margin:12px 0;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+           font-size:14.5px;overflow-x:auto}
+  .flag{color:var(--warn);font-weight:600}
+  .good{color:var(--ok);font-weight:600}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--box);font-weight:600}
+  td code,th code{font-size:13px}
+  code{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:13.5px}
+  .tag{display:inline-block;font-size:11.5px;font-weight:700;letter-spacing:.03em;
+       padding:2px 7px;border-radius:10px;text-transform:uppercase}
+  .t-floor{background:#fdecea;color:var(--warn)}
+  .t-ceil{background:#e9f3ff;color:var(--acc)}
+  .t-oracle{background:#eafaf1;color:var(--ok)}
+  .t-swap{background:#f0eefb;color:#5a3fb5}
+  .next{background:#f7fbf9;border:1px solid #cfe8dc;border-radius:8px;padding:16px 22px;margin-top:18px}
+  .next ol{margin:6px 0 0;padding-left:22px}
+  blockquote{margin:10px 0;padding:8px 16px;border-left:3px solid var(--line);color:var(--mut);font-style:italic}
+  .small{font-size:13px;color:var(--mut)}
+</style>
+</head>
+<body>
+
+<h1>Three-stage summarization: optimization framing &amp; baseline design</h1>
+<p class="sub">Methodology review of Chapters 3 &amp; 5 — reconciling the "single optimization problem" story with the staged solver, and a baseline suite for a novel task. 2026-06-08.</p>
+
+<div class="summary">
+<h2>Summary</h2>
+<ul>
+  <li><b>The framing tension is real but cosmetic, not structural.</b> You don't have "three stages each optimizing its own objective." You have <b>two optimizers</b> (prune, cluster) over <b>nested decision variables</b> V′ ⊃ f, plus <b>one deterministic constructor</b> (interpret) that enforces the DAG constraint. Stage 3 optimizes nothing — saying so removes most of the awkwardness.</li>
+  <li><b>Fix the story, keep the method.</b> State one joint objective over (V′, f), declare the solver <b>greedy / lexicographic</b> (justified by intractability of the joint problem), and own the greedy gap as a one-paragraph limitation. Don't rebuild the pipeline as a single solver.</li>
+  <li><b>One genuine inconsistency to flag:</b> C1 (acyclicity) is a constraint in §3.4 but is enforced <i>after</i> clustering. So the ILP minimizes the clustering loss over a cyclic-allowed relaxation, and stage-3 back-edge deletion discards between-supernode mass that <i>no loss accounts for</i>. This is a hidden fourth source of infidelity — name it.</li>
+  <li><b>Baselines: the task is new, so there is no rival system.</b> The correct design is therefore <span class="tag t-floor">floor</span> (random), <span class="tag t-oracle">oracle</span> (human supernodes), and <span class="tag t-swap">per-stage swaps</span> at matched budget — not a competing end-to-end method. This is standard for a new task and is a <i>strength</i> of the framing.</li>
+  <li><b>Biggest single upgrade to Chapter 5:</b> replace the single-K table with a <b>faithfulness-vs-complexity Pareto curve</b> (you already have <code>pareto_curve.py</code>). It dissolves both biases you already flagged — "K-means hides its weakest edges" and "K-means is graded on its own objective."</li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2>Part 1 — The optimization framing (your Q2)</h2>
+
+<h3>Diagnosis: a formulation/solver mismatch</h3>
+<p>§3.4 reads as a single constrained problem — "the pipeline searches for a summary graph that minimizes the desiderata losses subject to C1–C2" — but the method solves it in three sequential passes. Four specific gaps make the single-problem reading feel false:</p>
+
+<ol>
+  <li><b>There is no scalar linking L<sub>prune</sub> to the clustering loss.</b> You give λ (atom vs causal) but nothing weighing pruning against clustering. So a single summed objective L<sub>total</sub> doesn't actually exist in the text. What you really do is <b>lexicographic</b>: fix V′ by minimizing L<sub>prune</sub>, <i>then</i> minimize L<sub>atom</sub> + λL<sub>causal</sub> given V′. That is a legitimate framing — but it's an <i>order</i>, not a sum.</li>
+  <li><b>Stage 3 is not an optimizer.</b> Given f, the block-sum → antiparallel-collapse → back-edge-removal map is <b>deterministic</b>. W<sub>H</sub> = Interpret(f). Calling it a third "stage that optimizes its own objective" is what creates the "three competing objectives" discomfort. It's a constraint-enforcing construction, full stop.</li>
+  <li><span class="flag">C1 is declared a constraint but enforced post-hoc.</span> §3.4 says admissible H must be acyclic; §3.5 then says "the acyclicity constraint is deferred to the interpreting stage." So the ILP's feasible set is <i>not</i> the admissible set of §3.4 — it minimizes over partitions whose block-sum adjacency may be cyclic, and stage 3 repairs them by deleting edges.</li>
+  <li><span class="flag">Back-edge deletion drops mass that no loss tracks.</span> L<sub>causal</sub> counts only <i>within</i>-supernode absorbed weight (f(u)=f(v)). Back-edge removal deletes <i>between</i>-supernode edges. These are disjoint, so L<sub>causal</sub> stays consistent — but the deleted cross-cluster edges are real causal structure thrown away for acyclicity, and they appear in <i>no</i> desideratum. That's a genuine, unmodelled infidelity.</li>
+</ol>
+
+<h3>Recommended resolution — stage-specific proxies for one true objective</h3>
+<p class="small"><b>Supersedes</b> the joint-objective patch below. This is the preferred framing: more honest, and it makes Chapter 5's logic airtight.</p>
+
+<p>Stop presenting the stages as three separately-optimal subproblems jointly judged by one metric. Instead: the <b>true objective</b> — a summary that is <b>faithful and interpretable</b> — cannot be optimized directly (it requires interventions and an LLM at optimization time). So each stage minimizes a cheap, computable <b>proxy</b> for it, and Chapter 5 measures the true objective <i>directly</i> to check the proxies worked. This is the standard surrogate-loss story.</p>
+
+<p><b>(a) Name the true objective, two-dimensional.</b> Faithfulness (causal) and interpretability (readability/relevance). The four desiderata are proxies or constraints for these — and each has a matching direct measurement, which is what <i>earns</i> the word "proxy":</p>
+
+<table>
+  <thead><tr><th>Desideratum</th><th>True objective</th><th>Status</th><th>Stage</th><th>Measured directly by</th></tr></thead>
+  <tbody>
+    <tr><td>D1 retain important</td><td><b>Faithfulness</b></td><td>proxy (L<sub>prune</sub> = mass)</td><td>Prune</td><td><code>eval_faithfulness.py</code> (P(target) ratio)</td></tr>
+    <tr><td>D3 causal preservation</td><td><b>Faithfulness</b></td><td>proxy (L<sub>causal</sub>)</td><td>Cluster</td><td><code>eval_intervention.py</code> (edges)</td></tr>
+    <tr><td>D2 atomicity</td><td><b>Interpretability</b></td><td>proxy (L<sub>atom</sub>)</td><td>Cluster</td><td>LLM / human relevance (nodes)</td></tr>
+    <tr><td>D4 DAG + K ≤ K<sub>max</sub></td><td><b>Interpretability</b></td><td><span class="flag">constraint</span> (enforced)</td><td>Interpret</td><td>definitional / LLM readability</td></tr>
+  </tbody>
+</table>
+
+<p><b>(b) Split constraints from proxies.</b> DAG-ness and K ≤ K<sub>max</sub> are <i>constraints</i> on what counts as a summary at all — Interpret <b>enforces</b> them, it does not minimize a loss. This keeps the interpret stage honest (it is a constructor, not an optimizer) and removes the "three competing objectives" problem at the root.</p>
+
+<p><b>(c) Keep the optimization rigor.</b> You recast the <i>status</i> of the stage losses (proxies for a downstream-validated goal), not their content. The ILP is still the exact minimizer of a well-defined proxy. So you get honesty <i>and</i> rigor: "each stage exactly or approximately optimizes a well-defined proxy for the faithfulness and interpretability we then measure directly."</p>
+
+<p><b>(d) The K-means result becomes the finding, not the confound.</b> Under this lens, K-means beating the ILP at λ=1 means its Euclidean role-cohesion <i>proxy</i> tracks the steering metric better than the correlation-clustering proxy. "Graded on its own objective" stops being an apology and becomes the measured point — which proxy best serves the true objective.</p>
+
+<h3>Two caveats to keep honest</h3>
+<ul>
+  <li><b>Interpret is not <i>only</i> readability.</b> The edge construction W<sub>H</sub> (block-sum + antiparallel collapse) is a deterministic, <i>faithfulness-relevant</i> map — it is exactly what the intervention test grades. Describe Interpret as "a deterministic faithfulness-relevant construction of W<sub>H</sub>, plus enforcement of the readability constraints," not readability alone.</li>
+  <li><span class="flag">The DAG constraint can cost faithfulness.</span> Back-edge deletion drops cross-supernode mass tracked by no loss. Cleanly framed now: a place where the interpretability <i>constraint</i> trades against the faithfulness <i>objective</i> — surface it, don't hide it.</li>
+</ul>
+
+<h3>The cost, and the fallback</h3>
+<p>You give up the "single grand optimization problem" aesthetic — but §3.4 never delivered it (no scalar μ links L<sub>prune</sub> to the clustering loss). A research-track committee rewards honest structure + clean eval logic over a leaky unification. Keep the joint-objective version below only as a one-line "alternative" if a reviewer insists on a single objective.</p>
+
+<details style="margin-top:12px">
+<summary class="small" style="cursor:pointer"><b>Alternative (superseded): one joint objective + greedy solver</b></summary>
+<div class="formula" style="margin-top:10px">
+minimize&nbsp; L<sub>prune</sub>(V′)&nbsp; +&nbsp; μ · [ L<sub>atom</sub>(f) + λ · L<sub>causal</sub>(f) ]&nbsp;&nbsp; over (V′, f),&nbsp;&nbsp; s.t.&nbsp; |V<sub>H</sub>| ≤ K<sub>max</sub> (C2),&nbsp; Interpret(f) acyclic (C1).
+</div>
+<p class="small">State the joint problem as the in-principle target, declare the solver greedy/lexicographic (V* = argmin L<sub>prune</sub>; then f* = argmin L<sub>atom</sub>+λL<sub>causal</sub>; H = Interpret(f*) deterministic), justify by intractability, and own the greedy gap. Coherent, but less honest than the proxy framing because it implies a unification the method does not perform.</p>
+</details>
+
+<!-- ============================================================ -->
+<h2>Part 2 — Baselines for a 3-stage pipeline (your Q1)</h2>
+
+<h3>Principle 1 — A new task has no rival system</h3>
+<p>There is no competing automated attribution-graph summarizer to compare against; that's the contribution. So the baseline design is necessarily <b>ablation + oracle + floor</b>, which is exactly right for a new task. Three roles:</p>
+<ul>
+  <li><span class="tag t-floor">floor</span> — random / trivial: shows the method beats chance.</li>
+  <li><span class="tag t-oracle">oracle</span> — human-labelled supernodes (Ameisen et al. multi-hop): the ceiling and the human anchor for your LLM-score validation.</li>
+  <li><span class="tag t-swap">swap</span> — replace <i>one</i> stage, hold the other two at your setting: isolates each design choice.</li>
+</ul>
+
+<h3>Principle 2 — Match the budget the metric is sensitive to</h3>
+<p>You already do this for clustering (match K). Generalize it: every baseline is matched to your method on the resource its metric reacts to — <b>K for clustering, |V′| (or retained mass) for pruning</b> — so the comparison isolates the algorithm, not the granularity.</p>
+
+<h3>Principle 3 — Report a curve, not a point</h3>
+<p>Your Chapter 5 already concedes the single-K table is biased two ways: K-means "hides its weakest, most ambiguous edges inside clusters" and is "partly graded on its own objective." Both vanish if you sweep complexity and plot <b>faithfulness (SC, ρ, |Δp|) vs K</b> and <b>vs #edges</b>. A method that exposes fewer edges simply sits at a different point on the same curve — no longer an unfair advantage. You have the harness (<code>pareto_curve.py</code> already sweeps λ); extend it to sweep K for every clusterer.</p>
+
+<h3>The baseline suite</h3>
+<table>
+  <thead>
+    <tr><th>Stage held fixed?</th><th>Baseline</th><th>Role</th><th>What it isolates</th><th>Graded by</th></tr>
+  </thead>
+  <tbody>
+    <tr><td rowspan="4"><b>Whole pipeline</b><br><span class="small">(orient the metric scale)</span></td>
+        <td>Random partition @ matched K</td><td><span class="tag t-floor">floor</span></td><td>Does clustering beat chance at this K?</td><td>both</td></tr>
+    <tr><td>Singletons (no merge, K=|V′<sub>mid</sub>|)</td><td><span class="tag t-ceil">ceiling</span></td><td>Price of abstraction: faithfulness lost by merging (L<sub>causal</sub>=0 here)</td><td>intervention</td></tr>
+    <tr><td>One supernode / layer-buckets</td><td><span class="tag t-floor">floor</span></td><td>Crude lower bound on a "trivial" grouping</td><td>both</td></tr>
+    <tr><td>Human / published supernodes (multi-hop)</td><td><span class="tag t-oracle">oracle</span></td><td>Gap to human grouping; validates the LLM score against human labels</td><td>both</td></tr>
+
+    <tr><td rowspan="3"><b>Prune</b><br><span class="small">cluster + interpret = yours; match |V′|</span></td>
+        <td>Ameisen influence-threshold pruning (library default)</td><td><span class="tag t-swap">swap</span></td><td>Your influence×relevance geometric mean vs. the field's pruner</td><td>faithfulness + downstream</td></tr>
+    <tr><td>Influence-only (α=1) / relevance-only (α=0)</td><td><span class="tag t-swap">swap</span></td><td>Value of the two-factor geometric-mean combiner</td><td>faithfulness</td></tr>
+    <tr><td>Random nodes / activation top-k @ matched count</td><td><span class="tag t-floor">floor</span></td><td>Does importance scoring beat naive selection?</td><td>faithfulness</td></tr>
+
+    <tr><td rowspan="4"><b>Cluster</b><br><span class="small">prune + interpret = yours; match K</span></td>
+        <td>K-means on role vectors <span class="small">(you have this)</span></td><td><span class="tag t-swap">swap</span></td><td>Euclidean vs signed-cosine correlation clustering</td><td>both</td></tr>
+    <tr><td>Spectral / agglomerative <span class="small">(your own scalable variants)</span></td><td><span class="tag t-swap">swap</span></td><td>Exact ILP vs your heuristics — cost of approximation</td><td>both</td></tr>
+    <tr><td>Louvain / greedy modularity on the affinity</td><td><span class="tag t-swap">swap</span></td><td>vs a standard community-detection clusterer</td><td>both</td></tr>
+    <tr><td>Random partition / singletons @ matched K</td><td><span class="tag t-floor">floor</span> / <span class="tag t-ceil">ceiling</span></td><td>Chance floor and no-abstraction ceiling at this K</td><td>both</td></tr>
+
+    <tr><td rowspan="3"><b>Interpret</b><br><span class="small">prune + cluster = yours</span></td>
+        <td>Absolute-value block sum (no sign cancellation)</td><td><span class="tag t-swap">swap</span></td><td>Value of signed antiparallel collapse</td><td>intervention (edges)</td></tr>
+    <tr><td>Naive cycle-break (drop smallest-weight edge)</td><td><span class="tag t-swap">swap</span></td><td>Your depth-ordered back-edge removal vs naive</td><td>intervention (edges)</td></tr>
+    <tr><td>No-DAG (leave cycles)</td><td><span class="tag t-floor">floor</span></td><td>Faithfulness cost of enforcing C1</td><td>intervention (edges)</td></tr>
+  </tbody>
+</table>
+
+<h3>Mapping to your two metrics</h3>
+<p><b>Nodes → LLM relevance score.</b> Node-level baselines (prune swaps, random vs human supernodes) are graded by how relevant the LLM judges each supernode. The <b>human supernodes are the key anchor here</b>: your Chapter-5 draft already wants LLM-vs-human agreement, so the oracle does double duty — it's both a clustering baseline and the validation target for the LLM score itself.</p>
+<p><b>Edges → intervention.</b> Cluster and interpret swaps are graded by SC / ρ / |Δp| (your <code>eval_intervention.py</code>). The <b>singletons ceiling</b> is the most informative addition: it is maximally edge-faithful (nothing absorbed), so the gap from singletons to your method <i>is</i> the faithfulness cost of abstraction — currently invisible in the ILP-vs-K-means table.</p>
+
+<!-- ============================================================ -->
+<div class="next">
+<h2 style="border:0;margin:0 0 6px;padding:0">Next steps</h2>
+<ol>
+  <li><b>Rewrite §3.4 "Objectives and constraints"</b> to the reconciled framing: one joint objective as the in-principle target, greedy/lexicographic solver, "two optimizers + one constructor," and a limitations sentence on the greedy gap + post-hoc C1 + unmodelled back-edge mass. <i>(I can draft this drop-in.)</i></li>
+  <li><b>Turn Table 5.1 into a Pareto curve</b> — extend <code>pareto_curve.py</code> to sweep K across {ILP, K-means, spectral, agglomerative, random}, plot SC / ρ / |Δp| vs K and vs #edges. This is the single highest-leverage change to Chapter 5.</li>
+  <li><b>Add the two cheap anchors</b> first — random partition and singletons at matched K — to bracket every clustering number. Both are a few lines on top of your existing intervention harness.</li>
+  <li><b>Wire the human supernodes</b> (Ameisen multi-hop) as the oracle, then report LLM-vs-human agreement against it — this also unblocks the §5.7 draft.</li>
+  <li><b>Optional, lower priority:</b> prune-stage and interpret-stage swaps, once the clustering curve is in place.</li>
+</ol>
+</div>
+
+<p class="small" style="margin-top:30px">No LaTeX compiler is installed here, so this report does not attempt to compile or page-count the thesis; it reviews the methodology only.</p>
+
+</body>
+</html>

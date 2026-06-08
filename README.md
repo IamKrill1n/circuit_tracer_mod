@@ -1,2 +1,9 @@
-# Fork of safety-research/circuit-tracer 
-This is a fork of `safety-research/circuit-tracer`, extended with a **summarization pipeline** that automates summarizing the attribution graph. The core library computes attribution graphs (circuits) for transformer language models using MLP transcoders.
+# Automate summarization of attribution graphs for circuit tracing pipeline
+
+A framework to summarize attribution graphs from circuit_tracer library.
+
+We employ a 3 stage approach:
+- Prune: reduce the attribution graph to important nodes and edges
+- Cluster: group functionally similar nodes into supernodes.
+- Interprete: visualize the graph as a DAG with supernodes' labels
+
