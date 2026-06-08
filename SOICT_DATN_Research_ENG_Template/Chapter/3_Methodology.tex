@@ -195,8 +195,8 @@ edges, using the edge-level influence and relevance of their endpoints.
 
 \paragraph{Selection and the pruning loss.}
 Pruning keeps the highest-importance nodes whose cumulative importance reaches a
-retained-mass fraction $\tau_V \in [0, 1]$, and likewise keeps edges up to a
-fraction $\tau_E$; embedding and logit nodes are kept unconditionally. It then
+retained-mass fraction $\eta_V \in [0, 1]$, and likewise keeps edges up to a
+fraction $\eta_E$; embedding and logit nodes are kept unconditionally. It then
 removes \emph{dangling} nodes in a fixed-point sweep --- a source that has lost all
 outgoing edges, or a feature or logit that has lost all incoming edges --- until the
 subgraph is stable. The thresholds set the pruning loss directly: writing the kept
@@ -207,7 +207,7 @@ L_{\text{prune}} \;=\; 1 - \frac{\sum_{v \in V'} \mathrm{Imp}_v}{\sum_{v \in V} 
 \;\in\; [0, 1],
 \label{eq:Lprune}
 \end{equation}
-so a higher $\tau_V$ retains more causal mass at the cost of a larger subgraph.
+so a higher $\eta_V$ retains more causal mass at the cost of a larger subgraph.
 The thresholds are chosen to keep $L_{\text{prune}}$ small while shrinking $|V'|$
 enough for the later stages to be tractable.
 

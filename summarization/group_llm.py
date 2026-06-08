@@ -204,6 +204,31 @@ def _parse_graph_label_response(text: str) -> dict[int, tuple[str, str]]:
     return out
 
 
+def _parse_graph_score_response(text: str) -> dict[int, list[bool]]:
+    """Parse the whole-graph scoring JSON into ``{cluster_id: [belongs?, ...]}``; {} on failure."""
+    raw = text.strip()
+    fence = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw, re.DOTALL)
+    if fence:
+        raw = fence.group(1).strip()
+    obj = re.search(r"\{.*\}", raw, re.DOTALL)
+    if obj:
+        raw = obj.group(0)
+    out: dict[int, list[bool]] = {}
+    try:
+        clusters = json.loads(raw).get("clusters", [])
+    except (json.JSONDecodeError, AttributeError):
+        return out
+    for c in clusters:
+        try:
+            cid = int(c["id"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        matches = c.get("matches", [])
+        if isinstance(matches, list):
+            out[cid] = [bool(x) for x in matches]
+    return out
+
+
 # ---------------------------------------------------------------------------
 # System prompt for whole-graph supernode labelling
 # ---------------------------------------------------------------------------
@@ -295,6 +320,27 @@ Rules:
 
 
 # ---------------------------------------------------------------------------
+# System prompt for whole-graph coherence scoring (one call, all supernodes)
+# ---------------------------------------------------------------------------
+
+_SCORE_GRAPH_SYSTEM_PROMPT = """\
+You are an AI interpretability researcher evaluating SAE feature-cluster coherence.
+
+You will be given the prompt a language model processed, its predicted next token, and several \
+named clusters of SAE features. Each feature is described by its label, max-activating tokens, \
+the tokens that follow them, its top promoted tokens, and example activation contexts.
+
+For each cluster, decide for every listed feature whether it belongs in a cluster with that \
+name: 'true' if the feature's meaning aligns with the cluster name, 'false' if it conflicts \
+with or is unrelated to it.
+
+Output strict JSON only — no markdown, no extra text — one entry per cluster in the order given, \
+with one boolean per feature in the order listed:
+{"clusters": [{"id": <cluster number>, "matches": [true, false, ...]}]}
+"""
+
+
+# ---------------------------------------------------------------------------
 # Public API – label every supernode in a SummaryGraph (one whole-graph call)
 # ---------------------------------------------------------------------------
 
@@ -302,11 +348,14 @@ def _build_graph_user_message(
     sng: SummaryGraph,
     metadata: dict,
     target_token: str | None,
+    *,
+    include_names: bool = False,
 ) -> tuple[str, list[Supernode]]:
     """Whole-graph user message + the ordered labelable supernodes (non-emb/logit, non-empty).
 
     Cluster index ``i`` in the message corresponds to ``labelable[i]``; feature blocks skip
-    embedding / logit member nodes, matching the scoring path's filter.
+    embedding / logit member nodes, matching the scoring path's filter. Pass ``include_names``
+    to put each supernode's assigned name in its cluster header (used by the scoring path).
     """
     scan = metadata.get("scan", "")
     prompt_tokens = metadata.get("prompt_tokens", [])
@@ -328,7 +377,8 @@ def _build_graph_user_message(
         cid = len(labelable)
         labelable.append(sn)
         body = "\n".join(f"[Feature {cid}.{j}]\n{block}" for j, block in enumerate(blocks))
-        sections.append(f"Cluster [{cid}]:\n{body}")
+        header = f'Cluster [{cid}] — name: "{sn.name}":' if include_names else f"Cluster [{cid}]:"
+        sections.append(f"{header}\n{body}")
 
     user_message = _build_prompt_context(metadata, target_token) + "\n\n".join(sections)
     return user_message, labelable
@@ -518,12 +568,16 @@ def score_summarization_graph_coherence(
     model_name: str = "gpt-4o-mini",
     temperature: float = 0.2,
 ) -> dict[str, float]:
-    """Score all supernodes in a SummaryGraph for coherence.
+    """Score every supernode's feature coherence with a single whole-graph LLM call.
+
+    Builds one prompt with all non-emb/logit supernodes (each shown with its assigned name and
+    member features), asks the LLM for a per-feature belongs/doesn't-belong judgement, then sets
+    each supernode's score to the fraction of its features judged to belong.
 
     Args:
-        sng: The ``SummaryGraph`` to score.
+        sng: The ``SummaryGraph`` to score (supernodes must already be named).
         metadata: Graph metadata dict from ``prune_graph.metadata``.
-        model_name: LLM model to use.
+        model_name: LLM model (``gpt-``/``o1``/``o3``/``o4`` → OpenAI, else Gemini).
         temperature: Sampling temperature.
 
     Returns:
@@ -533,24 +587,44 @@ def score_summarization_graph_coherence(
     Raises:
         ValueError: If the LLM API key is not set.
     """
-    scores: dict[str, float] = {}
+    is_gemini = not model_name.startswith(("gpt-", "o1", "o3", "o4"))
+    api_key = _get_gemini_api_key() if is_gemini else get_env("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("Set GEMINI_API_KEY or OPENAI_API_KEY in environment")
+
     target_token = _extract_target_token(sng)
+    user_message, labelable = _build_graph_user_message(
+        sng, metadata, target_token, include_names=True
+    )
+    if not labelable:
+        return {}
 
-    for supernode in sng.supernodes:
-        sn_type = supernode.type
-        if sn_type in ("emb", "logit"):
-            continue
-
-        score = score_supernode_coherence(
-            supernode,
-            supernode.name,
-            metadata,
-            model_name=model_name,
-            temperature=temperature,
-            target_token=target_token,
+    if is_gemini:
+        client = genai.Client(api_key=api_key)
+        response = _gemini_generate_with_retry(
+            client,
+            model=model_name,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=_SCORE_GRAPH_SYSTEM_PROMPT,
+                temperature=temperature,
+            ),
+            contents=user_message,
         )
-        scores[supernode.name] = score
+        text = response.text or ""
+    else:
+        text = _openai_generate_with_retry(
+            model=model_name,
+            system_prompt=_SCORE_GRAPH_SYSTEM_PROMPT,
+            user_message=user_message,
+            temperature=temperature,
+        )
 
+    matches = _parse_graph_score_response(text)  # {cluster_id: [belongs?, ...]}
+    scores: dict[str, float] = {}
+    for i, sn in enumerate(labelable):
+        m = matches.get(i)
+        # Missing/empty cluster in the response → unscored, treat as no match (0.0).
+        scores[sn.name] = (sum(m) / len(m)) if m else 0.0
     return scores
 
 
@@ -796,5 +870,29 @@ def score_summarization_graph_coherence(
 
 #     return supernodes
 
-# # if __name__ == '__main__':
-# #     pass
+if __name__ == '__main__':
+    # Demo: load a saved SummaryGraph, then LLM-label and LLM-score its supernodes.
+    # The SummaryGraph .pt stores only supernodes + pruned_adj, so the prompt/scan
+    # metadata is pulled from the prune graph it was derived from (analogies #000:
+    # "…abuja is to nigeria as amman is to" → predicts " jordan").
+    from summarization.prune import load_prune_graph
+    from summarization.summarize import SummaryGraph
+
+    SUMMARY_PATH = "summary/analogies_clt_hp_entmax_alpha_0.50_node_0.02_ilp_max_sn_7.pt"
+    PRUNE_PATH = "eval_outputs/analogies/clt-hp/entmax/alpha_0.50/node_0.02/000_prune_graph.pt"
+    MODEL = "gpt-4o-mini"  # Gemini free tier caps at 20 req/day; OpenAI avoids the quota wall
+
+    sng = SummaryGraph.load(SUMMARY_PATH)
+    metadata = load_prune_graph(PRUNE_PATH).metadata
+    print(f"Prompt: {metadata.get('prompt')!r}")
+
+    print(_build_graph_user_message(sng, metadata, _extract_target_token(sng), include_names=True)[0])
+    # print(f"\nLabelling {len(sng.supernodes)} supernodes with {MODEL} ...")
+    # label_summarization_graph(sng, metadata, model_name=MODEL)
+    # for sn in sng.supernodes:
+    #     print(f"  [{sn.type:>6}] {sn.role or '-':>8}  {sn.name}  ({len(sn.features)} features)")
+
+    # print(f"\nScoring supernode coherence with {MODEL} ...")
+    # scores = score_summarization_graph_coherence(sng, metadata, model_name=MODEL)
+    # for name, score in scores.items():
+    #     print(f"  {score:.2f}  {name}")

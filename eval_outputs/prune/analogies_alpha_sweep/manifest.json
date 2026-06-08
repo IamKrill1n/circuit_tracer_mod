@@ -1,0 +1,40 @@
+{
+  "graphs_root": "dataset/analogies",
+  "shap_values_json": "dataset/analogies/shap_values.json",
+  "source_sets": [
+    "analogies"
+  ],
+  "eval_normalizations": [
+    "softmax",
+    "entmax"
+  ],
+  "node_thresholds": [
+    0.01,
+    0.02,
+    0.05,
+    0.1,
+    0.2,
+    0.4,
+    0.6,
+    0.8,
+    1.0
+  ],
+  "alphas": [
+    0.0,
+    0.25,
+    0.5,
+    0.75,
+    1.0
+  ],
+  "edge_threshold": 0.95,
+  "combine_method": "geometric",
+  "score_normalization": "rank",
+  "logit_weights": "target",
+  "keep_all_tokens_and_logits": false,
+  "masker_keep_prefix": null,
+  "entmax_alpha": 1.25,
+  "n_graphs": 100,
+  "n_rows": 9000,
+  "n_failures": 0,
+  "failures": []
+}
