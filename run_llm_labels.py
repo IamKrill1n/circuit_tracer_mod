@@ -38,7 +38,9 @@ def _parse_args() -> argparse.Namespace:
         default=True,
         help="Skip graphs already present in the output file",
     )
-    p.add_argument("--limit", type=int, default=None, help="Process at most N graphs (for quick tests)")
+    p.add_argument(
+        "--limit", type=int, default=None, help="Process at most N graphs (for quick tests)"
+    )
     return p.parse_args()
 
 
@@ -49,7 +51,7 @@ def main() -> None:
     from summarization.prune import load_prune_graph
     from summarization.cluster import cluster_graph_spectral, clusters_to_supernodes
     from summarization.summarize import SummaryGraph
-    from summarization.group_llm import label_summarization_graph
+    from summarization.group_llm import LabelScheme, ModelSettings, label_supernodes
 
     graphs_dir = Path(args.graphs_dir)
     pt_files = sorted(graphs_dir.glob("*_prune_graph.pt"))
@@ -68,11 +70,14 @@ def main() -> None:
         with output_path.open() as f:
             results = json.load(f)
         done = sum(1 for v in results.values() if v)
-        print(f"Resuming — {done} graphs already labelled ({len(results) - done} failed/empty, will retry).")
+        print(
+            f"Resuming — {done} graphs already labelled ({len(results) - done} failed/empty, will retry)."
+        )
 
     # tqdm is optional
     try:
         from tqdm import tqdm
+
         iterator = tqdm(pt_files, desc="Labelling graphs", unit="graph")
     except ImportError:
         iterator = pt_files  # type: ignore[assignment]
@@ -93,13 +98,17 @@ def main() -> None:
                 normalize_weights=args.normalize_weights,
             )
             supernodes = clusters_to_supernodes(prune_graph, clusters)
-            sng = SummaryGraph(supernodes=supernodes, pruned_adj=prune_graph.pruned_adj)
+            sng = SummaryGraph(
+                supernodes=supernodes,
+                pruned_adj=prune_graph.pruned_adj,
+                metadata=prune_graph.metadata,
+            )
 
-            sng = label_summarization_graph(
+            sng = label_supernodes(
                 sng,
-                prune_graph.metadata,
-                model_name=args.model_name,
-                temperature=args.temperature,
+                args.model_name,
+                settings=ModelSettings(temperature=args.temperature),
+                scheme=LabelScheme(),
             )
 
             results[key] = sng.sn_names

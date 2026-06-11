@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Reviewer"
+  short_description: "Review repo diffs for correctness risks"
+  default_prompt: "Use $code-reviewer to review the current change."

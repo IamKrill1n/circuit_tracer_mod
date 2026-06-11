@@ -234,7 +234,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     supernode_map = {s.name: s.member_node_ids() for s in rows}
 
     # Stage 3: summarize.
-    sng = summarize(rows, prune_graph.pruned_adj)
+    sng = summarize(rows, prune_graph.pruned_adj, prune_graph.metadata)
     labelled_supernodes = _supernodes_for_upload(rows)
 
     _save_json(args.supernodes_out, labelled_supernodes)

@@ -1,0 +1,32 @@
+{
+  "gpt-4o-mini": {
+    "provider": "openai",
+    "base_url": null,
+    "api_key_env": "OPENAI_API_KEY",
+    "defaults": {"temperature": 0.2, "thinking_effort": null}
+  },
+  "gpt-4o": {
+    "provider": "openai",
+    "base_url": null,
+    "api_key_env": "OPENAI_API_KEY",
+    "defaults": {"temperature": 0.2, "thinking_effort": null}
+  },
+  "o4-mini": {
+    "provider": "openai",
+    "base_url": null,
+    "api_key_env": "OPENAI_API_KEY",
+    "defaults": {"temperature": 1.0, "thinking_effort": "medium"}
+  },
+  "gemini-2.5-flash": {
+    "provider": "gemini",
+    "base_url": null,
+    "api_key_env": "GOOGLE_API_KEY",
+    "defaults": {"temperature": 0.2, "thinking_effort": null}
+  },
+  "gemma-4-31b-it": {
+    "provider": "gemini",
+    "base_url": null,
+    "api_key_env": "GOOGLE_API_KEY",
+    "defaults": {"temperature": 0.2, "thinking_effort": "medium"}
+  }
+}

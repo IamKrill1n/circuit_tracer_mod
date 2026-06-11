@@ -1,6 +1,4 @@
-# CLAUDE.md
-
-Guidance for Claude Code when working in this repository.
+Guidance for Agent when working in this repository.
 
 ## Project Overview
 
@@ -78,7 +76,7 @@ Stages: `Graph` → `AttrGraph` → `PruneGraph` → clusters → `SummaryGraph`
 | `ilp_cluster.cluster_graph_ilp()` | Stage-2 facility-location MILP (scipy HiGHS): minimizes atomicity + λ·causal loss under a complexity budget. |
 | `scoring` | Stage-2 loss terms: `compute_L_atom` (signed-cosine correlation clustering), `compute_L` (atom + causal), silhouette. |
 | `classify` | Neuronpedia feature labels + `filter_act_density()` activation-density filtering. |
-| `group_llm` | LLM (Gemini) supernode labelling and scoring. |
+| `group_llm` | LLM supernode labelling via a model registry (`llm_models.json`) + provider router (OpenAI / Gemini / OpenAI-compatible). Entry point: `label_supernodes(sng, model_name, settings=, scheme=)`. |
 | `cluster_viz.supernode_graph_figure()` | Plotly figure for the supernode graph. |
 | `token_attribution` | SHAP-based token importance for embedding nodes. |
 | `graph_utils` | Pure-math scoring: influence / relevance, score combiners (geometric / arithmetic / harmonic), normalization. |

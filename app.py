@@ -1,4 +1,5 @@
 """Streamlit app: generate / load attribution graphs, prune, cluster, visualize."""
+
 from __future__ import annotations
 
 import json
@@ -311,7 +312,9 @@ def _shap_weights_from_file(
         raise ValueError("Matched SHAP row has no raw_shap list")
 
     json_keep = payload.get("masker_keep_prefix")
-    keep_prefix = int(json_keep) if isinstance(json_keep, (int, float)) and int(json_keep) > 0 else None
+    keep_prefix = (
+        int(json_keep) if isinstance(json_keep, (int, float)) and int(json_keep) > 0 else None
+    )
 
     normalized = normalize_shap_values_for_prune(
         prompt_tokens,
@@ -606,7 +609,10 @@ if "attr_graph" in st.session_state:
         )
         shap_alpha = s_c2.number_input(
             "entmax alpha",
-            min_value=1.01, max_value=2.0, value=1.25, step=0.05,
+            min_value=1.01,
+            max_value=2.0,
+            value=1.25,
+            step=0.05,
             disabled=shap_normalize != "entmax",
             key="pr_shap_alpha",
         )
@@ -626,7 +632,9 @@ if "attr_graph" in st.session_state:
     alpha = st.slider("alpha", 0.0, 1.0, 0.5, step=0.05, key="pr_alpha")
     keep_all = st.checkbox("keep_all_tokens_and_logits", value=True, key="pr_keep")
     filter_act = st.checkbox(
-        "filter_act_density (activation-density filter from feature dashboards, post-prune)", value=False, key="pr_filter"
+        "filter_act_density (activation-density filter from feature dashboards, post-prune)",
+        value=False,
+        key="pr_filter",
     )
     f_c1, f_c2 = st.columns(2)
     act_lb = f_c1.number_input("act_density_lb", value=2e-5, format="%.2e", key="pr_lb")
@@ -707,8 +715,12 @@ if "prune_graph" in st.session_state:
 
     c_c1, c_c2, c_c3 = st.columns(3)
     target_k = c_c1.number_input("target_k", min_value=1, value=7, step=1, key="cl_k")
-    max_layer_span = c_c2.number_input("max_layer_span", min_value=1, value=4, step=1, key="cl_span")
-    max_sn_raw = c_c3.number_input("max_sn (0 = no cap)", min_value=0, value=0, step=1, key="cl_maxsn")
+    max_layer_span = c_c2.number_input(
+        "max_layer_span", min_value=1, value=4, step=1, key="cl_span"
+    )
+    max_sn_raw = c_c3.number_input(
+        "max_sn (0 = no cap)", min_value=0, value=0, step=1, key="cl_maxsn"
+    )
     max_sn = int(max_sn_raw) if max_sn_raw > 0 else None
 
     is_ours = method in ("ours-spectral", "ours-agglomerative")
@@ -721,8 +733,11 @@ if "prune_graph" in st.session_state:
     )
     decay_rate_raw = st.number_input(
         "decay_rate (0 = disabled)",
-        min_value=0.0, value=1.0, step=0.1,
-        disabled=not is_ours, key="cl_decay",
+        min_value=0.0,
+        value=1.0,
+        step=0.1,
+        disabled=not is_ours,
+        key="cl_decay",
     )
     decay_rate = float(decay_rate_raw) if decay_rate_raw > 0.0 else None
 
@@ -734,7 +749,8 @@ if "prune_graph" in st.session_state:
     ilp_theta_mode = st.selectbox(
         "theta mode",
         ["fixed", "adaptive percentile"],
-        disabled=not is_ilp, key="cl_theta_mode",
+        disabled=not is_ilp,
+        key="cl_theta_mode",
         help="fixed: a constant signed-cosine threshold. adaptive percentile: theta is the "
         "q-th percentile of THIS graph's allowed-pair cosines, so the merge boundary tracks "
         "each graph's similarity scale (a fixed theta is mismatched across graphs).",
@@ -743,26 +759,40 @@ if "prune_graph" in st.session_state:
     if ilp_theta_mode == "adaptive percentile":
         ilp_theta_pct = i_c1.number_input(
             "theta percentile q  (-> 'p<q>')",
-            min_value=0.0, max_value=100.0, value=65.0, step=5.0,
-            disabled=not is_ilp, key="cl_theta_pct",
+            min_value=0.0,
+            max_value=100.0,
+            value=65.0,
+            step=5.0,
+            disabled=not is_ilp,
+            key="cl_theta_pct",
         )
         theta_arg: float | str = f"p{ilp_theta_pct:g}"
     else:
         ilp_theta = i_c1.number_input(
             "theta (signed-cosine resolution)",
-            min_value=-1.0, max_value=1.0, value=0.0, step=0.05,
-            disabled=not is_ilp, key="cl_theta",
+            min_value=-1.0,
+            max_value=1.0,
+            value=0.0,
+            step=0.05,
+            disabled=not is_ilp,
+            key="cl_theta",
         )
         theta_arg = float(ilp_theta)
     ilp_lambda = i_c2.number_input(
         "lambda_causal (>= 0; 0 = pure atomicity)",
-        min_value=0.0, value=0.0, step=0.1,
-        disabled=not is_ilp, key="cl_lambda",
+        min_value=0.0,
+        value=0.0,
+        step=0.1,
+        disabled=not is_ilp,
+        key="cl_lambda",
     )
     ilp_time_limit = i_c3.number_input(
         "ilp time_limit (s)",
-        min_value=1.0, value=30.0, step=5.0,
-        disabled=not is_ilp, key="cl_tl",
+        min_value=1.0,
+        value=30.0,
+        step=5.0,
+        disabled=not is_ilp,
+        key="cl_tl",
     )
 
     is_spectral = method == "ours-spectral"
@@ -793,7 +823,11 @@ if "prune_graph" in st.session_state:
                     ilp_time_limit=float(ilp_time_limit),
                 )
                 rows = clusters_to_supernodes(prune_graph, clusters)
-                sng = SummaryGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
+                sng = SummaryGraph(
+                    supernodes=rows,
+                    pruned_adj=prune_graph.pruned_adj,
+                    metadata=prune_graph.metadata,
+                )
                 supernode_map = {s.name: s.member_node_ids() for s in rows}
                 attr = {n.node_id: asdict(n) for n in prune_graph.nodes}
 
@@ -803,7 +837,9 @@ if "prune_graph" in st.session_state:
             st.session_state["clusters"] = clusters
             st.session_state["cluster_method"] = method
             st.session_state.pop("sng_labeled", None)
-            st.success(f"{method}: {len(rows)} supernodes ({sum(1 for s in rows if s.type == 'features')} middle).")
+            st.success(
+                f"{method}: {len(rows)} supernodes ({sum(1 for s in rows if s.type == 'features')} middle)."
+            )
         except Exception as exc:
             st.error(f"Cluster failed: {exc}")
 
@@ -818,42 +854,52 @@ if "sng" in st.session_state:
     slug = st.session_state.get("graph_slug", "")
 
     ag = st.session_state.get("attr_graph")
-    prompt_tokens = (
-        [str(t) for t in (ag.metadata.get("prompt_tokens") or [])] if ag else None
-    )
+    prompt_tokens = [str(t) for t in (ag.metadata.get("prompt_tokens") or [])] if ag else None
     prompt = str(ag.metadata.get("prompt", "") or "") if ag else None
 
-    # LLM labeling: name each middle supernode from its members' Neuronpedia
-    # clerps/contexts. Reads model_id + source_set from metadata only, so inject
-    # them here (source_set defaults to the prune step's neuronpedia source_set).
+    # LLM labeling: route the model via the registry (summarization/llm_models.json); feature
+    # evidence is fetched from the transcoder dashboards keyed by sng.metadata["scan"].
     st.subheader("Label supernodes (LLM)")
-    l_c1, l_c2 = st.columns(2)
-    label_model = l_c1.text_input("LLM model", value="gemini-2.5-flash", key="lbl_model")
-    label_temp = l_c2.number_input(
+    l_c1, l_c2, l_c3 = st.columns(3)
+    label_model = l_c1.text_input(
+        "registry model name",
+        value="gemini-2.5-flash",
+        key="lbl_model",
+        help="A key in summarization/llm_models.json.",
+    )
+    label_scheme = l_c2.selectbox(
+        "scheme", options=["two_pass", "one_pass"], index=0, key="lbl_scheme"
+    )
+    label_temp = l_c3.number_input(
         "temperature", min_value=0.0, max_value=1.0, value=0.2, step=0.05, key="lbl_temp"
     )
-    l_c3, l_c4 = st.columns(2)
-    label_model_id = l_c3.text_input("neuronpedia model_id", value="gemma-2-2b", key="lbl_model_id")
-    label_source_set = l_c4.text_input(
-        "neuronpedia source_set",
-        value=st.session_state.get("pr_np_source", ""),
-        key="lbl_source_set",
-        help="e.g. clt-hp; needed for Neuronpedia context lookups (else falls back to clerps).",
+    l_c4, l_c5 = st.columns(2)
+    label_edge_top_k = l_c4.number_input(
+        "edge top-k (pass 2)",
+        min_value=0,
+        value=3,
+        step=1,
+        key="lbl_edge_top_k",
+        help="Strongest incoming/outgoing neighbors shown to the LLM in pass 2; 0 skips refinement.",
+    )
+    label_thinking = l_c5.selectbox(
+        "thinking effort",
+        options=["(default)", "low", "medium", "high"],
+        index=0,
+        key="lbl_thinking",
+        help="Reasoning models only; '(default)' uses the registry default.",
     )
     if st.button("Label supernodes with LLM", type="primary"):
         try:
-            from summarization.group_llm import label_summarization_graph
+            from summarization.group_llm import LabelScheme, ModelSettings, label_supernodes
 
-            prune_graph = st.session_state["prune_graph"]
-            metadata = dict(prune_graph.metadata)
-            metadata["model_name"] = label_model_id or metadata.get("model_name", "")
-            metadata["info"] = {
-                **metadata.get("info", {}),
-                "neuronpedia_source_set": label_source_set,
-            }
-            with st.spinner("Labeling supernodes via LLM…"):
-                label_summarization_graph(
-                    sng, metadata, model_name=label_model, temperature=float(label_temp)
+            thinking = None if label_thinking == "(default)" else label_thinking
+            with st.spinner(f"Labeling supernodes via LLM ({label_scheme})…"):
+                label_supernodes(
+                    sng,
+                    label_model,
+                    settings=ModelSettings(temperature=float(label_temp), thinking_effort=thinking),
+                    scheme=LabelScheme(scheme=label_scheme, edge_top_k=int(label_edge_top_k)),
                 )
             st.session_state["sng"] = sng
             st.session_state["supernode_map"] = sng.to_mapping()
@@ -907,7 +953,9 @@ if "sng" in st.session_state and "prune_graph" in st.session_state:
     up_display_name = st.text_input("display_name", value="", key="up_display")
     u_c3, u_c4 = st.columns(2)
     up_prune_thresh = u_c3.slider("pruning_threshold", 0.0, 1.0, 0.8, step=0.01, key="up_prune")
-    up_density_thresh = u_c4.slider("density_threshold", 0.0, 1.0, 0.99, step=0.01, key="up_density")
+    up_density_thresh = u_c4.slider(
+        "density_threshold", 0.0, 1.0, 0.99, step=0.01, key="up_density"
+    )
 
     if st.button("Upload to Neuronpedia", type="primary"):
         if not up_slug:
@@ -916,12 +964,12 @@ if "sng" in st.session_state and "prune_graph" in st.session_state:
             st.error("display_name is required for upload.")
         else:
             labelled = [
-                [f"cluster_{i}", *members]
-                for i, members in enumerate(clusters)
-                if len(members) > 1
+                [f"cluster_{i}", *members] for i, members in enumerate(clusters) if len(members) > 1
             ]
             # log labelled supernodes for debugging; Neuronpedia will re-derive them from the pinnedIds
-            st.write("Labelled supernodes (for debugging; Neuronpedia will re-derive these from the pinnedIds):")
+            st.write(
+                "Labelled supernodes (for debugging; Neuronpedia will re-derive these from the pinnedIds):"
+            )
             st.json(labelled)
             with st.spinner("Uploading…"):
                 status, body = save_subgraph(
@@ -978,8 +1026,12 @@ if "sng" in st.session_state:
                     key=f"st_on_{s.name}",
                 )
                 factor = c_f.number_input(
-                    "factor", value=-1.0, step=0.5, key=f"st_f_{s.name}",
-                    label_visibility="collapsed", disabled=not on,
+                    "factor",
+                    value=-1.0,
+                    step=0.5,
+                    key=f"st_f_{s.name}",
+                    label_visibility="collapsed",
+                    disabled=not on,
                 )
                 if on:
                     steered_factors[s.name] = float(factor)
@@ -992,7 +1044,12 @@ if "sng" in st.session_state:
                 "layers below (l−)", min_value=0, max_value=12, value=0, step=1, key="st_below"
             )
             layers_above = w_hi.number_input(
-                "layers above (l+)", min_value=0, max_value=12, value=1, step=1, key="st_above",
+                "layers above (l+)",
+                min_value=0,
+                max_value=12,
+                value=1,
+                step=1,
+                key="st_above",
                 help="Constrained direct-effect window [l−below, l+above] around a feature's "
                 "layer l; default [l, l+1] (paper Fig. 9: own-layer decode + first cross-layer "
                 "write). One pass per source layer. CLT features decode only into layers ≥ l, "
@@ -1033,8 +1090,11 @@ if "sng" in st.session_state:
                     # layer this is exact; across layers the groups are combined as a sum of
                     # direct effects (first-order in the residual stream).
                     groups = steer_interventions_constrained(
-                        steered, orig_activations, steered_factors,
-                        layers_below=int(layers_below), layers_above=int(layers_above),
+                        steered,
+                        orig_activations,
+                        steered_factors,
+                        layers_below=int(layers_below),
+                        layers_above=int(layers_above),
                     )
                     base_logits, _ = model.feature_intervention(
                         steer_tokens, [], return_activations=False

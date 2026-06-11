@@ -1,0 +1,151 @@
+You are explaining a summary graph of a language model's computation.
+
+You will be given:
+
+- The prompt processed by the model.
+- The token predicted by the model.
+- A graph consisting of multiple supernodes.
+- Metadata for each supernode, including:
+  - layer span
+  - active prompt-token positions
+  - incoming and outgoing edges
+- A set of neurons belonging to each supernode.
+
+Each neuron is described by:
+- <MAX_ACTIVATING_TOKENS>
+- <TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+- <TOP_POSITIVE_LOGITS>
+- <TOP_ACTIVATING_TEXTS>
+
+Your goal is NOT to explain what the neurons do in general.
+
+Your goal is to explain what information each supernode contributes to THIS computation and how information flows through the graph to produce the predicted token.
+
+Always interpret the graph in the context of:
+
+1. The prompt.
+2. The predicted token.
+3. The graph structure.
+4. The layer position of each supernode.
+5. The flow of information between supernodes.
+
+--------------------------------------------------
+ROLE DEFINITIONS
+--------------------------------------------------
+
+Input:
+- Detects information directly present in the prompt.
+- Recognizes entities, words, phrases, syntax, or local patterns.
+- Extracts evidence from the prompt.
+- Usually appears early in the computation.
+
+Abstract:
+- Represents concepts, relations, themes, reasoning steps, or intermediate computations.
+- Combines or transforms information from other supernodes.
+- Usually appears in the middle of the computation.
+
+Output:
+- Supports prediction of the next token.
+- Promotes candidate outputs.
+- Often reflected in top positive logits.
+- Usually appears near the end of the computation.
+
+Trash:
+- No consistent pattern exists.
+- Evidence is contradictory, noisy, or insufficient.
+- Use only when no meaningful interpretation can be supported.
+
+--------------------------------------------------
+GLOBAL ANALYSIS PROCEDURE
+--------------------------------------------------
+
+1. Read the prompt and predicted token carefully.
+
+2. Examine ALL supernodes before labeling any individual supernode.
+
+3. Identify major information sources in the prompt.
+
+4. Identify major concepts required to predict the next token.
+
+5. Analyze graph connectivity:
+   - Which supernodes provide evidence?
+   - Which supernodes combine information?
+   - Which supernodes support the final prediction?
+
+6. For each supernode:
+   - Inspect its neurons.
+   - Inspect its layer span.
+   - Inspect its active token positions.
+   - Inspect its incoming and outgoing edges.
+   - Determine what information it contributes to this computation.
+
+7. Use neighboring supernodes as context:
+   - Incoming edges suggest upstream information sources.
+   - Outgoing edges suggest downstream uses.
+   - Neighbor labels are evidence, not ground truth.
+
+8. Prefer explanations that make the graph coherent as a whole.
+
+--------------------------------------------------
+LABELING GUIDELINES
+--------------------------------------------------
+
+Labels should represent information carried by the supernode.
+
+Good labels:
+- France
+- Capital cities
+- Geographic entities
+- Country-capital relation
+- Numerical comparison
+- Subject-verb agreement
+- Paris prediction support
+
+Bad labels:
+- Neuron that activates on...
+- This cluster seems related to...
+- General semantic feature
+- Same label as a neighboring node
+
+Prefer:
+- Specific concepts over broad themes.
+- Labels that distinguish neighboring supernodes.
+- Information relevant to the prompt.
+- Information flow explanations.
+- Roles in this computation rather than global neuron behavior.
+
+--------------------------------------------------
+CONSISTENCY RULES
+--------------------------------------------------
+
+When multiple supernodes participate in the same reasoning chain:
+
+Input:
+    France
+
+Abstract:
+    Country-capital relation
+
+Output:
+    Paris prediction support
+
+Avoid assigning the same label to all three nodes.
+
+Adjacent supernodes should typically represent different stages of computation unless the evidence strongly suggests otherwise.
+
+--------------------------------------------------
+OUTPUT FORMAT
+--------------------------------------------------
+
+Return JSON only.
+
+{
+  "supernodes": [
+    {
+      "id": "<supernode id>",
+      "role": "Input | Abstract | Output | Trash",
+      "label": "<1-5 word description>",
+      "description": "<one short sentence describing the contribution to the prediction>"
+    }
+  ]
+}

@@ -49,6 +49,7 @@ class Node:
     def set_node_idx(self, node_idx: int) -> None:
         self.node_idx = node_idx
 
+
 def _tensor_value_at(values: Any, idx: int) -> float | None:
     if values is None:
         return None
@@ -129,7 +130,8 @@ class Supernode:
     type: SupernodeType
     layer_min: int
     layer_max: int
-    role: str = ""  # LLM-assigned cluster role ("Input" | "Abstract" | "Output")
+    role: str = ""  # LLM-assigned cluster role ("Input" | "Abstract" | "Output" | "Trash")
+    description: str = ""  # LLM-assigned one-sentence description (two-pass scheme only)
 
     def member_node_ids(self) -> list[str]:
         return [node.node_id for node in self.features]
@@ -138,6 +140,7 @@ class Supernode:
 def _compute_depths(supernodes: list[Supernode]) -> np.ndarray:
     """Median member-layer per supernode. emb → −∞, logit → +∞ (forced sources/sinks)."""
     from summarization.utils import layer_index_from_node
+
     depths = np.empty(len(supernodes), dtype=np.float64)
     for k, sn in enumerate(supernodes):
         if sn.type == "emb":
@@ -153,6 +156,7 @@ def _compute_depths(supernodes: list[Supernode]) -> np.ndarray:
 def _stable_argsort(supernodes: list[Supernode], depths: np.ndarray) -> np.ndarray:
     """Sort by depth; ties → mean layer → min ctx_idx → supernode index."""
     from summarization.utils import layer_index_from_node
+
     keys: list[tuple[float, float, int, int]] = []
     for k, sn in enumerate(supernodes):
         if sn.features:
@@ -175,10 +179,7 @@ def get_adj(supernodes: list[Supernode], pruned_adj: torch.Tensor) -> np.ndarray
     back-edges against an anchor-depth ordering (emb forced source, logit forced
     sink). ``out[t, s]`` is the edge weight source ``s`` → target ``t``.
     """
-    index_lists = [
-        [n.node_idx for n in sn.features if n.node_idx >= 0]
-        for sn in supernodes
-    ]
+    index_lists = [[n.node_idx for n in sn.features if n.node_idx >= 0] for sn in supernodes]
     M = compute_sn_adj(index_lists, pruned_adj)  # block[t, s]; may contain cycles
     n = M.shape[0]
 
@@ -216,6 +217,9 @@ def get_adj(supernodes: list[Supernode], pruned_adj: torch.Tensor) -> np.ndarray
 class SummaryGraph:
     supernodes: list[Supernode]
     pruned_adj: torch.Tensor
+    metadata: dict = field(
+        default_factory=dict
+    )  # provenance: prompt, target token, scan, prompt_tokens
     adj_matrix: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -232,19 +236,37 @@ class SummaryGraph:
         return {n.name: n for n in self.supernodes}
 
     def save(self, path: str) -> None:
-        """Pickle supernodes + pruned_adj to ``path`` (.pt). adj_matrix is re-derived on load."""
-        torch.save({"supernodes": self.supernodes, "pruned_adj": self.pruned_adj}, path)
+        """Pickle supernodes + pruned_adj + metadata to ``path`` (.pt). adj_matrix is re-derived on load."""
+        torch.save(
+            {
+                "supernodes": self.supernodes,
+                "pruned_adj": self.pruned_adj,
+                "metadata": self.metadata,
+            },
+            path,
+        )
 
     @classmethod
     def load(cls, path: str) -> "SummaryGraph":
-        """Inverse of ``save``; ``__post_init__`` rebuilds the post-π adjacency."""
+        """Inverse of ``save``; ``__post_init__`` rebuilds the post-π adjacency.
+
+        Pre-metadata ``.pt`` files load with empty metadata (see ADR 0001).
+        """
         d = torch.load(path, map_location="cpu", weights_only=False)
-        return cls(supernodes=d["supernodes"], pruned_adj=d["pruned_adj"])
+        return cls(
+            supernodes=d["supernodes"],
+            pruned_adj=d["pruned_adj"],
+            metadata=d.get("metadata", {}),
+        )
 
 
-def summarize(supernodes: list[Supernode], pruned_adj: torch.Tensor) -> SummaryGraph:
+def summarize(
+    supernodes: list[Supernode],
+    pruned_adj: torch.Tensor,
+    metadata: dict | None = None,
+) -> SummaryGraph:
     """Stage 3: assemble grouped supernodes into the post-π summary graph."""
-    return SummaryGraph(supernodes=supernodes, pruned_adj=pruned_adj)
+    return SummaryGraph(supernodes=supernodes, pruned_adj=pruned_adj, metadata=metadata or {})
 
 
 def steer_interventions(
