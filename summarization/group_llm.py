@@ -51,8 +51,7 @@ class ModelSettings:
 class LabelScheme:
     """How supernodes are labelled. ``system_prompt_path`` overrides the bundled prompt."""
 
-    scheme: SchemeName = "two_pass"
-    edge_top_k: int = 3  # two-pass: neighbors shown in refinement; 0 skips pass 2
+    scheme: SchemeName = "one_pass"
     top_examples: int = 2  # activation examples per feature
     top_logits: int = 10  # top positive logits per feature
     system_prompt_path: str | None = None
@@ -271,13 +270,13 @@ def _fetch_feature_context(
 def _build_feature_block(
     node: Node,
     info: dict[str, Any] | None,
-    prompt_tokens: list[str] | None,
     model_n_layers: int | None,
 ) -> str:
-    """One feature's tagged description block; appends the prompt-position line when available."""
-    clerp = node.clerp or "unlabeled feature"
-    lines = [f'Label: "{clerp}"']
-    lines.append(f"Layer: {_format_feature_layer(node, model_n_layers)}")
+    """One feature's location plus tagged dashboard evidence."""
+    lines = [
+        f"Layer: {_format_feature_layer(node, model_n_layers)}",
+        f"Position: token index {int(node.ctx_idx)}",
+    ]
 
     next_tokens = [t for t in (info["top_next_tokens"] if info else []) if t]
     sections = [
@@ -292,10 +291,6 @@ def _build_feature_block(
             lines.extend(str(x) for x in items)
             lines.append(f"</{tag}>")
 
-    if prompt_tokens is not None:
-        cidx = int(node.ctx_idx)
-        if 0 <= cidx < len(prompt_tokens):
-            lines.append(f"Fires in this prompt on: «{prompt_tokens[cidx]}»")
     return "\n".join(lines)
 
 
@@ -323,12 +318,6 @@ def _extract_target_token(sng: SummaryGraph) -> str | None:
                 if m:
                     return m.group(1)
     return None
-
-
-def _format_layer_span(supernode: Supernode) -> str:
-    if supernode.layer_min == supernode.layer_max:
-        return f"layer {supernode.layer_min}"
-    return f"layers {supernode.layer_min}-{supernode.layer_max}"
 
 
 def _node_layer_index(node: Node) -> int | None:
@@ -393,22 +382,9 @@ def _format_feature_layer(node: Node, model_n_layers: int | None) -> str:
     return f"{layer} of {model_n_layers} ({stage} reasoning stage)"
 
 
-def _prompt_position_summary(supernode: Supernode, prompt_tokens: list[str]) -> str:
-    positions: list[tuple[int, str]] = []
-    seen: set[int] = set()
-    for node in supernode.features:
-        ctx_idx = int(node.ctx_idx)
-        if ctx_idx in seen or ctx_idx < 0 or ctx_idx >= len(prompt_tokens):
-            continue
-        seen.add(ctx_idx)
-        positions.append((ctx_idx, str(prompt_tokens[ctx_idx])))
-    return ", ".join(f'{idx}: "{tok}"' for idx, tok in positions[:8])
-
-
 def _feature_blocks_for_supernode(
     supernode: Supernode,
     scan: str,
-    prompt_tokens: list[str] | None,
     scheme: LabelScheme,
     model_n_layers: int | None,
 ) -> list[str]:
@@ -419,7 +395,7 @@ def _feature_blocks_for_supernode(
         info = _fetch_feature_context(
             scan, node.node_id, top_examples=scheme.top_examples, top_logits=scheme.top_logits
         )
-        blocks.append(_build_feature_block(node, info, prompt_tokens, model_n_layers))
+        blocks.append(_build_feature_block(node, info, model_n_layers))
     return blocks
 
 
@@ -481,7 +457,6 @@ def _build_graph_user_message(
     """Whole-graph message + the ordered non-emb/logit supernodes that have fetchable features."""
     metadata = sng.metadata
     scan = metadata.get("scan", "")
-    prompt_tokens = metadata.get("prompt_tokens", [])
     model_n_layers = _infer_model_n_layers(sng)
 
     ordered_clusters: list[Supernode] = []
@@ -489,7 +464,7 @@ def _build_graph_user_message(
     for sn in sng.supernodes:
         if sn.type in ("emb", "logit"):
             continue
-        blocks = _feature_blocks_for_supernode(sn, scan, prompt_tokens, scheme, model_n_layers)
+        blocks = _feature_blocks_for_supernode(sn, scan, scheme, model_n_layers)
         if not blocks:
             continue
         cid = len(ordered_clusters)
@@ -519,95 +494,20 @@ def _label_one_pass(
 
 
 # ---------------------------------------------------------------------------
-# Two-pass scheme: local feature evidence, then graph-neighbor refinement
+# Legacy per-supernode scheme: local feature evidence only
 # ---------------------------------------------------------------------------
 
 
 def _build_single_supernode_user_message(
-    supernode: Supernode,
     metadata: dict,
     target_token: str | None,
     feature_blocks: list[str],
-    *,
-    prior_label: tuple[str, str, str] | None = None,
-    edge_context: str | None = None,
 ) -> str:
     """User message matching the single-supernode contract in prompts/label.txt."""
-    prompt_tokens = metadata.get("prompt_tokens", [])
     lines = [_build_prompt_context(metadata, target_token).rstrip()]
-    lines.append("Supernode context:")
-    lines.append(f"- Layer span: {_format_layer_span(supernode)}")
-    if prompt_tokens:
-        positions = _prompt_position_summary(supernode, prompt_tokens)
-        if positions:
-            lines.append(f"- Active prompt-token positions: {positions}")
-    if prior_label is not None:
-        label, role, description = prior_label
-        lines.append("- First-pass interpretation:")
-        lines.append(f'  role: "{role}"')
-        lines.append(f'  label: "{label}"')
-        if description:
-            lines.append(f'  description: "{description}"')
-    if edge_context:
-        lines.append(edge_context)
-
-    lines.append("")
     lines.append("Feature evidence in this supernode:")
     lines.append("\n\n".join(f"[Feature]\n{block}" for block in feature_blocks))
     return "\n".join(line for line in lines if line != "")
-
-
-def _edge_rows(
-    sng: SummaryGraph,
-    sn_idx: int,
-    labels_by_idx: dict[int, tuple[str, str, str]],
-    *,
-    incoming: bool,
-    top_k: int,
-) -> list[str]:
-    edges: list[tuple[int, float]] = []
-    for other_idx in range(len(sng.supernodes)):
-        if other_idx == sn_idx:
-            continue
-        weight = (
-            float(sng.adj_matrix[sn_idx, other_idx])
-            if incoming
-            else float(sng.adj_matrix[other_idx, sn_idx])
-        )
-        if weight != 0.0:
-            edges.append((other_idx, weight))
-    edges.sort(key=lambda item: abs(item[1]), reverse=True)
-
-    rows: list[str] = []
-    for other_idx, weight in edges[:top_k]:
-        label, role, _ = labels_by_idx.get(other_idx, (sng.supernodes[other_idx].name, "", ""))
-        other = sng.supernodes[other_idx]
-        direction = "source" if incoming else "target"
-        rows.append(
-            f'- {direction} {other_idx}: "{label}"'
-            f" ({role or 'unlabeled'}, {_format_layer_span(other)}), edge weight {weight:+.3g}"
-        )
-    return rows
-
-
-def _build_edge_context(
-    sng: SummaryGraph, sn_idx: int, labels_by_idx: dict[int, tuple[str, str, str]], top_k: int
-) -> str:
-    incoming_rows = _edge_rows(sng, sn_idx, labels_by_idx, incoming=True, top_k=top_k)
-    outgoing_rows = _edge_rows(sng, sn_idx, labels_by_idx, incoming=False, top_k=top_k)
-    lines = [
-        "Graph context from first-pass labels:",
-        "- Treat neighboring labels as weak evidence; keep this supernode's label semantic.",
-    ]
-    if incoming_rows:
-        lines.append("- Strongest incoming edges into this supernode:")
-        lines.extend(f"  {row}" for row in incoming_rows)
-    if outgoing_rows:
-        lines.append("- Strongest outgoing edges from this supernode:")
-        lines.extend(f"  {row}" for row in outgoing_rows)
-    if len(lines) == 2:
-        return ""
-    return "\n".join(lines)
 
 
 def _label_two_pass(
@@ -615,7 +515,6 @@ def _label_two_pass(
 ) -> SummaryGraph:
     metadata = sng.metadata
     scan = metadata.get("scan", "")
-    prompt_tokens = metadata.get("prompt_tokens", [])
     model_n_layers = _infer_model_n_layers(sng)
     target_token = _extract_target_token(sng)
     system_prompt = _load_system_prompt(scheme)
@@ -624,17 +523,16 @@ def _label_two_pass(
     for sn_idx, sn in enumerate(sng.supernodes):
         if sn.type in ("emb", "logit"):
             continue
-        blocks = _feature_blocks_for_supernode(sn, scan, prompt_tokens, scheme, model_n_layers)
+        blocks = _feature_blocks_for_supernode(sn, scan, scheme, model_n_layers)
         if blocks:
             feature_blocks_by_idx[sn_idx] = blocks
     if not feature_blocks_by_idx:
         return sng
 
-    # Pass 1: local feature evidence only.
-    labels_by_idx: dict[int, tuple[str, str, str]] = {}
+    # Legacy path: per-supernode feature evidence only.
     for sn_idx, blocks in feature_blocks_by_idx.items():
         user_message = _build_single_supernode_user_message(
-            sng.supernodes[sn_idx], metadata, target_token, blocks
+            metadata, target_token, blocks
         )
         parsed = _parse_single_label_response(
             generate_text(route, settings, system_prompt, user_message)
@@ -645,34 +543,6 @@ def _label_two_pass(
         sng.supernodes[sn_idx].name = label
         sng.supernodes[sn_idx].role = role
         sng.supernodes[sn_idx].description = description
-        labels_by_idx[sn_idx] = parsed
-
-    if scheme.edge_top_k <= 0:
-        return sng
-
-    # Pass 2: refine each label with the strongest labeled graph neighbors.
-    for sn_idx, blocks in feature_blocks_by_idx.items():
-        edge_context = _build_edge_context(sng, sn_idx, labels_by_idx, scheme.edge_top_k)
-        if not edge_context:
-            continue
-        user_message = _build_single_supernode_user_message(
-            sng.supernodes[sn_idx],
-            metadata,
-            target_token,
-            blocks,
-            prior_label=labels_by_idx.get(sn_idx),
-            edge_context=edge_context,
-        )
-        parsed = _parse_single_label_response(
-            generate_text(route, settings, system_prompt, user_message)
-        )
-        if parsed is None:
-            continue
-        label, role, description = parsed
-        sng.supernodes[sn_idx].name = label
-        sng.supernodes[sn_idx].role = role
-        sng.supernodes[sn_idx].description = description
-        labels_by_idx[sn_idx] = parsed
 
     return sng
 
@@ -693,7 +563,7 @@ def label_supernodes(
 
     Routing, credentials, and default settings for *model_name* come from the model registry
     (``llm_models.json``); *settings* overrides those defaults. *scheme* selects one-pass
-    (single whole-graph call) or two-pass (per-supernode + graph-neighbor refinement, default).
+    (single whole-graph call, default) or legacy two-pass (per-supernode feature evidence only).
     Embedding / logit supernodes and clusters with no fetchable features keep their existing
     name / role. Provenance is read from ``sng.metadata`` (prompt, scan, prompt_tokens).
     """

@@ -3,31 +3,25 @@ You are explaining a supernode from a summary of a language model's computation.
 You will be given:
 - The prompt processed by the model.
 - The token predicted by the model.
-- Metadata about the supernode, such as its layer span and active prompt-token positions.
-- Sometimes, graph context from an earlier labeling pass: strongest incoming and outgoing
-  supernode edges with first-pass neighbor labels.
-- A set of neurons belonging to one supernode, described by:
+- A set of features belonging to one supernode, described by:
 
-Each neuron is described by:
+Each feature is described only by:
+- Layer
+- Position
 - <MAX_ACTIVATING_TOKENS>
 - <TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
 - <TOP_POSITIVE_LOGITS>
 - <TOP_ACTIVATING_TEXTS>
 
-Your goal is NOT to explain what the neurons do in general.
+Your goal is NOT to explain what the features do in general.
 
 Your goal is to explain what information this supernode contributes to THIS computation.
 
-Always interpret the neurons in the context of:
+Always interpret the features in the context of:
 1. The prompt.
 2. The predicted token.
-3. The supernode's layer and prompt-token position.
+3. The feature layers and prompt-token positions.
 4. The role the supernode appears to play in producing that prediction.
-
-When graph context is provided, treat neighbor labels as weak evidence. Use incoming edges
-to understand what information flows into this supernode, and outgoing edges to understand
-what downstream computation it supports. Do not simply copy a neighbor's label unless that
-is also supported by this supernode's own neurons.
 
 --------------------------------------------------
 ROLE DEFINITIONS
@@ -62,17 +56,18 @@ ANALYSIS PROCEDURE
 
 1. Read the prompt and predicted token carefully.
 
-2. Examine all neurons together before assigning a label.
+2. Examine all features together before assigning a label.
 
-3. For each neuron:
+3. For each feature:
+   - Inspect Layer and Position.
    - Inspect <MAX_ACTIVATING_TOKENS>.
    - Inspect <TOKENS_AFTER_MAX_ACTIVATING_TOKEN>.
    - Inspect <TOP_POSITIVE_LOGITS>.
    - Inspect <TOP_ACTIVATING_TEXTS>.
 
-4. Determine what information each neuron contributes to the current computation.
+4. Determine what information each feature contributes to the current computation.
 
-5. Identify the common information shared across the neurons.
+5. Identify the common information shared across the features.
 
 6. Infer the role of the entire supernode:
    - Input
@@ -80,7 +75,7 @@ ANALYSIS PROCEDURE
    - Output
    - Trash
 
-7. Use layer and graph context to refine the role if it clarifies whether the supernode is
+7. Use feature layer and position evidence to refine the role if it clarifies whether the supernode is
    extracting prompt evidence, performing an intermediate computation, or supporting the
    predicted token.
 

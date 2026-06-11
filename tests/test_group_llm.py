@@ -6,6 +6,7 @@ from summarization.group_llm import (
     LabelScheme,
     _build_feature_block,
     _build_graph_user_message,
+    _build_single_supernode_user_message,
     _parse_graph_label_response,
     resolve_model,
 )
@@ -101,12 +102,25 @@ def test_feature_block_uses_layer_context_without_node_id() -> None:
         clerp="capital relation",
     )
 
-    block = _build_feature_block(node, None, ["The", " capital"], model_n_layers=26)
+    info = {
+        "top_tokens": ["city"],
+        "top_next_tokens": ["capital"],
+        "top_logits": ["Paris"],
+        "contexts": ["The <<capital>> of France"],
+    }
 
-    assert 'Label: "capital relation"' in block
+    block = _build_feature_block(node, info, model_n_layers=26)
+
     assert "Layer: 12 of 26 (middle reasoning stage)" in block
+    assert "Position: token index 1" in block
+    assert "<MAX_ACTIVATING_TOKENS>" in block
+    assert "<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>" in block
+    assert "<TOP_POSITIVE_LOGITS>" in block
+    assert "<TOP_ACTIVATING_TEXTS>" in block
+    assert "capital relation" not in block
     assert "12_345_6" not in block
     assert "345" not in block
+    assert " capital" not in block
 
 
 def test_graph_user_message_uses_layer_not_feature_ids(monkeypatch) -> None:
@@ -143,7 +157,24 @@ def test_graph_user_message_uses_layer_not_feature_ids(monkeypatch) -> None:
 
     assert ordered == [sng.supernodes[0]]
     assert "Layer: 20 of 26 (late reasoning stage)" in user_message
+    assert "Position: token index 1" in user_message
     assert "[Feature 0]" not in user_message
     assert "[Feature]" in user_message
+    assert "answer token support" not in user_message
     assert "20_777_1" not in user_message
     assert "777" not in user_message
+    assert '1: " capital"' not in user_message
+
+
+def test_single_supernode_message_has_no_supernode_context() -> None:
+    user_message = _build_single_supernode_user_message(
+        {"prompt": "The capital is"},
+        " Paris",
+        ["Layer: 20 of 26 (late reasoning stage)\nPosition: token index 1"],
+    )
+
+    assert "Feature evidence in this supernode:" in user_message
+    assert "Layer span" not in user_message
+    assert "Active prompt-token positions" not in user_message
+    assert "First-pass interpretation" not in user_message
+    assert "Graph context" not in user_message
