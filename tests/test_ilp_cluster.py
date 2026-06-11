@@ -76,19 +76,40 @@ def test_ilp_emb_logit_singletons() -> None:
     assert ["27_0_0"] in clusters
 
 
-def test_ilp_lambda_causal_monotonic() -> None:
-    # Larger lambda_causal penalizes merging directly connected features (Eq. Lcausal),
-    # so it produces the same-or-more middle supernodes than pure atomicity (lambda=0).
+def test_ilp_lambda_causal_is_ignored() -> None:
+    # lambda_causal is a deprecated compatibility argument. ILP now minimizes
+    # L_atom only; causal preservation is controlled by eps_causal.
+    pg = _build_test_graph()
+    low = cluster_graph_ilp(pg, max_layer_span=4, lambda_causal=0.0)
+    high = cluster_graph_ilp(pg, max_layer_span=4, lambda_causal=100.0)
+    assert _cluster_set(low) == _cluster_set(high)
+
+
+def test_ilp_eps_causal_zero_forbids_direct_edge_merges() -> None:
     pg = _build_test_graph()
     nodes_by_id = {n.node_id: n for n in pg.nodes}
 
-    def n_middle(clusters: list[list[str]]) -> int:
-        return sum(1 for c in clusters if not node_is_fixed(nodes_by_id[c[0]]))
+    clusters = cluster_graph_ilp(pg, max_layer_span=4, eps_causal=0.0)
+    middle = [c for c in clusters if not node_is_fixed(nodes_by_id[c[0]])]
 
-    few = n_middle(cluster_graph_ilp(pg, max_layer_span=4, lambda_causal=0.0))
-    many = n_middle(cluster_graph_ilp(pg, max_layer_span=4, lambda_causal=100.0))
-    assert few <= many
-    assert many == 4  # large causal penalty => every connected node is its own supernode
+    assert len(middle) == 4
+    assert all(len(c) == 1 for c in middle)
+
+
+def test_ilp_eps_causal_infeasible_with_tight_k_raises() -> None:
+    pg = _build_test_graph()
+
+    with pytest.raises(ValueError, match="eps_causal"):
+        cluster_graph_ilp(pg, max_layer_span=4, max_sn=3, eps_causal=0.0)
+
+
+def test_ilp_eps_causal_rejects_out_of_range() -> None:
+    pg = _build_test_graph()
+
+    with pytest.raises(ValueError, match="eps_causal"):
+        cluster_graph_ilp(pg, eps_causal=-0.1)
+    with pytest.raises(ValueError, match="eps_causal"):
+        cluster_graph_ilp(pg, eps_causal=1.1)
 
 
 def test_ilp_deterministic() -> None:

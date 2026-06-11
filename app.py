@@ -370,6 +370,7 @@ def _cluster_dispatch(
     n_init: int,
     theta: float | str = 0.0,
     lambda_causal: float = 0.0,
+    eps_causal: float | None = None,
     ilp_time_limit: float = 30.0,
 ) -> list[list[str]]:
     """Dispatch to a clustering method. Baselines use eval/eval_cluster helpers."""
@@ -396,15 +397,15 @@ def _cluster_dispatch(
             decay_rate=decay_rate,
         )
     if method == "ours-ilp":
-        # Exact Stage-2 objective L_atom + lambda_causal * L_causal on signed-cosine
-        # role vectors; target_k is ignored (K endogenous, capped by max_sn).
-        # lambda_causal=0 leaves the objective pure correlation clustering.
+        # Exact Stage-2 epsilon-constraint ILP: min L_atom subject to optional
+        # L_causal <= eps_causal and K <= max_sn. target_k is ignored.
         from summarization.ilp_cluster import cluster_graph_ilp
 
         return cluster_graph_ilp(
             prune_graph,
             theta=theta,
             lambda_causal=lambda_causal,
+            eps_causal=eps_causal,
             max_sn=max_sn,
             max_layer_span=max_layer_span,
             normalize_weights=normalize_weights,
@@ -743,8 +744,8 @@ if "prune_graph" in st.session_state:
 
     if is_ilp:
         st.caption(
-            "ILP: exact min of L_atom + lambda_causal * L_causal on signed-cosine role "
-            "vectors. target_k is ignored; max_sn is the hard complexity budget (0 = no cap)."
+            "ILP: exact min of L_atom on signed-cosine role vectors, with optional "
+            "L_causal <= eps_causal and K <= max_sn hard constraints. target_k is ignored."
         )
     ilp_theta_mode = st.selectbox(
         "theta mode",
@@ -778,13 +779,14 @@ if "prune_graph" in st.session_state:
             key="cl_theta",
         )
         theta_arg = float(ilp_theta)
-    ilp_lambda = i_c2.number_input(
-        "lambda_causal (>= 0; 0 = pure atomicity)",
+    ilp_eps = i_c2.number_input(
+        "eps_causal (0-1)",
         min_value=0.0,
-        value=0.0,
-        step=0.1,
+        max_value=1.0,
+        value=1.0,
+        step=0.05,
         disabled=not is_ilp,
-        key="cl_lambda",
+        key="cl_eps",
     )
     ilp_time_limit = i_c3.number_input(
         "ilp time_limit (s)",
@@ -819,7 +821,7 @@ if "prune_graph" in st.session_state:
                     random_state=int(random_state),
                     n_init=int(n_init),
                     theta=theta_arg,
-                    lambda_causal=float(ilp_lambda),
+                    eps_causal=float(ilp_eps),
                     ilp_time_limit=float(ilp_time_limit),
                 )
                 rows = clusters_to_supernodes(prune_graph, clusters)
@@ -860,29 +862,17 @@ if "sng" in st.session_state:
     # LLM labeling: route the model via the registry (summarization/llm_models.json); feature
     # evidence is fetched from the transcoder dashboards keyed by sng.metadata["scan"].
     st.subheader("Label supernodes (LLM)")
-    l_c1, l_c2, l_c3 = st.columns(3)
+    l_c1, l_c2 = st.columns(2)
     label_model = l_c1.text_input(
         "registry model name",
         value="gemini-2.5-flash",
         key="lbl_model",
         help="A key in summarization/llm_models.json.",
     )
-    label_scheme = l_c2.selectbox(
-        "scheme", options=["two_pass", "one_pass"], index=0, key="lbl_scheme"
-    )
-    label_temp = l_c3.number_input(
+    label_temp = l_c2.number_input(
         "temperature", min_value=0.0, max_value=1.0, value=0.2, step=0.05, key="lbl_temp"
     )
-    l_c4, l_c5 = st.columns(2)
-    label_edge_top_k = l_c4.number_input(
-        "edge top-k (pass 2)",
-        min_value=0,
-        value=3,
-        step=1,
-        key="lbl_edge_top_k",
-        help="Strongest incoming/outgoing neighbors shown to the LLM in pass 2; 0 skips refinement.",
-    )
-    label_thinking = l_c5.selectbox(
+    label_thinking = st.selectbox(
         "thinking effort",
         options=["(default)", "low", "medium", "high"],
         index=0,
@@ -894,12 +884,12 @@ if "sng" in st.session_state:
             from summarization.group_llm import LabelScheme, ModelSettings, label_supernodes
 
             thinking = None if label_thinking == "(default)" else label_thinking
-            with st.spinner(f"Labeling supernodes via LLM ({label_scheme})…"):
+            with st.spinner("Labeling supernodes via LLM (one_pass)…"):
                 label_supernodes(
                     sng,
                     label_model,
                     settings=ModelSettings(temperature=float(label_temp), thinking_effort=thinking),
-                    scheme=LabelScheme(scheme=label_scheme, edge_top_k=int(label_edge_top_k)),
+                    scheme=LabelScheme(scheme="one_pass"),
                 )
             st.session_state["sng"] = sng
             st.session_state["supernode_map"] = sng.to_mapping()

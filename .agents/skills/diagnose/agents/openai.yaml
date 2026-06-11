@@ -1,4 +1,0 @@
-interface:
-  display_name: "Diagnose"
-  short_description: "Root-cause repo bugs and test failures"
-  default_prompt: "Use $diagnose to reproduce and fix this failure."

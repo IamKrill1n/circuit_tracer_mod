@@ -1,13 +1,11 @@
 """Characterization test: documents *why* the Stage-2 ILP collapses into mega-clusters
 when ``max_layer_span`` is loose, and which knob actually controls granularity.
 
-Root cause (summarization/scoring.py:46, summarization/ilp_cluster.py:133):
-the atomicity objective is ``sum_{same cluster} (theta - cos_ij)``. At ``theta=0``
-every pair with ``cos > 0`` carries a negative (merge-rewarding) coefficient and
-nothing penalises cluster *size*, so the optimum merges everything that span allows.
-``lambda_causal`` cannot counteract this for features with no direct edge: its
-coefficient is ``lambda_causal * |W_ij| / W_total``, which is identically 0 when
-``W_ij = 0``. ``theta`` (the resolution threshold) is the real lever.
+Root cause: the ILP objective is ``sum_{same cluster} (theta - cos_ij)``. At
+``theta=0`` every pair with ``cos > 0`` carries a negative (merge-rewarding)
+coefficient and nothing penalises cluster *size*, so the optimum merges everything
+that span and epsilon constraints allow. ``lambda_causal`` is ignored; ``theta``
+(the resolution threshold) and ``eps_causal`` are the real levers.
 """
 import numpy as np
 import pytest
@@ -53,8 +51,8 @@ def test_ilp_collapse_mechanism():
     # theta=0: positive cosines reward merging, nothing penalises size -> full collapse.
     assert _n_feature_clusters(pg, theta=0.0, lam=0.0) == 1
 
-    # lambda_causal is powerless here: |W_ij| = 0 for every pair, so its coefficient
-    # (lambda_causal * |W_ij| / W_total) is 0 no matter how large lambda gets.
+    # lambda_causal is a deprecated compatibility argument and does not enter the
+    # ILP objective.
     assert _n_feature_clusters(pg, theta=0.0, lam=1e9) == 1
 
     # theta is the real lever. Below the 0.5 cosine it still merges; above it, splits.
@@ -74,7 +72,9 @@ def test_adaptive_theta_resolves_to_percentile():
     iu, ju = np.triu_indices(7, k=1)
     thr = float(np.percentile(cos[iu, ju], 65))
 
-    norm = lambda cl: sorted(sorted(c) for c in cl)
+    def norm(clusters: list[list[str]]) -> list[list[str]]:
+        return sorted(sorted(c) for c in clusters)
+
     adaptive = cluster_graph_ilp(pg, theta="p65", lambda_causal=0.0, max_sn=None, max_layer_span=1000)
     fixed = cluster_graph_ilp(pg, theta=thr, lambda_causal=0.0, max_sn=None, max_layer_span=1000)
     assert norm(adaptive) == norm(fixed)

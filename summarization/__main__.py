@@ -62,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         choices=["spectral", "agglomerative", "ilp"],
         default="spectral",
-        help="Clustering method. 'ilp' chooses K endogenously via the --lambda-* weights (no auto-k).",
+        help="Clustering method. 'ilp' chooses K endogenously via the ILP constraints (no auto-k).",
     )
     parser.add_argument("--target-k", type=int, default=7)
     parser.add_argument("--auto-k", action="store_true")
@@ -81,8 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--n-init", type=int, default=20)
 
-    # Stage-2 trade-off weight on the causal loss: L = L_atom + lambda_causal * L_causal.
+    # Stage-2 causal control. ILP always minimizes L_atom; --eps-causal adds
+    # the hard constraint L_causal <= eps_causal. --lambda-causal is retained
+    # for non-ILP scoring and old scripts.
     parser.add_argument("--lambda-causal", type=float, default=1.0)
+    parser.add_argument("--eps-causal", type=float, default=None)
 
     # Outputs.
     parser.add_argument("--supernodes-out", type=str, default="temp_graph_files/supernodes.json")

@@ -41,6 +41,14 @@ def _fixed_singletons(
     return emb, logit
 
 
+def _middle_node_indices(kept_ids: list[str], nodes_by_id: dict[str, Node]) -> list[int]:
+    return [i for i, nid in enumerate(kept_ids) if not node_is_fixed(nodes_by_id[nid])]
+
+
+def _node_ids_at(kept_ids: list[str], indices: list[int]) -> list[str]:
+    return [kept_ids[i] for i in indices]
+
+
 def _classify_node(node_id: str, nodes_by_id: dict[str, Node]) -> str:
     n = nodes_by_id.get(node_id)
     if n is None:
@@ -60,11 +68,6 @@ def _layer_numeric(node_id: str, nodes_by_id: dict[str, Node]) -> int:
 def _cosine_norm(matrix: torch.Tensor) -> torch.Tensor:
     diag = torch.sqrt(torch.diag(matrix).clamp(min=1e-8))
     return matrix / diag.unsqueeze(1) / diag.unsqueeze(0)
-
-
-def _weighted_row_cosine(features: torch.Tensor) -> torch.Tensor:
-    gram = features @ features.T
-    return _cosine_norm(gram)
 
 
 def _prepare_node_weights(
@@ -87,6 +90,7 @@ def _prepare_node_weights(
         else:
             values = torch.ones_like(values)
     return values
+
 
 def compute_phi_vectors(
     prune_graph: PruneGraph,
@@ -155,16 +159,22 @@ def compute_similarity(
 
         layers_t = torch.tensor(layer_indices, dtype=torch.float32, device=s.device)
         layer_diffs = torch.abs(layers_t.unsqueeze(1) - layers_t.unsqueeze(0))
-        
+
         penalty = torch.exp(-decay_rate * layer_diffs)
         if max_layer_span is not None:
             penalty[layer_diffs > max_layer_span] = 0.0
-            
+
         s = s * penalty
 
     s = s.clamp(epsilon, 1.0)
-    
+
     return s
+
+
+def _sort_clusters_by_layer(
+    clusters: list[list[str]], nodes_by_id: dict[str, Node]
+) -> list[list[str]]:
+    return sorted(clusters, key=lambda c: min(_layer_numeric(n, nodes_by_id) for n in c))
 
 
 def _merge_to_budget(
@@ -191,11 +201,16 @@ def _merge_to_budget(
     return clusters
 
 
-def _name_middle_supernodes(
-    clusters: list[list[str]], nodes_by_id: dict[str, Node]
-) -> dict[str, list[str]]:
-    clusters = sorted(clusters, key=lambda c: min(_layer_numeric(n, nodes_by_id) for n in c))
-    return {f"SN_{i}": members for i, members in enumerate(clusters)}
+def _groups_from_labels(node_ids: list[str], labels: np.ndarray) -> list[list[str]]:
+    grouped: dict[int, list[str]] = {}
+    for node_id, label in zip(node_ids, labels):
+        grouped.setdefault(int(label), []).append(node_id)
+    return [grouped[label] for label in sorted(grouped)]
+
+
+def _middle_similarity(sim: torch.Tensor, middle_idx: list[int]) -> np.ndarray:
+    mid_sim = sim[middle_idx][:, middle_idx].detach().cpu().numpy().clip(0.0, 1.0)
+    return ((mid_sim + mid_sim.T) / 2.0).clip(0.0, 1.0)
 
 
 def _supernode_from_member_ids(
@@ -228,13 +243,9 @@ def labels_to_supernodes(
     middle_ids: list[str],
     labels: np.ndarray,
 ) -> list[list[str]]:
-    grouped: dict[int, list[str]] = {}
-    for node_id, label in zip(middle_ids, labels):
-        grouped.setdefault(int(label), []).append(node_id)
-
-    middle_clusters = [grouped[label] for label in sorted(grouped)]
-    emb_singletons = [[n.node_id] for n in prune_graph.nodes if node_is_embedding(n)]
-    logit_singletons = [[n.node_id] for n in prune_graph.nodes if node_is_logit(n)]
+    middle_clusters = _groups_from_labels(middle_ids, labels)
+    nodes_by_id = _nodes_by_id(prune_graph)
+    emb_singletons, logit_singletons = _fixed_singletons(prune_graph.node_ids, nodes_by_id)
     return middle_clusters + emb_singletons + logit_singletons
 
 
@@ -283,8 +294,8 @@ def cluster_graph_spectral(
         max_layer_span=max_layer_span,
     )
 
-    middle_idx = [i for i, nid in enumerate(kept_ids) if not node_is_fixed(nodes_by_id[nid])]
-    middle_ids = [kept_ids[i] for i in middle_idx]
+    middle_idx = _middle_node_indices(kept_ids, nodes_by_id)
+    middle_ids = _node_ids_at(kept_ids, middle_idx)
     logger.info("Extracted %d middle nodes.", len(middle_ids))
 
     if not middle_ids:
@@ -292,8 +303,7 @@ def cluster_graph_spectral(
         fixed_only = [[nid] for nid in kept_ids]
         return fixed_only
 
-    mid_sim = sim[middle_idx][:, middle_idx].detach().cpu().numpy().clip(0.0, 1.0)
-    mid_sim = ((mid_sim + mid_sim.T) / 2.0).clip(0.0, 1.0)
+    mid_sim = _middle_similarity(sim, middle_idx)
     target_k = max(1, min(target_k, len(middle_ids)))
 
     if target_k == 1:
@@ -311,17 +321,11 @@ def cluster_graph_spectral(
         ).fit_predict(mid_sim)
         logger.info("Finished SpectralClustering.")
 
-    grouped: dict[int, list[str]] = {}
-    for nid, lbl in zip(middle_ids, labels):
-        grouped.setdefault(int(lbl), []).append(nid)
-    middle_clusters = list(grouped.values())
-
-    # Keep deterministic naming order for middle SNs, but return member lists only.
-    named_middle = _name_middle_supernodes(middle_clusters, nodes_by_id)
+    middle_clusters = _sort_clusters_by_layer(_groups_from_labels(middle_ids, labels), nodes_by_id)
 
     emb_singletons, logit_singletons = _fixed_singletons(kept_ids, nodes_by_id)
 
-    supernodes = list(named_middle.values()) + emb_singletons + logit_singletons
+    supernodes = middle_clusters + emb_singletons + logit_singletons
     logger.info("Returning %d total supernodes.", len(supernodes))
     return supernodes
 
@@ -385,8 +389,8 @@ def cluster_graph_agglomerative(
         max_layer_span=max_layer_span,
     )
 
-    middle_idx = [i for i, nid in enumerate(kept_ids) if not node_is_fixed(nodes_by_id[nid])]
-    middle_ids = [kept_ids[i] for i in middle_idx]
+    middle_idx = _middle_node_indices(kept_ids, nodes_by_id)
+    middle_ids = _node_ids_at(kept_ids, middle_idx)
 
     if not middle_ids:
         logger.info("No middle nodes, returning mapped fixed nodes as separate clusters.")
@@ -396,9 +400,7 @@ def cluster_graph_agglomerative(
     target_k = max(1, min(target_k, m))
     logger.info("Extracted %d middle nodes.", m)
 
-    # Symmetrized similarity between middle nodes
-    mid_sim = sim[middle_idx][:, middle_idx].detach().cpu().numpy().clip(0.0, 1.0)
-    mid_sim = ((mid_sim + mid_sim.T) / 2.0).clip(0.0, 1.0)
+    mid_sim = _middle_similarity(sim, middle_idx)
 
     # Working cluster-level similarity matrix (weighted average linkage)
     cs = mid_sim.copy()
@@ -482,12 +484,12 @@ def cluster_graph_agglomerative(
         logger.info("Merging up to maximum supernode budget of %d...", max_sn)
         middle_clusters = _merge_to_budget(middle_clusters, nodes_by_id, max_sn=max_sn)
 
-    named_middle = _name_middle_supernodes(middle_clusters, nodes_by_id)
+    middle_clusters = _sort_clusters_by_layer(middle_clusters, nodes_by_id)
     emb_singletons, logit_singletons = _fixed_singletons(kept_ids, nodes_by_id)
 
-    total_supernodes = len(named_middle) + len(emb_singletons) + len(logit_singletons)
+    total_supernodes = len(middle_clusters) + len(emb_singletons) + len(logit_singletons)
     logger.info("Agglomerative clustering done. Returning %d total supernodes.", total_supernodes)
-    return list(named_middle.values()) + emb_singletons + logit_singletons
+    return middle_clusters + emb_singletons + logit_singletons
 
 
 def cluster_graph_with_labels(
@@ -544,7 +546,7 @@ def clusters_to_supernodes(
         else:
             middle.append(sn)
 
-    middle = sorted(middle, key=lambda m: min(_layer_numeric(n, nodes_by_id) for n in m))
+    middle = _sort_clusters_by_layer(middle, nodes_by_id)
     out: list[Supernode] = []
     id_to_idx = {n.node_id: i for i, n in enumerate(prune_graph.nodes)}
     for i, sn in enumerate(middle):
@@ -772,15 +774,16 @@ def cluster(
     n_init: int = 20,
     ilp_time_limit: float = 30.0,
     lambda_causal: float = 1.0,
+    eps_causal: float | None = None,
 ) -> list[Supernode]:
     """Stage 2: cluster a ``PruneGraph`` into typed ``Supernode`` rows.
 
     ``num_clusters="auto"`` picks k by minimizing the closed-form L objective
     (``find_best_k`` for spectral, ``find_best_k_for_clusterer`` for agglomerative);
-    an int clusters at exactly that k. ``method="ilp"`` solves the exact Stage-2
-    objective ``L_atom + lambda_causal * L_causal`` (signed cosine, resolution
-    ``theta=0``) with K capped at ``max_sn``; it ignores ``num_clusters``. For
-    ``theta`` sweeps, call ``cluster_graph_ilp`` directly.
+    an int clusters at exactly that k. ``method="ilp"`` solves ``min L_atom`` with
+    signed cosine resolution ``theta=0`` and optional hard constraints
+    ``L_causal <= eps_causal`` and ``K <= max_sn``; it ignores ``num_clusters``.
+    For ``theta`` sweeps, call ``cluster_graph_ilp`` directly.
     """
     if method == "ilp":
         from summarization.ilp_cluster import cluster_graph_ilp  # local: avoids import cycle
@@ -789,6 +792,7 @@ def cluster(
             prune_graph,
             theta=0.0,
             lambda_causal=lambda_causal,
+            eps_causal=eps_causal,
             max_sn=max_sn,
             max_layer_span=max_layer_span,
             time_limit=ilp_time_limit,
@@ -848,4 +852,3 @@ def cluster(
         raise ValueError(f"Invalid method: {method}")
 
     return clusters_to_supernodes(prune_graph, clusters)
-

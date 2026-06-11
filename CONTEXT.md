@@ -25,11 +25,15 @@ transcoder scan, and the prompt tokens.
 
 ## Labeling scheme
 
-The strategy by which an LLM assigns each supernode its name/role/description:
+The strategy by which an LLM assigns each supernode its name/role/description. The current
+labeling scheme is **one-pass**: a single whole-graph request labels every supernode together
+from feature evidence.
 
-- **One-pass** — a single whole-graph request labels every supernode together.
-- **Two-pass** — a per-supernode request on local feature evidence, followed by a
-  refinement request that injects the strongest neighboring supernode labels.
+## Feature evidence
+
+The local evidence used to interpret a feature within the current computation. Feature
+evidence identifies where the feature appears in the computation and gives activation/logit
+signals, but it is distinct from the supernode's final display label.
 
 ## Model registry
 
