@@ -1,88 +1,131 @@
-% Three-stage summarization pipeline figure (Input -> Prune -> Cluster -> Interpret).
+% Methodology pipeline figure.
 % Requires (loaded in main.tex): tikz + libraries calc, positioning, arrows.meta, shapes.geometric.
 \begin{figure}[t]
 \centering
 \resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
   >=Stealth,
-  emb/.style   ={draw, diamond, aspect=1.2, inner sep=0pt, minimum size=4mm, fill=violet!25},
-  feat/.style  ={circle, draw, inner sep=0pt, minimum size=3mm, fill=white},
-  err/.style   ={regular polygon, regular polygon sides=3, draw, inner sep=0pt,
-                 minimum size=3.6mm, fill=red!18},
-  logit/.style ={draw, rounded corners=1pt, inner sep=1pt, minimum size=4mm,
-                 fill=black!75, text=white, font=\tiny},
-  sn/.style    ={ellipse, draw, thick, inner sep=1pt, minimum width=11mm,
-                 minimum height=6.5mm, fill=orange!18, font=\scriptsize},
-  dot/.style   ={circle, fill=black, inner sep=0pt, minimum size=1.4mm},
-  panel/.style ={draw, rounded corners=3pt, fill=gray!4,
-                 minimum width=31mm, minimum height=37mm},
-  parrow/.style={->, line width=1.1pt, gray!55!black},
-  ecap/.style  ={font=\scriptsize, align=center},
+  emb/.style   ={draw, diamond, aspect=1.2, inner sep=0pt, minimum size=4.7mm,
+                 fill=violet!23, draw=violet!65!black},
+  feat/.style  ={circle, draw=black!85, line width=0.45pt, inner sep=0pt,
+                 minimum size=3.7mm,
+                 fill=white},
+  faint/.style ={circle, draw=black!22, inner sep=0pt, minimum size=3.6mm,
+                 fill=black!4},
+  err/.style   ={regular polygon, regular polygon sides=3, draw=red!55!black,
+                 line width=0.45pt, inner sep=0pt, minimum size=4.4mm,
+                 fill=red!18},
+  logit/.style ={draw, rounded corners=1pt, inner sep=1.8pt, minimum width=9mm,
+                 minimum height=5.3mm, fill=black!82, text=white, font=\tiny},
+  sn/.style    ={ellipse, draw=teal!70!black, line width=0.75pt, inner sep=1.7pt,
+                 minimum width=14mm, minimum height=8.7mm, fill=cyan!15,
+                 font=\scriptsize},
+  labelnode/.style={ellipse, draw=teal!70!black, line width=0.75pt, inner sep=2pt,
+                 minimum width=15mm, minimum height=9.5mm, fill=cyan!15,
+                 font=\scriptsize, align=center},
+  dot/.style   ={circle, fill=black!85, inner sep=0pt, minimum size=1.55mm},
+  pale/.style  ={circle, fill=black!28, inner sep=0pt, minimum size=1.15mm},
+  panel/.style ={draw=black!52, line width=0.5pt, rounded corners=3pt, fill=gray!3,
+                 minimum width=33mm, minimum height=39mm},
+  parrow/.style={->, line width=1.25pt, gray!70!black},
+  kept/.style  ={->, black!88, line width=0.75pt},
+  denseedge/.style={->, gray!58, line width=0.36pt},
+  dropped/.style={->, gray!32, line width=0.28pt, dashed},
+  cycle/.style ={->, orange!90!black, line width=1.05pt},
+  removed/.style={orange!90!black, line width=0.85pt, dashed},
+  ecap/.style  ={font=\scriptsize, align=center, text width=31mm},
   slab/.style  ={font=\small\bfseries, align=center},
+  note/.style  ={font=\tiny, align=center, text=orange!65!black},
 ]
 
-% ---------- Panel A: input attribution graph ----------
+% ---------- Panel A: dense attribution graph ----------
 \begin{scope}[shift={(0,0)}]
   \node[panel] (pA) {};
-  \node[emb]   (eA1) at (-0.85,-1.45) {};
-  \node[emb]   (eA2) at ( 0.00,-1.45) {};
-  \node[emb]   (eA3) at ( 0.85,-1.45) {};
-  \node[err]   (rA1) at (-1.15,-0.25) {};
-  \node[err]   (rA2) at ( 1.15, 0.55) {};
-  \node[feat]  (aA1) at (-0.80,-0.40) {};
-  \node[feat]  (aA2) at (-0.10,-0.40) {};
-  \node[feat]  (aA3) at ( 0.60,-0.40) {};
-  \node[feat]  (bA1) at (-0.55, 0.55) {};
-  \node[feat]  (bA2) at ( 0.25, 0.55) {};
-  \node[logit] (lA)  at ( 0.00, 1.45) {};
-  \foreach \s/\t in {eA1/aA1,eA1/aA2,eA2/aA1,eA2/aA2,eA2/aA3,eA3/aA2,eA3/aA3,
-                     rA1/aA1,rA1/bA1,aA1/bA1,aA2/bA1,aA2/bA2,aA3/bA2,aA1/bA2,
-                     rA2/bA2,rA2/lA,bA1/lA,bA2/lA,aA3/lA}
-     \draw[->, gray!45, line width=0.2pt] (\s)--(\t);
+  \node[emb]   (aEmb1) at (-0.95,-1.45) {};
+  \node[emb]   (aEmb2) at ( 0.00,-1.45) {};
+  \node[emb]   (aEmb3) at ( 0.95,-1.45) {};
+  \node[err]   (aErr1) at (-1.28,-0.08) {};
+  \node[err]   (aErr2) at ( 1.20, 0.70) {};
+  \node[feat]  (a1) at (-0.98,-0.55) {};
+  \node[feat]  (a2) at (-0.35,-0.55) {};
+  \node[feat]  (a3) at ( 0.30,-0.55) {};
+  \node[feat]  (a4) at ( 0.95,-0.55) {};
+  \node[feat]  (a5) at (-0.78, 0.28) {};
+  \node[feat]  (a6) at (-0.13, 0.28) {};
+  \node[feat]  (a7) at ( 0.52, 0.28) {};
+  \node[feat]  (a8) at ( 0.05, 0.92) {};
+  \node[logit] (aLogit) at ( 0.00, 1.52) {Austin};
+
+  \foreach \s/\t in {aEmb1/a1,aEmb1/a2,aEmb1/a5,aEmb2/a1,aEmb2/a2,
+                     aEmb2/a3,aEmb2/a6,aEmb3/a3,aEmb3/a4,aEmb3/a7,
+                     aErr1/a1,aErr1/a5,aErr2/a7,aErr2/aLogit,
+                     a1/a5,a1/a6,a2/a5,a2/a6,a2/a7,a3/a6,a3/a7,
+                     a4/a7,a5/a8,a6/a8,a7/a8,a5/aLogit,a6/aLogit,
+                     a7/aLogit,a8/aLogit}
+     \draw[denseedge] (\s)--(\t);
 \end{scope}
 
-% ---------- Panel B: pruned subgraph ----------
-\begin{scope}[shift={(4.6,0)}]
+% ---------- Panel B: pruned graph ----------
+\begin{scope}[shift={(4.85,0)}]
   \node[panel] (pB) {};
-  \node[emb]   (eB1) at (-0.85,-1.45) {};
-  \node[emb]   (eB2) at ( 0.40,-1.45) {};
-  \node[feat]  (aB1) at (-0.60,-0.40) {};
-  \node[feat]  (aB2) at ( 0.40,-0.40) {};
-  \node[feat]  (bB1) at (-0.10, 0.55) {};
-  \node[logit] (lB)  at ( 0.00, 1.45) {};
-  \foreach \s/\t in {eB1/aB1,eB2/aB2,aB1/bB1,aB2/bB1,bB1/lB,aB2/lB}
-     \draw[->, black!80, line width=0.5pt] (\s)--(\t);
+  \node[emb]   (bEmb1) at (-0.78,-1.45) {};
+  \node[emb]   (bEmb2) at ( 0.58,-1.45) {};
+  \node[faint] (bGone1) at ( 0.00,-0.95) {};
+  \node[faint] (bGone2) at ( 1.02, 0.36) {};
+  \node[err, draw=red!20, fill=red!6] (bErr) at (-1.13,-0.25) {};
+  \node[feat]  (b1) at (-0.60,-0.48) {};
+  \node[feat]  (b2) at ( 0.42,-0.48) {};
+  \node[feat]  (b3) at (-0.05, 0.45) {};
+  \node[logit] (bLogit) at ( 0.00, 1.52) {Austin};
+
+  \foreach \s/\t in {bEmb1/b1,bEmb2/b2,b1/b3,b2/b3,b3/bLogit,b2/bLogit}
+     \draw[kept] (\s)--(\t);
+  \foreach \s/\t in {bErr/b1,bGone1/b3,bGone2/bLogit}
+     \draw[dropped] (\s)--(\t);
 \end{scope}
 
-% ---------- Panel C: supernode partition ----------
-\begin{scope}[shift={(9.2,0)}]
+% ---------- Panel C: clustered graph before cycle resolution ----------
+\begin{scope}[shift={(9.7,0)}]
   \node[panel] (pC) {};
-  \node[emb]   (eC1) at (-0.80,-1.45) {};
-  \node[emb]   (eC2) at ( 0.50,-1.45) {};
-  \node[sn]    (sC1) at (-0.35,-0.30) {};
-  \node[dot]   at (-0.55,-0.30) {}; \node[dot] at (-0.15,-0.30) {};
-  \node[sn]    (sC2) at ( 0.15, 0.60) {};
-  \node[dot]   at (-0.05, 0.60) {}; \node[dot] at ( 0.35, 0.60) {};
-  \node[logit] (lC)  at ( 0.00, 1.45) {};
-  \foreach \s/\t in {eC1/sC1,eC2/sC1,eC2/sC2,sC1/sC2,sC2/lC,sC1/lC}
-     \draw[->, black!80, line width=0.5pt] (\s)--(\t);
+  \node[emb]   (cEmb1) at (-0.82,-1.45) {};
+  \node[emb]   (cEmb2) at ( 0.62,-1.45) {};
+  \node[sn]    (cSN1) at (-0.66,-0.38) {};
+  \node[dot]   at (-0.88,-0.38) {}; \node[dot] at (-0.63,-0.20) {};
+  \node[dot]   at (-0.43,-0.43) {};
+  \node[sn]    (cSN2) at ( 0.66,-0.05) {};
+  \node[dot]   at ( 0.44,-0.05) {}; \node[dot] at ( 0.69, 0.13) {};
+  \node[dot]   at ( 0.89,-0.10) {};
+  \node[sn]    (cSN3) at ( 0.02, 0.92) {};
+  \node[dot]   at (-0.17, 0.92) {}; \node[dot] at ( 0.20, 0.92) {};
+  \node[logit] (cLogit) at ( 0.00, 1.54) {Austin};
+
+  \draw[kept] (cEmb1)--(cSN1);
+  \draw[kept] (cEmb2)--(cSN2);
+  \draw[cycle] (cSN1) to[bend left=15] (cSN2);
+  \draw[cycle] (cSN2) to[bend left=15] (cSN1);
+  \draw[kept] (cSN1)--(cSN3);
+  \draw[kept] (cSN2)--(cSN3);
+  \draw[kept] (cSN3)--(cLogit);
+  \node[note] at (0.05, -0.85) {cycle found};
 \end{scope}
 
-% ---------- Panel D: labeled summary graph ----------
-\begin{scope}[shift={(13.8,0)}]
+% ---------- Panel D: resolved and labeled summary ----------
+\begin{scope}[shift={(14.55,0)}]
   \node[panel] (pD) {};
-  \node[emb,label={[font=\tiny,text=violet!60!black]below:Dallas}]  (eD1) at (-0.70,-1.40) {};
-  \node[emb,label={[font=\tiny,text=violet!60!black]below:capital}] (eD2) at ( 0.70,-1.40) {};
-  \node[sn]    (snTex) at (-0.60,-0.25) {Texas};
-  \node[sn]    (snCap) at ( 0.65,-0.25) {capital};
-  \node[sn]    (snSay) at (-0.05, 0.70) {say Austin};
-  \node[logit, font=\tiny] (lD) at (0.00,1.50) {Austin};
-  \draw[->, black!80, line width=0.5pt] (eD1)--(snTex);
-  \draw[->, black!80, line width=0.5pt] (eD2)--(snCap);
-  \draw[->, black!80, line width=0.5pt] (snTex)--(snSay);
-  \draw[->, black!80, line width=0.5pt] (snCap)--(snSay);
-  \draw[->, black!80, line width=0.5pt] (snSay)--(lD);
-  \draw[->, black!80, line width=0.5pt] (snTex) to[bend left=18] (lD);
+  \node[emb,label={[font=\tiny,text=violet!65!black]below:Dallas}]  (dEmb1) at (-0.82,-1.42) {};
+  \node[emb,label={[font=\tiny,text=violet!65!black]below:capital}] (dEmb2) at ( 0.82,-1.42) {};
+  \node[labelnode] (dState) at (-0.78,-0.35) {Texas\\state};
+  \node[labelnode] (dCapital) at (0.78,-0.35) {capital\\query};
+  \node[labelnode] (dAnswer) at (0.02,0.78) {answer\\selection};
+  \node[logit] (dLogit) at (0.00,1.55) {Austin};
+
+  \draw[kept] (dEmb1)--(dState);
+  \draw[kept] (dEmb2)--(dCapital);
+  \draw[kept] (dState)--(dAnswer);
+  \draw[kept] (dCapital)--(dAnswer);
+  \draw[kept] (dAnswer)--(dLogit);
+  \draw[removed] (dCapital) to[bend left=20] (dState);
+  \node[note] at (0.08, -0.87) {cycle edge removed};
 \end{scope}
 
 % ---------- pipeline arrows ----------
@@ -91,36 +134,31 @@
 \draw[parrow] (pC.east)--(pD.west);
 
 % ---------- column headers ----------
-\node[slab] at ($(pA.north)+(0,0.50)$) {Input};
-\node[slab] at ($(pB.north)+(0,0.50)$) {Stage 1: Prune};
-\node[slab] at ($(pC.north)+(0,0.50)$) {Stage 2: Cluster};
-\node[slab] at ($(pD.north)+(0,0.50)$) {Stage 3: Interpret};
+\node[slab, above=5mm of pA.north] {Dense graph};
+\node[slab, above=5mm of pB.north] {Pruned graph};
+\node[slab, above=5mm of pC.north] {Clustered graph};
+\node[slab, above=5mm of pD.north] {Final summary};
 
 % ---------- per-panel captions ----------
-\node[ecap, below=1.5mm of pA.south] {Attribution graph\\$G=(V,E,W)$\\\scriptsize dense, with error nodes};
-\node[ecap, below=1.5mm of pB.south] {Pruned subgraph\\$(V',E')$\\\scriptsize errors removed};
-\node[ecap, below=1.5mm of pC.south] {Supernodes\\partition $f:V'\!\to\!V_H$};
-\node[ecap, below=1.5mm of pD.south] {Summary graph $H$\\\scriptsize labeled DAG};
+\node[ecap, below=5.5mm of pA.south] {Many feature and error nodes are connected by dense causal pathways.};
+\node[ecap, below=5.5mm of pB.south] {Weak pathways and error nodes are removed, leaving the main route to the output.};
+\node[ecap, below=5.5mm of pC.south] {Related feature nodes are grouped, but aggregated links may introduce cycles.};
+\node[ecap, below=5.5mm of pD.south] {Cycle-causing links are removed and each supernode receives a readable label.};
 
 % ---------- legend ----------
-\begin{scope}[shift={(0,-3.6)}]
-  \node[emb,scale=0.7]  (g1) at (-1.0,0) {}; \node[right=1mm of g1, font=\scriptsize] {embedding};
-  \node[feat]           (g2) at ( 2.3,0) {}; \node[right=1mm of g2, font=\scriptsize] {feature};
-  \node[err,scale=0.8]  (g3) at ( 4.6,0) {}; \node[right=1mm of g3, font=\scriptsize] {error (pruned in Stage 1)};
-  \node[logit]          (g4) at ( 9.0,0) {}; \node[right=1mm of g4, font=\scriptsize] {logit};
-  \node[sn,scale=0.7]   (g5) at (11.6,0) {}; \node[right=1mm of g5, font=\scriptsize] {supernode};
+\begin{scope}[shift={(0,-5.35)}]
+  \node[emb,scale=0.78] (g1) at (-0.65,0) {}; \node[right=1.5mm of g1, font=\scriptsize] {input token};
+  \node[feat]           (g2) at ( 2.70,0) {}; \node[right=1.5mm of g2, font=\scriptsize] {feature};
+  \node[err,scale=0.85] (g3) at ( 4.95,0) {}; \node[right=1.5mm of g3, font=\scriptsize] {error node};
+  \node[logit]          (g4) at ( 7.75,0) {Austin}; \node[right=1.5mm of g4, font=\scriptsize] {output};
+  \node[sn,scale=0.76]  (g5) at (10.55,0) {}; \node[right=1.5mm of g5, font=\scriptsize] {supernode};
+  \draw[removed] (13.35,-0.05)--(14.05,-0.05); \node[font=\scriptsize] at (14.95,-0.05) {removed cycle edge};
 \end{scope}
 
 \end{tikzpicture}}
-\caption[The three-stage summarization pipeline.]{The three-stage
-summarization pipeline. \textbf{Input:} the attribution graph $G$ is a dense
-DAG over embedding ($\diamond$), feature ($\circ$), error ($\triangle$), and
-logit ($\square$) nodes. \textbf{Stage~1 (prune)} discards every error node and
-every node off a strong input-to-logit pathway, leaving the compact subgraph
-$(V',E')$. \textbf{Stage~2 (cluster)} groups the surviving feature nodes into
-supernodes (ellipses); embedding and logit nodes stay singletons.
-\textbf{Stage~3 (interpret)} aggregates the pruned edges, forces the supernode
-graph to be acyclic, and labels each supernode, yielding the readable summary
-graph $H$ --- here the ``Dallas $\to$ Texas $\to$ Austin'' multi-step circuit.}
+\caption[Methodology pipeline.]{Methodology pipeline. The method starts from a
+dense attribution graph, prunes it to the main causal pathways, clusters related
+feature nodes into supernodes, then removes cycle-causing links and assigns
+readable labels so the final summary can be inspected as a causal story.}
 \label{fig:methodology-pipeline}
 \end{figure}

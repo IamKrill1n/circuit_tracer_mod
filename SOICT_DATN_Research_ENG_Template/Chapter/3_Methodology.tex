@@ -27,37 +27,38 @@ Figure~\ref{fig:methodology-pipeline} previews the whole pipeline on the running
 \subsection{Input}
 An attribution graph is a directed acyclic graph $G = (V, E, W)$ whose vertex
 set is partitioned into
-$V = V_{\text{emb}} \cup V_{\text{inter}} \cup V_{\text{error}} \cup V_{\text{logit}}$
-(embedding, intermediate, error, and logit nodes), with signed weights
+$V = V_{\text{emb}} \cup V_{\text{feature}} \cup V_{\text{error}} \cup V_{\text{logit}}$
+(embedding, feature, error, and logit nodes), with signed weights
 $W \in \mathbb{R}^{N \times N}$ on $N := |V|$ nodes, where $W_{ij}$ is the linear
 influence of source node $j$ on target node $i$. Embedding and error nodes are
 sources (no incoming edges), logit nodes are sinks (no outgoing edges), and each
-intermediate node carries signal between them, indexed by a transformer
+feature node carries signal between them, indexed by a transformer
 (layer, position) pair; a node may only have edges to nodes of a higher layer.
 A token weight $\tau \in \mathbb{R}^N$ with $\sum_e \tau_e = 1$ marks the input
 tokens of interest and a logit weight $\ell \in \mathbb{R}^N$ marks the output
-positions of interest; both enter the loss terms below.
+positions of interest.
 
 \subsection{Output}
-A \emph{summary graph} is a directed acyclic graph $H = (V_H,\, E_H,\, W_H,\, f)$,
-where $V_H$ is the set of supernodes, $(E_H,\, W_H)$ are the edges between them
-with signed weights, and $f$ is the partition map from the pruned node set $V'$ to
-$V_H$. The three stages produce its parts in turn.
-\begin{itemize}[leftmargin=*,topsep=2pt,itemsep=1pt]
-\item \textbf{Pruning} produces the pruned subgraph $V' \subseteq V$,
-$E' \subseteq E \cap (V' \times V')$. Pruning removes every error node, so $V'$
-contains only embedding, feature, and logit nodes.
-\item \textbf{Clustering} produces the partition map $f : V' \to V_H$
-assigning each surviving node to a supernode. Its image
-$V_H = \{C_1, C_2, \dots, C_K\}$ is the node set of $H$ --- a partition of $V'$
-into $K := |V_H|$ supernodes. Every embedding and logit node is its own
-singleton supernode; only the feature nodes
-$V'_{\text{mid}} := V' \cap V_{\text{inter}}$ are free to be grouped.
-\item \textbf{Interpreting} produces the edges $E_H$ and their signed
-adjacency $W_H$, forces $H$ to be a DAG, and labels each supernode for display.
-\end{itemize}
-The construction of $W_H$ from the pruned edges is given in
-Section~\ref{sec:stage3}.
+A \emph{summary graph} is a directed acyclic graph $H = (V_H,\, E_H,\, W_H)$.
+The node set $V_H = \{C_1, C_2, \dots, C_K\}$ consists of \emph{supernodes}, each
+of which is a nonempty subset of the non-error nodes,
+\begin{equation}
+V_H \subseteq \mathcal{P}\!\left(V \setminus V_{\text{error}}\right)
+\setminus \{\emptyset\}.
+\label{eq:summary-node-set}
+\end{equation}
+Writing $U_H := \bigcup_{C \in V_H} C$ for the attribution-graph nodes represented
+in the summary, admissible supernodes satisfy
+\begin{equation}
+C_i \cap C_j = \emptyset \quad (i \ne j),
+\qquad
+\forall v \in U_H \cap (V_{\text{emb}} \cup V_{\text{logit}}),\; \{v\} \in V_H.
+\label{eq:supernode-conditions}
+\end{equation}
+Thus $V_H$ forms a partition of the covered subset $U_H \subseteq
+V \setminus V_{\text{error}}$, and any represented embedding or logit node appears
+as a singleton supernode. Only feature nodes may therefore be grouped. The edge set
+$E_H$ and signed weights $W_H$ describe the net causal influence between supernodes.
 
 \subsection{Desiderata of the summary graph}
 A reader inspects $H$ to recover the model's causal story, so the summary should
@@ -181,15 +182,18 @@ The thresholds are chosen to keep $L_{\text{prune}}$ small while shrinking $|V'|
 enough for the later stages to be tractable.
 
 \subsection{Cluster}\label{sec:stage2}
-Clustering groups the surviving feature nodes $V'_{\text{mid}}$ into supernodes that
-each read as one mechanism (D2), while keeping enough edge weight visible across
-supernodes (D3) and the supernode count small (D4). It compares features by a
-\emph{role vector} built from their weighted edge profiles, scores pairs of features
-with a role similarity, and partitions them by minimizing the objective of
-Eq.~\eqref{eq:Lstage2}.
+Clustering groups the surviving feature nodes
+$V'_{\text{feature}} := V' \cap V_{\text{feature}}$ into supernodes that each read
+as one mechanism (D2), while keeping enough edge weight visible across supernodes
+(D3) and the supernode count small (D4). It produces a partition map
+$f : V' \to V_H$ from the pruned node set to the summary-graph node set, with
+embedding and logit nodes fixed as singleton supernodes and feature nodes free to
+be grouped. It compares features by a \emph{role vector} built from their weighted
+edge profiles, scores pairs of features with a role similarity, and partitions them
+by minimizing the objective of Eq.~\eqref{eq:Lstage2}.
 
 \paragraph{Role vectors.}
-The role vector of an intermediate feature stacks its weighted outgoing and
+The role vector of a feature node stacks its weighted outgoing and
 incoming edge profiles, each coordinate scaled by the importance of the
 corresponding endpoint:
 \begin{align}
@@ -215,10 +219,10 @@ vector and three nonnegative combinations of two directional kernels.
 
 The first variant is the \emph{signed cosine} of the full role vector, collected into
 the symmetric matrix
-$S \in \mathbb{R}^{|V'_{\text{mid}}| \times |V'_{\text{mid}}|}$,
+$S \in \mathbb{R}^{|V'_{\text{feature}}| \times |V'_{\text{feature}}|}$,
 \begin{equation}
 S^{\cos}_{ij} \;=\; \cos\bigl(r(i), r(j)\bigr) \;\in\; [-1, 1],
-\qquad i, j \in V'_{\text{mid}}.
+\qquad i, j \in V'_{\text{feature}}.
 \label{eq:sim}
 \end{equation}
 It is signed: antagonistic features --- same targets, opposite sign --- have
@@ -276,7 +280,7 @@ Eq.~\eqref{eq:sim},
 \begin{equation}
 L_{\text{atom}}(f)
 \;=\;
-\sum_{\{i, j\} \subseteq V'_{\text{mid}}} x_{ij}\,(\theta - s_{ij}).
+\sum_{\{i, j\} \subseteq V'_{\text{feature}}} x_{ij}\,(\theta - s_{ij}).
 \label{eq:Latom}
 \end{equation}
 A similar pair ($s_{ij} > \theta$) contributes a negative term, so merging it is
@@ -401,13 +405,13 @@ $H$ or any quantity above.
 
 \section{Chapter Summary}
 This chapter formalized the summarization task and presented the three-stage method
-that solves it. The summary graph $H$ was defined as a labeled DAG of supernodes
-together with the partition map from the pruned attribution graph, and the four
-desiderata --- importance retention, atomicity, causal-information preservation, and
-interpretability --- became three computable proxies for the summary's faithfulness
-and interpretability (the pruning loss $L_{\text{prune}}$, the atomicity loss
-$L_{\text{atom}}$, and the causal-preservation loss $L_{\text{causal}}$) together
-with the acyclicity and budget constraints that every admissible $H$ must satisfy. Pruning meets D1 by importance-thresholded
+that solves it. The summary graph $H$ was defined as a DAG of supernodes with
+signed net causal weights between them, and the four desiderata --- importance
+retention, atomicity, causal-information preservation, and interpretability ---
+became three computable proxies for the summary's faithfulness and interpretability
+(the pruning loss $L_{\text{prune}}$, the atomicity loss $L_{\text{atom}}$, and the
+causal-preservation loss $L_{\text{causal}}$) together with the acyclicity and
+budget constraints that every admissible $H$ must satisfy. Pruning meets D1 by importance-thresholded
 selection, which also explains why every error node is removed. Clustering meets D2 and
 trades it against D3 through the weighted objective $L_{\text{atom}} + \lambda
 L_{\text{causal}}$, comparing features by a role similarity for which four variants were
