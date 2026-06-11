@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 import plotly.graph_objects as go
 
-from summarization.utils import layer_index_from_node_id
+from summarization.utils import layer_index_from_node, layer_index_from_node_id
 from summarization.summarize import SummaryGraph, Supernode
 
 # Beige card fill (paper palette) with a thin kind-colored border accent.
@@ -84,7 +84,14 @@ def _layer_and_ctx_for_supernode(
     sn: str,
     members: list[str],
     attr: dict[str, dict[str, Any]] | None,
+    node_by_name: dict[str, Supernode] | None = None,
 ) -> tuple[int, float]:
+    row = (node_by_name or {}).get(sn)
+    if row is not None and row.features:
+        layers = [layer_index_from_node(node) for node in row.features]
+        ctx_idx = [node.ctx_idx for node in row.features]
+        return (min(layers) if layers else 0, float(np.mean(ctx_idx) if ctx_idx else 0.0))
+
     items = members if members else [sn]
     layers = [
         layer_index_from_node_id(
@@ -186,12 +193,28 @@ def _supernode_layout(
     sn_names: list[str],
     mapping: dict[str, list[str]],
     attr: dict[str, dict[str, Any]] | None,
+    node_by_name: dict[str, Supernode],
+    right_x: float | None = None,
 ) -> tuple[dict[str, tuple[float, float]], int]:
     """x = token position (ctx mean); y = layer rank (row 0 reserved for token bar)."""
     rows: dict[int, list[tuple[str, float]]] = {}
+    non_logit_ctx: list[float] = []
     for sn in sn_names:
-        layer, ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr)
+        layer, ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
+        if _sn_kind(sn, node_by_name) == "logit":
+            continue
+        non_logit_ctx.append(ctx_mean)
         rows.setdefault(layer, []).append((sn, ctx_mean))
+
+    logit_x = right_x
+    if logit_x is None:
+        logit_x = (max(non_logit_ctx) + 1.5) if non_logit_ctx else 0.0
+    for sn in sn_names:
+        if _sn_kind(sn, node_by_name) != "logit":
+            continue
+        layer, _ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
+        rows.setdefault(layer, []).append((sn, float(logit_x)))
+
     ordered_layers = sorted(rows)
     layer_y = {layer: idx + 1 for idx, layer in enumerate(ordered_layers)}
 
@@ -208,6 +231,25 @@ def _supernode_layout(
             pos[sn] = (x, float(layer_y[layer]))
     top_y = len(ordered_layers) + 1
     return pos, top_y
+
+
+def _rect_boundary_point(
+    cx: float,
+    cy: float,
+    w: float,
+    h: float,
+    toward_x: float,
+    toward_y: float,
+) -> tuple[float, float]:
+    """Point where the center-to-target ray leaves a card rectangle."""
+    dx = toward_x - cx
+    dy = toward_y - cy
+    if dx == 0.0 and dy == 0.0:
+        return cx, cy + h / 2
+    sx = (w / 2) / abs(dx) if dx != 0.0 else math.inf
+    sy = (h / 2) / abs(dy) if dy != 0.0 else math.inf
+    scale = min(sx, sy)
+    return cx + dx * scale, cy + dy * scale
 
 
 def _token_bar(
@@ -347,7 +389,8 @@ def supernode_graph_figure(
         hidden = set(ranked[max(top_k_logits, 0):])
 
     layout_names = [sn for sn in sn_names if sn not in hidden]
-    pos, top_y = _supernode_layout(layout_names, mapping, attr)
+    output_x = float(len(prompt_tokens)) if prompt_tokens else None
+    pos, top_y = _supernode_layout(layout_names, mapping, attr, node_by_name, right_x=output_x)
     k = len(sn_names)
 
     # Per-card geometry, colors, kinds.
@@ -374,6 +417,8 @@ def supernode_graph_figure(
 
     # --- Curved edges (drawn first so cards sit on top) ---
     max_abs_w = float(np.max(np.abs(sn_adj))) if sn_adj.size else 1.0
+    edge_xs: list[float] = []
+    edge_ys: list[float] = []
     for i in range(k):
         for j in range(k):
             if i == j:
@@ -385,27 +430,35 @@ def supernode_graph_figure(
             if u not in geom or v not in geom:
                 continue
             uc, vc = geom[u], geom[v]
-            xs, ys = uc[0], uc[1] + uc[3] / 2  # source top-center
-            xt, yt = vc[0], vc[1] - vc[3] / 2  # target bottom-center
+            xs, ys = _rect_boundary_point(uc[0], uc[1], uc[2], uc[3], vc[0], vc[1])
+            xt, yt = _rect_boundary_point(vc[0], vc[1], vc[2], vc[3], uc[0], uc[1])
             dx, dy = xt - xs, yt - ys
             length = math.hypot(dx, dy) or 1.0
             px, py = -dy / length, dx / length  # perpendicular
             bow = 0.18 * length
             cxm, cym = (xs + xt) / 2 + px * bow, (ys + yt) / 2 + py * bow
             width, color = _edge_style(w, max_abs_w)
+            edge_xs.extend((xs, cxm, xt))
+            edge_ys.extend((ys, cym, yt))
+            fig.add_shape(
+                type="path",
+                path=f"M {xs},{ys} Q {cxm},{cym} {xt},{yt}",
+                line=dict(width=width, color=color),
+            )
             fig.add_trace(
                 go.Scatter(
                     x=[xs, cxm, xt],
                     y=[ys, cym, yt],
-                    mode="lines",
-                    line=dict(width=width, color=color, shape="spline"),
+                    mode="markers",
+                    marker=dict(size=16, color="rgba(0,0,0,0)"),
                     hovertemplate=f"{u} -> {v}<br>weight={w:.4f}<extra></extra>",
                     showlegend=False,
                 )
             )
             # Arrowhead at the target end, tangent to the incoming curve.
-            ax = xt + (cxm - xt) * 0.18
-            ay = yt + (cym - yt) * 0.18
+            tangent_len = math.hypot(xt - cxm, yt - cym) or 1.0
+            ax = xt - (xt - cxm) / tangent_len * min(0.28, 0.18 * length)
+            ay = yt - (yt - cym) / tangent_len * min(0.28, 0.18 * length)
             fig.add_annotation(
                 x=xt,
                 y=yt,
@@ -515,13 +568,17 @@ def supernode_graph_figure(
 
     # --- Layout / ranges ---
     n_tokens = len(prompt_tokens) if prompt_tokens else 0
-    max_card_x = max((g[0] for g in geom.values()), default=0.0)
-    x_max = max(float(n_tokens), max_card_x) + 1.5
+    xs_for_range = [g[0] for g in geom.values()] + edge_xs + [0.0, float(n_tokens)]
+    ys_for_range = [g[1] for g in geom.values()] + edge_ys + [0.0, float(top_y)]
+    x_min = min(xs_for_range) - 1.5
+    x_max = max(xs_for_range) + 1.5
+    y_min = min(ys_for_range) - 0.7
+    y_max = max(ys_for_range) + 0.7
     fig.update_layout(
         title=title,
         showlegend=False,
-        xaxis=dict(visible=False, range=[-1.5, x_max]),
-        yaxis=dict(visible=False, range=[-0.7, top_y + 0.7]),
+        xaxis=dict(visible=False, range=[x_min, x_max]),
+        yaxis=dict(visible=False, range=[y_min, y_max]),
         margin=dict(l=120, r=30, t=50, b=20),
         plot_bgcolor="white",
         paper_bgcolor="white",
