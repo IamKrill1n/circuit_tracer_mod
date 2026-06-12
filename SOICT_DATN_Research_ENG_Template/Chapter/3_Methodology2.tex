@@ -3,21 +3,18 @@
 
 \section{Overview}
 
-Chapter 2 established the background of the circuit tracing method, 
-how the attribution graph is constructed and how it can be used to study the model's internal computation.
-Chapter 3 presents the proposed summarization method for
+Chapter 2 established the foundation of the circuit tracing backbone that construct the attribution graphs, and the difficulty of interpreting them. Chapter 3 presents the proposed automated summarization method for
 turning such an attribution graph into a smaller \emph{summary graph} whose nodes
 represent groups of related features and whose edges preserve the main causal
-flow. The method has three stages. \textbf{Pruning} removes attribution-graph
-nodes and edges that carry little input-to-output influence. \textbf{Clustering}
-groups the remaining feature nodes by signed role similarity, while keeping
-embedding and logit nodes fixed as singletons. \textbf{Interpreting} aggregates
-the clustered graph into a directed acyclic summary graph and assigns display
+flow. The method has three stages. \textbf{Pruning} removes unimportant attribution-graph
+nodes and edges. \textbf{Clustering}
+groups functionally similar features into supernodes, further reduce the complexity while preserving causal information. \textbf{Interpreting} aggregates
+the clustered graph into a directed acyclic summary graph and assigns
 labels to its supernodes. Section~\ref{sec:problem} formalizes the input, output,
-desiderata, and constraints of the summarization problem. Section~\ref{sec:method}
+and the desiderata of the summary. Section~\ref{sec:method}
 then defines the three stages of the method in sequence.
 Figure~\ref{fig:methodology-pipeline} gives an overview of the pipeline on the
-running ``Dallas $\to$ Austin'' example.
+``Dallas $\to$ Austin'' example.
 
 \input{Figure/fig_methodology_pipeline}
 
@@ -26,37 +23,31 @@ running ``Dallas $\to$ Austin'' example.
 
 \subsection{Input}
 
-The input is an attribution graph describing the steps a model used to produce an
-output for a target token on a particular prompt. We write this graph as
-$G = (V, E, W)$, where $V$ is the node set, $E$ is the directed edge set, and
-$W \in \mathbb{R}^{N \times N}$ with $N := |V|$ is the signed weighted adjacency
-matrix. The graph contains four types of nodes:
+The attribution graph is a Directed Acyclic Graph (DAG) $G = (V, E, W)$ for one prompt and one model
+prediction. Its node set is partitioned as
 \[
 V = V_{\text{emb}} \cup V_{\text{feature}} \cup V_{\text{error}} \cup
-V_{\text{logit}}.
+V_{\text{logit}},
 \]
-Embedding nodes $V_{\text{emb}}$ represent input-token sources, feature nodes
-$V_{\text{feature}}$ represent transcoder features, error nodes
-$V_{\text{error}}$ represent reconstruction residuals, and logit nodes
-$V_{\text{logit}}$ represent output predictions.
+where embedding nodes represent input-token sources, feature nodes represent
+transcoder features, error nodes represent reconstruction residuals, and logit
+nodes represent output targets. The weighted adjacency matrix
+$W \in \mathbb{R}^{N \times N}$, with $N := |V|$, follows the convention
+that $W_{ij}$ is the signed linear influence from source node $i$ to target
+node $j$. Embedding and error
+nodes are sources with no incoming edges, logit nodes are sinks with no outgoing
+edges, and feature nodes carry signal between them.
 
-The edges in the graph represent linear effects between nodes. Under the matrix
-convention used throughout this thesis, $W_{ij}$ is the signed effect from source
-node $j$ to target node $i$, so columns are sources and rows are targets. The
-magnitude $|W_{ij}|$ represents the strength of the influence, and the sign of
-$W_{ij}$ represents whether the influence is positive or negative. For each
-feature node, its activity is the sum of the signed contributions from its
-incoming edges. Because these edges follow the forward computation of the model,
-$G$ is a directed acyclic graph.
+The input also include extra information of feature nodes such as: max activating contexts, top logits, activation frequency.
 
-The input also contains two external weighting vectors that identify which parts
-of the attribution graph should be emphasized. The token weight vector
-$\tau \in \mathbb{R}^N$ identifies the input tokens of interest by assigning
-nonzero weight to their embedding nodes. The logit weight vector
-$\ell \in \mathbb{R}^N$ identifies the output predictions of interest by
-assigning nonzero weight to their logit nodes. These vectors are not additional
-model-computation nodes or edges; they are scoring inputs used by the pruning
-stage.
+The token weight vector $\tau \in \mathbb{R}^N$ marks
+the input tokens of interest and satisfies $\sum_e \tau_e = 1$ over the selected
+embedding nodes. The logit weight vector $\ell \in \mathbb{R}^N$ marks the output
+positions or target logits of interest. The vector $\tau$ is initialized using
+normalized SHAP values. For a multi-target summary, $\ell$ is initialized using
+logit probabilities; for a single-target summary, it assigns weight 1 to the
+target logit and weight 0 to all other nodes. This thesis mainly studies the
+single-target case.
 
 \subsection{Output}
 
@@ -84,13 +75,13 @@ between supernodes.
 
 \subsection{Desiderata of the summary graph}
 
-A useful summary graph must be small enough to inspect while still representing
+A useful summary graph scores high in both interpretability and faithfulness, that is it must be small enough to inspect while still representing
 the causal computation of the original attribution graph. Four desiderata make
 this requirement explicit.
 \begin{description}[leftmargin=2.0em,style=nextline,topsep=2pt,itemsep=3pt]
 \item[(D1) Importance retention.] The summary should retain the nodes and edges
-that lie on high-mass pathways between the seed embedding nodes and seed logit
-nodes, and discard nodes and edges that do not contribute to those pathways.
+that lie on high-mass pathways from the selected input tokens to the selected
+logits, and discard nodes and edges that do not contribute to those pathways.
 \item[(D2) Atomicity.] Each supernode should represent one causal role. Its
 member features should have similar signed downstream targets and similar signed
 upstream sources, so the reader can interpret the supernode as a single
@@ -104,82 +95,43 @@ with few enough supernodes for manual inspection. Acyclicity is required because
 the summary is intended to show a forward causal story.
 \end{description}
 
-\subsection{Constraints}
-\label{sec:constraints}
-
-Two hard constraints implement the structural part of interpretability. First,
-$H$ must be acyclic:
-\begin{equation}
-H \text{ is a directed acyclic graph.}
-\label{eq:acyclicity}
-\end{equation}
-Second, the number of supernodes must not exceed a complexity budget:
-\begin{equation}
-K = |V_H| \le K_{\max}.
-\label{eq:budget}
-\end{equation}
-The method does not treat these constraints as soft losses. The clustering stage
-enforces the budget, and the interpreting stage enforces acyclicity.
-
 \section{Method}
 \label{sec:method}
-
-The method builds the summary graph in three sequential stages. Pruning first
-chooses a retained attribution subgraph $(V', E')$ by applying retained-mass
-thresholds to node and edge importance scores. Clustering then maps the retained
-nodes to supernodes through a partition $f : V' \to V_H$ that optimizes atomicity
-and causal-information preservation under the budget $K_{\max}$. Interpreting
-finally converts that partition into a directed acyclic summary graph by
-aggregating edge weights and removing cycles introduced by aggregation.
-
-The method uses computable proxies because faithfulness and interpretability
-cannot be measured directly while the graph is being constructed. Faithfulness is
-ultimately tested by interventions on the replacement model, and interpretability
-is ultimately judged by whether a reader can understand the final graph. Chapter 5
-therefore evaluates these properties empirically. During construction, pruning
-uses retained-mass thresholds on node and edge importance scores as a proxy for
-importance retention. Clustering uses the atomicity loss $L_{\text{atom}}$ as a
-proxy for coherent supernodes, and also uses the causal-preservation loss
-$L_{\text{causal}}$ to discourage hiding strong causal edges inside supernodes.
-
 \subsection{Pruning}
 \label{sec:stage1}
 
 Pruning reduces the attribution graph before clustering. This stage targets D1:
-it keeps nodes and edges that lie on high-scoring paths between the seed
-embedding nodes and seed logit nodes, and removes the rest so that later stages
-operate on a tractable subgraph. The pruning rule first scores nodes by influence
-and relevance, then scores edges on the node-pruned graph, and finally applies
-retained-mass thresholds to both score sets.
+it keeps nodes and edges that participate in the selected input-to-output
+computation, and removes the rest so that later stages operate on a tractable
+subgraph. The pruning rule is based on two path-reachability scores, influence and
+relevance, followed by a retained-mass selection rule.
 
-\paragraph{Node influence and node relevance.}
-Node influence measures how strongly a node can reach the seeded logits, while
-node relevance measures how strongly a node is reached from the seeded input
-tokens. Let
+\paragraph{Influence and relevance.}
+Influence measures how strongly a node can reach the selected logits, while
+relevance measures how strongly a node is reached from the selected input tokens.
+Let
 \[
-W^{-}_{ij} = \frac{|W_{ij}|}{\sum_k |W_{ik}|},
+W^{\text{in}}_{ij} = \frac{|W_{ij}|}{\sum_k |W_{kj}|},
 \qquad
-W^{+}_{ji} = \frac{|W_{ij}|}{\sum_k |W_{kj}|}
+W^{\text{out}}_{ij} = \frac{|W_{ij}|}{\sum_k |W_{ik}|}
 \]
-be the backward and forward normalized absolute adjacencies, respectively.
-Because $W_{ij}$ is the edge from source $j$ to target $i$, $W^{-}$ distributes a
-target node's mass over its sources, while $W^{+}$ distributes a source node's
-mass over its targets. The per-node influence and relevance vectors are
+be the column-normalized and row-normalized absolute adjacency matrices. The
+per-node influence and relevance vectors are
 \begin{align}
-\mathrm{Inf} &= \ell^\top \bigl(I - W^{-}\bigr)^{-1}
-= \ell^\top \sum_{k \ge 0} (W^{-})^k
+\mathrm{Inf} &= \ell^\top \bigl(I - (W^{\text{in}})^\top\bigr)^{-1}
+= \ell^\top \sum_{k \ge 0} \bigl((W^{\text{in}})^\top\bigr)^k
 \;\in\; \mathbb{R}^N, \label{eq:inf}\\
-\mathrm{Rel} &= \tau^\top \bigl(I - W^{+}\bigr)^{-1}
-= \tau^\top \sum_{k \ge 0} (W^{+})^k
+\mathrm{Rel} &= \tau^\top \bigl(I - W^{\text{out}}\bigr)^{-1}
+= \tau^\top \sum_{k \ge 0} (W^{\text{out}})^k
 \;\in\; \mathbb{R}^N. \label{eq:rel}
 \end{align}
 Because $G$ is a DAG, both normalized adjacency matrices are nilpotent after a
 topological ordering of the nodes. The Neumann series therefore terminates after
 finitely many terms, so the inverse expressions are well-defined.
 
-\paragraph{Node importance.}
+\paragraph{Importance score.}
 A node is important only when both scores are high: it must be connected to the
-seed input context and also influence the seed output. After normalizing
+selected input context and also influence the selected output. After normalizing
 influence and relevance to $[0,1]$ across nodes, the node importance score is
 \begin{equation}
 \mathrm{Imp}_v =
@@ -188,71 +140,50 @@ influence and relevance to $[0,1]$ across nodes, the node importance score is
 \qquad \alpha \in [0,1],
 \label{eq:importance}
 \end{equation}
-where $\widehat{\,\cdot\,}$ denotes the normalized score. The geometric mean is
-used because it assigns zero importance whenever either factor is zero. This
-property removes reconstruction-error nodes without a separate rule: an error node
-is a source with no path from the seed embedding nodes, so its relevance is zero
-and its combined importance is zero.
+where $\widehat{\,\cdot\,}$ denotes the rank normalized score. The geometric mean is
+used because it agressively punish nodes with small influence score or relevance score. Edges are scored by applying the same
+influence--relevance principle to their source and target endpoints.
 
-\paragraph{Node threshold.}
-The node threshold $\eta_V \in [0,1]$ is a retained-mass threshold, not a raw
-score cutoff. The implementation sorts node importance scores in descending
-order, computes their cumulative fraction of total score mass, and finds the
-score value at which the cumulative fraction first reaches $\eta_V$. It keeps
-every node whose importance is at least that value. Embedding and logit nodes are
-then retained unconditionally when endpoint preservation is enabled, because they
-define the seed boundary of the summarization problem.
-
-\paragraph{Edge influence and edge relevance.}
-Edges are scored after node pruning, using the node-pruned adjacency
-$\widetilde{W}$. Let $\widetilde{W}^{-}$ and $\widetilde{W}^{+}$ be the backward
-and forward normalized absolute adjacencies computed from $\widetilde{W}$, and
-let $\widetilde{\mathrm{Inf}}$ and $\widetilde{\mathrm{Rel}}$ be the corresponding
-node influence and relevance scores on the node-pruned graph. For an edge from
-source $j$ to target $i$, the edge influence and edge relevance are
+\paragraph{Threshold selection}
+The pruning stage keeps the highest-importance nodes whose cumulative importance
+mass reaches a retained-mass fraction $\eta_V \in [0,1]$, and keeps edges by the
+analogous retained-mass fraction $\eta_E$. Equivalently, if $V'$ and $E'$ are the
+retained nodes and edges, they are chosen so that
 \begin{align}
-\mathrm{EInf}_{ij} &= \widetilde{W}^{-}_{ij}\,
-\widetilde{\mathrm{Inf}}_i, \label{eq:einf}\\
-\mathrm{ERel}_{ij} &= \widetilde{W}^{+}_{ji}\,
-\widetilde{\mathrm{Rel}}_j. \label{eq:erel}
+\frac{\sum_{v \in V'} \mathrm{Imp}_v}
+     {\sum_{v \in V} \mathrm{Imp}_v}
+&\ge \eta_V, \label{eq:node-retained-mass}\\
+\frac{\sum_{(u,v) \in E'} \mathrm{Imp}_{uv}}
+     {\sum_{(u,v) \in E} \mathrm{Imp}_{uv}}
+&\ge \eta_E. \label{eq:edge-retained-mass}
 \end{align}
-Edge influence assigns credit to an incoming edge according to the influence of
-its target and the edge's normalized share of that target's incoming mass. Edge
-relevance assigns credit according to the relevance of its source and the edge's
-normalized share of that source's outgoing mass. The two quantities are flattened
-over all matrix entries, normalized in one shared edge index space, and combined
-with the same weighted geometric mean used for node importance.
+The implementation obtains these sets by sorting nodes and edges by importance in
+descending order and keeping the smallest prefix whose cumulative importance mass
+reaches the corresponding fraction. Larger values of $\eta_V$ and $\eta_E$ retain
+more of the original graph before clustering.
 
-\paragraph{Edge threshold and dangling-node removal.}
-The edge threshold $\eta_E \in [0,1]$ has the same retained-mass meaning as the
-node threshold. The implementation sorts the combined edge scores, finds the
-score value where cumulative edge-score mass first reaches $\eta_E$, and keeps
-all edges whose score is at least that value. Because edge pruning can disconnect
-nodes that survived node pruning, the method then removes dangling nodes in a
-fixed-point sweep. Embedding and error nodes must keep at least one outgoing
-edge, logit nodes must keep at least one incoming edge, and feature nodes must
-keep both an incoming and an outgoing edge. The sweep repeats until the node mask
-is stable, yielding the pruned subgraph $(V',E')$.
+\paragraph{Filter dead features and too frequent features}
+A feature's activation frequency is the fraction of tokens in a dataset for which
+the feature has positive activation. Dead features have activation frequency near
+0, while some features activate too frequently. We discard features with
+activation frequency below 0.002\% or above 10\%.
 
 \subsection{Clustering}
 \label{sec:stage2}
+The clustering stage is formulated as a mixed-integer linear programming (MILP)
+model over the retained feature nodes. The model decides which pairs of features
+belong to the same supernode, while embedding and logit nodes are kept outside the
+optimization as singleton supernodes. This formulation makes the design explicit:
+the objective rewards grouping features with similar signed causal roles, and the
+constraints enforce a valid partition, a causal-information budget, a complexity
+budget, and a layer-span restriction.
 
-Clustering turns the retained attribution subgraph into supernodes. It targets
-D2, D3, and C2 at the same time: grouped features should have one causal role,
-strong causal edges should remain visible between groups, and the number of groups
-should fit the complexity budget. The stage fixes embedding and logit nodes as
-singleton supernodes and clusters only the retained feature nodes
-$V'_{\text{feature}} := V' \cap V_{\text{feature}}$.
-
-\paragraph{Partition map.}
-The clustering output is a partition map $f : V' \to V_H$. For every retained
-embedding or logit node $v$, the map assigns $v$ to its singleton supernode
-$\{v\}$. For feature nodes, the map may assign multiple nodes to the same
-supernode. The number of resulting supernodes must satisfy $|V_H| \le K_{\max}$.
-
-\paragraph{Role vectors.}
-A feature's causal role is represented by its signed outgoing and incoming edge
-profiles. For a retained feature node $u$, define
+\paragraph{Feature representation.}
+Let $F = V'_{\text{feature}} = \{1,\dots,n\}$ be the retained feature nodes after
+pruning. A feature's causal role is represented by its signed outgoing and
+incoming edge profiles. The formulas below use the implementation convention that
+$W_{ku}$ is the edge from source $u$ to target $k$. For a retained feature node
+$u \in F$, define
 \begin{align}
 (v_u^{\text{out}})_k &= W_{ku}\,\sqrt{\mathrm{Inf}_k},
 \qquad k \in V', \nonumber\\
@@ -267,88 +198,140 @@ influence $u$, weighted by the relevance of those sources. The coordinates keep
 the sign of $W$, so features that affect the same targets with opposite signs have
 opposing role vectors rather than appearing similar.
 
-\paragraph{Signed role similarity.}
-The method compares two feature nodes by the signed cosine similarity of their
-role vectors:
+\paragraph{MILP data.}
+The MILP is built from pairwise constants computed before optimization. The signed
+role similarity between two retained features is
 \begin{equation}
 s_{ij} =
 \cos\bigl(r(i), r(j)\bigr)
 \;\in\; [-1,1],
-\qquad i,j \in V'_{\text{feature}}.
+\qquad i,j \in F.
 \label{eq:sim}
 \end{equation}
-This similarity is positive when two features have aligned signed upstream and
-downstream profiles, near zero when their profiles are unrelated, and negative
-when their roles are antagonistic. The signed value is important for atomicity:
-two features that drive the same downstream nodes with opposite signs should not
-be merged merely because their edge supports overlap. Keeping the sign lets the
-clustering objective reward aligned roles and penalize antagonistic roles in the
-same expression.
+A resolution threshold $\theta$ converts this similarity into a linear merge cost
+$c^{\text{atom}}_{ij} = \theta - s_{ij}$. If $s_{ij} > \theta$, then
+$c^{\text{atom}}_{ij} < 0$ and the MILP is rewarded for merging the pair; if
+$s_{ij} < \theta$, then $c^{\text{atom}}_{ij} > 0$ and the MILP is penalized for
+merging the pair. The implementation may use a fixed value such as $\theta = 0$ or
+an adaptive percentile rule such as \texttt{p65}.
 
-\paragraph{Atomicity loss.}
-Atomicity is measured by a signed correlation-clustering loss over the free
-feature nodes. Let
-$x_{ij} = \mathbf{1}[f(i) = f(j)]$ indicate whether feature nodes $i$ and $j$
-share a supernode, and let $\theta \in [-1,1]$ be a resolution threshold. The
-atomicity loss is
+The causal-preservation coefficient of a pair is the retained edge mass that would
+be hidden if the two features were placed in the same supernode:
 \begin{equation}
-L_{\text{atom}}(f)
+c^{\text{causal}}_{ij}
 =
-\sum_{\{i,j\} \subseteq V'_{\text{feature}}} x_{ij}\,(\theta - s_{ij}).
-\label{eq:Latom}
+\frac{|W_{ij}| + |W_{ji}|}
+     {\sum_{(u,v)\in E'} |W_{vu}|},
+\qquad i,j \in F,\; i<j.
+\label{eq:causal-coeff}
 \end{equation}
-If $s_{ij} > \theta$, merging the pair contributes a negative term and is
-rewarded. If $s_{ij} < \theta$, merging the pair contributes a positive term and
-is penalized. Minimizing this loss therefore favours supernodes whose members
-have aligned signed roles. In the experiments, $\theta = 0$ uses the sign of the
-cosine as the merge boundary.
-
-\paragraph{Causal-preservation loss.}
-Atomicity alone can merge directly connected features, which hides their edge
-inside a supernode. The causal-preservation loss measures the fraction of retained
-edge mass absorbed internally by the partition:
+Here both directions are included because either edge becomes internal after a
+merge. If the denominator is zero, the causal budget is inactive. A layer-span
+constant $\Delta_{\max}$ defines the allowed-pair set
 \begin{equation}
-L_{\text{causal}}(f)
+\mathcal{P}
 =
-\frac{\sum_{(u,v) \in E':\, f(u) = f(v)} |W_{vu}|}
-     {\sum_{(u,v) \in E'} |W_{vu}|}
-\;\in\; [0,1].
-\label{eq:Lcausal}
+\{(i,j): i,j \in F,\; i<j,\;
+|\operatorname{layer}(i)-\operatorname{layer}(j)| \le \Delta_{\max}\}.
+\label{eq:allowed-pairs}
 \end{equation}
-This term targets D3. It discourages merging pairs of nodes connected by large
-retained edges, because such a merge would remove that causal relation from the
-visible edge set of the summary graph.
+Pairs outside $\mathcal{P}$ are not allowed to share a supernode.
 
-\paragraph{Clustering objective and ILP.}
-The partition is chosen by minimizing a weighted objective:
+\paragraph{Decision variables.}
+The MILP uses binary pair variables
 \begin{equation}
-L(f) = L_{\text{atom}}(f) + \lambda\,L_{\text{causal}}(f),
-\qquad \lambda \ge 0.
+x_{ij} \in \{0,1\},
+\qquad (i,j) \in \mathcal{P},
+\label{eq:x-variable}
+\end{equation}
+where $x_{ij}=1$ means that feature nodes $i$ and $j$ are assigned to the same
+supernode. To count supernodes, the model also uses binary representative
+variables
+\begin{equation}
+r_i \in \{0,1\},
+\qquad i \in F,
+\label{eq:r-variable}
+\end{equation}
+where $r_i=1$ means that $i$ is the lowest-indexed feature in its supernode. The
+number of feature supernodes is therefore $K_F = \sum_{i\in F} r_i$.
+
+\paragraph{MILP objective.}
+The objective minimizes the signed-cosine atomicity loss:
+\begin{equation}
+\min_{x,r}
+\quad
+\sum_{(i,j)\in\mathcal{P}}
+(\theta - s_{ij})x_{ij}.
 \label{eq:Lstage2}
 \end{equation}
-The parameter $\lambda$ controls the trade-off between grouping features with
-similar roles and preserving explicit edges between them. A larger value of
-$\lambda$ discourages merging directly connected features and tends to expose more
-causal wiring in the final summary graph.
+This is a linear objective because all similarities and the threshold are fixed
+before solving. The formulation does not place $L_{\text{causal}}$ in the
+objective with a trade-off weight. Instead, causal preservation is enforced as a
+hard constraint, so the solver first respects the permitted hidden edge mass and
+then chooses the most atomic partition inside that feasible region.
 
-This objective is optimized as a binary integer linear program. The program uses
-a binary variable $x_{ij}$ for each pair of retained feature nodes, where
-$x_{ij}=1$ means that $i$ and $j$ are assigned to the same supernode. It also uses
-binary representative variables $r_i$ to count the number of feature supernodes.
-The objective is linear in the $x_{ij}$ variables: $L_{\text{atom}}$ is linear by
-Eq.~\eqref{eq:Latom}, and the numerator of $L_{\text{causal}}$ is
-$\sum_{(u,v)\in E'} |W_{vu}|\,x_{uv}$ for retained feature-feature edges.
+\paragraph{Partition constraints.}
+The pair variables must describe an equivalence relation. For any three features
+$i$, $j$, and $k$, transitivity is enforced by triangle inequalities such as
+\begin{equation}
+x_{ij} + x_{jk} - x_{ik} \le 1,
+\qquad
+x_{ij} + x_{ik} - x_{jk} \le 1,
+\qquad
+x_{ik} + x_{jk} - x_{ij} \le 1,
+\label{eq:transitivity}
+\end{equation}
+whenever the corresponding pair variables are present. If one pair is outside
+$\mathcal{P}$, the same rule becomes a layer-span exclusion; for example, if
+$(i,k)\notin\mathcal{P}$, then $x_{ij}+x_{jk}\le 1$. These constraints prevent the
+MILP from assigning $i$ with $j$ and $j$ with $k$ while keeping $i$ and $k$ in
+different supernodes.
 
-The constraints ensure that the pair variables define a valid partition. Triangle
-transitivity constraints such as
-$x_{ij} + x_{jk} - x_{ik} \le 1$ prevent inconsistent assignments. The
-representative variables count the number of clusters and enforce the budget
-$K \le K_{\max}$. A layer-span constraint may additionally force
-$x_{ij}=0$ for feature pairs whose layers are too far apart, preventing one
-supernode from covering an overly broad section of the computation. For the
-graphs considered in this thesis, the resulting mixed-integer program is solved
-directly, so the clustering stage returns the optimizer of Eq.~\eqref{eq:Lstage2}
-under the stated constraints.
+\paragraph{Representative constraints.}
+The representative variables count one and only one lowest-indexed member for each
+supernode. For each feature $i$, let
+$A_i = \{j<i : (j,i)\in\mathcal{P}\}$ be the allowed earlier features. The
+constraints are
+\begin{align}
+r_i + x_{ji} &\le 1,
+\qquad &&i\in F,\; j\in A_i, \label{eq:rep-upper}\\
+r_i + \sum_{j\in A_i} x_{ji} &\ge 1,
+\qquad &&i\in F. \label{eq:rep-lower}
+\end{align}
+If feature $i$ is merged with an earlier feature, Eq.~\eqref{eq:rep-upper} forces
+$r_i=0$. If it is not merged with any earlier feature, Eq.~\eqref{eq:rep-lower}
+forces $r_i=1$. Hence $K_F=\sum_i r_i$ counts feature supernodes without requiring
+explicit cluster labels.
+
+\paragraph{Budget constraints.}
+The causal-information budget limits the retained edge mass hidden inside
+supernodes:
+\begin{equation}
+\sum_{(i,j)\in\mathcal{P}}
+c^{\text{causal}}_{ij}x_{ij}
+\le
+\varepsilon_{\text{causal}},
+\qquad
+0 \le \varepsilon_{\text{causal}} \le 1.
+\label{eq:causal-budget}
+\end{equation}
+The complexity budget limits the number of feature supernodes:
+\begin{equation}
+\sum_{i\in F} r_i \le K_{\max}.
+\label{eq:cluster-budget}
+\end{equation}
+The first budget preserves visible causal edges by preventing too much retained
+edge mass from becoming internal to supernodes. The second budget keeps the
+summary readable by bounding the number of feature supernodes before embedding and
+logit singleton supernodes are added back.
+
+\paragraph{Cluster recovery.}
+After the MILP is solved, the feature partition is recovered from the selected
+pair variables: all pairs with $x_{ij}=1$ are joined, and the connected components
+under these joins become feature supernodes. The transitivity constraints ensure
+that these components define a valid partition. Embedding and logit nodes are then
+added as singleton supernodes, so the clustering output satisfies the output
+conditions of Eq.~\eqref{eq:supernode-conditions}.
 
 \subsection{Interpreting}
 \label{sec:stage3}
@@ -356,8 +339,7 @@ under the stated constraints.
 Interpreting converts the clustered pruned graph into the final summary graph.
 This stage takes the partition $f$ from clustering, aggregates retained edges
 between supernodes, removes cycles introduced by aggregation, and assigns
-human-readable labels. It is responsible for enforcing the acyclicity constraint
-C1.
+human-readable labels.
 
 \paragraph{Block-sum adjacency.}
 For each ordered pair of distinct supernodes $(C,C')$, the signed block-sum edge
@@ -371,10 +353,9 @@ This quantity sums all retained attribution-graph edges from members of $C$ to
 members of $C'$. The row-column convention is preserved: $W_{vu}$ is the edge
 from source $u$ to target $v$. Diagonal blocks are omitted because edges inside a
 supernode are represented as part of that node rather than as visible edges in
-$H$. The off-diagonal block sums define a raw supernode adjacency, which may still
-contain antiparallel edges or longer cycles.
+$H$.
 
-\paragraph{Antiparallel collapse.}
+\paragraph{Edge direction}
 The first acyclicity step removes two-node cycles. For each unordered pair
 $\{C,C'\}$, let $a = B_{C \to C'}$ and $b = B_{C' \to C}$. The method keeps only
 the net flow in the direction with larger magnitude:
@@ -385,9 +366,9 @@ the net flow in the direction with larger magnitude:
 \bigl(0,\,(|b|-|a|)\,\mathrm{sgn}(b)\bigr) & \text{if } |b| > |a|, \\[2pt]
 (0,\,0) & \text{if } |a| = |b|.
 \end{cases}
-\label{eq:antiparallel}
+\label{eq:edgedir}
 \end{equation}
-This rule removes every antiparallel pair and leaves an edge only when one
+This rule removes every two-node cycles and leaves an edge only when one
 direction has nonzero net dominance.
 
 \paragraph{Back-edge removal.}
@@ -405,11 +386,13 @@ By construction, all surviving edges point forward in the imposed order, so $H$ 
 a DAG.
 
 \paragraph{Labeling.}
-Labeling is a display step rather than part of the graph construction objective.
-Each supernode receives a short name and a coarse role, such as input, abstract,
-or output, based on the feature descriptions of its members. These labels help the
-reader inspect the final graph, but they do not affect $V_H$, $E_H$, $W_H$, or any
-loss defined above.
+Labeling adds display metadata to the acyclic summary graph: each feature
+supernode receives a short label, a role, and a one-sentence description. The
+implementation sends an LLM the original prompt, the predicted token, and compact
+feature evidence for each supernode, including layer, token position, activation
+examples, neighboring tokens, and top positive logits. The returned JSON assigns
+one of four roles --- Input, Abstract, Output, or Trash --- and does not change
+$V_H$, $E_H$, or $W_H$; prompt details are deferred to the Appendix.
 
 \section{Chapter Summary}
 
@@ -417,13 +400,14 @@ This chapter formalized attribution-graph summarization and defined the proposed
 three-stage method. The input is a signed directed acyclic attribution graph, and
 the output is a directed acyclic summary graph whose supernodes partition a
 retained subset of non-error nodes. The method first prunes the attribution graph
-using node and edge influence--relevance scores with retained-mass thresholds. It
-then clusters retained feature nodes with a signed role similarity and an ILP objective
-$L_{\text{atom}} + \lambda L_{\text{causal}}$, which balances atomicity against
-visible causal-edge preservation under a complexity budget. Finally, it aggregates
-the clustered graph with block-sum edge weights, removes cycles, and labels the
-resulting supernodes for inspection. The next chapter analyzes properties of this
-construction, and Chapter 5 evaluates whether the resulting summary graphs are
-faithful to the replacement model under steering interventions.
+using influence, relevance, and the pruning loss $L_{\text{prune}}$. It then
+clusters retained feature nodes by a MILP whose binary pair variables encode
+same-supernode assignments. The MILP minimizes a signed-cosine atomicity objective
+subject to transitivity, representative-counting, causal-information, complexity,
+and layer-span constraints. Finally, it aggregates the clustered graph with
+block-sum edge weights, removes cycles, and labels the resulting supernodes for
+inspection. The next chapter analyzes properties of this construction, and Chapter
+5 evaluates whether the resulting summary graphs are faithful to the replacement
+model under steering interventions.
 
 \end{document}

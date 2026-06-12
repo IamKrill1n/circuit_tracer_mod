@@ -2,16 +2,7 @@
 \begin{document}
 
 \section{Overview}
-The previous chapters defined the summarization method and analyzed its properties on
-paper. This chapter tests the central claim empirically: that the summary graph is
-\emph{faithful}, meaning its supernode edges reflect genuine causal dependencies in the
-replacement model rather than artifacts of clustering. It first describes the datasets
-(Section~\ref{sec:datasets}) and experimental setup (Section~\ref{sec:setup}), then defines
-the evaluation methodology (Section~\ref{sec:eval-method}) and baselines
-(Section~\ref{sec:baselines}). The main result is a steering-intervention study that grades
-the clustering and edge-construction stages together (Section~\ref{sec:intervention-results});
-a second, in-progress evaluation using an LLM to score supernode relevance is reported in
-draft (Section~\ref{sec:llm-results}).
+
 
 \section{Datasets}
 \label{sec:datasets}
@@ -43,7 +34,105 @@ visualize the summary graphs.
 
 \section{Evaluation Methodology}
 \label{sec:eval-method}
-\subsection{Steering-intervention faithfulness}
+\subsection{Pruning evaluation}
+We evaluate the pruning stage along two axes: faithfulness to the original attribution
+graph and interpretability of the retained nodes. Faithfulness is measured by graph
+completeness and replacement score after pruning. Graph completeness measures how much of
+the original attribution-graph computation remains explainable by the retained subgraph,
+while replacement score measures whether the pruned graph still preserves the model
+prediction under the replacement-model evaluation. Interpretability is measured by the
+number and proportion of retained syntactic features, because these nodes usually explain
+prompt scaffolding, punctuation, or function-word structure rather than the semantic
+relation needed for the analogy task.
+
+Figures~\ref{fig:prune-alpha-entmax-no-token-attr} and
+\ref{fig:prune-alpha-softmax-no-token-attr} compare graph completeness and replacement
+score against the average number of retained nodes. The curves separate the mixture
+parameter $\alpha$, where $\alpha=0$ corresponds to influence-only pruning and larger
+values add SHAP-based relevance to the node-importance score. The result shows that adding
+relevance does not substantially reduce graph-level faithfulness at matched graph sizes.
+The effect is most useful in the small-graph regime, where the pruned graph must keep only
+the nodes that are most likely to support the target prediction.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{Figure/prune_alpha_sweep_entmax_no_token_attr.png}
+\caption{Pruning alpha sweep with entmax normalization. The figure reports graph
+completeness and replacement score against average retained node count, omitting token
+attribution faithfulness to focus on graph-level faithfulness.}
+\label{fig:prune-alpha-entmax-no-token-attr}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{Figure/prune_alpha_sweep_softmax_no_token_attr.png}
+\caption{Pruning alpha sweep with softmax normalization. The figure reports graph
+completeness and replacement score against average retained node count, omitting token
+attribution faithfulness to focus on graph-level faithfulness.}
+\label{fig:prune-alpha-softmax-no-token-attr}
+\end{figure}
+
+Table~\ref{tab:syntactic-feature-count-template} defines the manual counting table used
+to compare influence-only pruning against ours setting $\alpha=0.5$. A retained
+feature is counted as syntactic when its label primarily refers to punctuation, stop words,
+inflection, word order, prompt-format tokens, or other grammatical scaffolding. It is not
+counted as syntactic when its label refers to the semantic relation, the source entity, the
+target entity, or the predicted answer. The final count therefore tests whether our score removes graph mass that is faithful but not useful for a compact semantic
+explanation.
+
+\begin{table}[ht]
+\centering
+\caption{Template for counting syntactic features after pruning. Counts are computed over
+the retained feature nodes of the analogy graphs at matched graph-size settings.}
+\label{tab:syntactic-feature-count-template}
+\begin{tabular}{llrrrrr}
+\toprule
+Pruning score & Normalization & $\alpha$ & Stop-word & Punctuation & Other syntactic & Total syntactic \\
+\midrule
+Influence only & Entmax 1.25 & 0.0 & -- & -- & -- & -- \\
+Ours alpha 0.5 & Entmax 1.25 & 0.5 & -- & -- & -- & -- \\
+Influence only & Softmax & 0.0 & -- & -- & -- & -- \\
+Ours alpha 0.5 & Softmax & 0.5 & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+\subsection{Clustering evaluation}
+We evaluate clustering on the entmax-pruned analogy graphs by comparing the saved
+summary-graph partition against four matched-size baselines. Each baseline uses the same
+pruned graph and the same number of feature supernodes as the saved summary graph. The
+silhouette score measures role-vector compactness, while internalized edge mass measures
+the fraction of pruned edge mass hidden inside supernodes. DAG loss measures the
+additional superedge mass removed when the summary adjacency is converted into an
+acyclic graph.
+
+\begin{table}[ht]
+\centering
+\caption{Clustering evaluation on 100 entmax-pruned analogy graphs. Lower internalized
+edge mass and lower DAG loss indicate better preservation of visible causal structure.}
+\label{tab:clustering-baseline-entmax}
+\begin{tabular}{lrrr}
+\toprule
+Solver & Silhouette score (raw) & Internalized edge mass & DAG loss \\
+\midrule
+Ours & 0.0409 & 0.0491 & 0.0984 \\
+Spectral on role vectors & -0.0347 & 0.1081 & 0.1257 \\
+K-means on role vectors & 0.5058 & 0.0862 & 0.1423 \\
+Spectral on adjacency & -0.4263 & 0.1590 & 0.1818 \\
+Random same-size clusters & -0.5908 & 0.0762 & 0.2058 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:clustering-baseline-entmax} shows that K-means produces the most compact
+role-vector clusters, but this compactness hides more causal structure and loses more
+mass during DAG construction. The proposed clustering has a lower raw silhouette score
+than K-means, but it keeps the lowest internalized edge mass and the lowest DAG loss.
+This result is consistent with the objective of the summary graph: the clustering should
+not merely maximize geometric compactness, but should preserve causal information in the
+visible supernode graph.
+
+\subsection{Labels evaluation}
+\subsection{Steering case studies}
 A summary graph is faithful only if its supernode edges reflect genuine causal
 dependencies. We test this directly with a steering intervention: we perturb one
 supernode at its source and check whether every other supernode moves in the direction
@@ -73,124 +162,8 @@ $\operatorname{sgn}(W_{H,\,C \to C'}) \cdot \operatorname{sgn}(\Delta a_C)$, whe
 $\Delta a_C$ is the activation change of the steered supernode itself (negative under
 negation).
 
-\paragraph{Metrics.}
-We summarize each graph with three quantities, all oriented so that higher is better.
-\emph{Edge sign-consistency} is the fraction of summary edges whose measured downstream
-sign matches the predicted one, weighted by edge magnitude:
-\begin{equation}
-\mathrm{SC} \;=\;
-\frac{\displaystyle\sum_{(C, C') \in E_H} |W_{H,\,C \to C'}| \cdot
-      \mathbf{1}\!\bigl[\operatorname{sgn}(\Delta m_{C'}) =
-      \operatorname{sgn}(W_{H,\,C \to C'})\,\operatorname{sgn}(\Delta a_C)\bigr]}
-     {\displaystyle\sum_{(C, C') \in E_H} |W_{H,\,C \to C'}|}
-\;\in\; [0, 1],
-\label{eq:sign-consistency}
-\end{equation}
-where $\Delta m_{C'}$ is $\Delta a_{C'}$ for a feature target and $\Delta p_{C'}$ for a
-logit target; $\mathrm{SC} = 1$ means every edge fires in the predicted direction.
-\emph{Monotonicity} is the Spearman correlation $\rho$ between the edge magnitude
-$|W_{H,\,C \to C'}|$ and the measured effect magnitude over the feature-to-feature edges,
-testing whether heavier edges produce larger downstream changes. \emph{Output effect} is
-the mean absolute target-token probability shift $|\Delta p|$ across all single-supernode
-interventions, measuring how much causal weight a supernode carries toward the model's
-answer.
-
-\subsection{LLM scoring}
-The second evaluation uses a large language model to label each supernode and then score
-its relevance to the prediction on a $[0, 1]$ scale, with $0$ meaning irrelevant and $1$
-highly relevant to the final answer. The labeling and scoring prompts are kept separate so
-that the score does not simply restate the label. This evaluation is still in progress; its
-draft results are reported in Section~\ref{sec:llm-results}.
-
-\section{Baselines}
-\label{sec:baselines}
-We compare the exact ILP clusterer (Section~\ref{sec:stage2}) against a $K$-means
-baseline that partitions the same role vectors $r(u)$ of Eq.~\eqref{eq:role} with
-Euclidean $K$-means. The ILP chooses its supernode count $K$ endogenously, whereas
-$K$-means takes $K$ as input; we therefore set the baseline's $K$ equal to the ILP's $K$
-on each graph, so the two methods differ only in how they assign features and not in
-granularity, making the comparison fair at a fixed budget. The study runs on the $100$
-pruned attribution graphs from the analogies dataset (softmax token weighting, pruning
-$\alpha = 0.5$, node threshold $\eta_V = 0.02$). Each graph is processed once: the
-intervention is deterministic given a partition, the ILP is solved to optimality
-($\theta = 0$, $\lambda = 1$, layer span $\le 4$, $30$\,s time limit), and $K$-means uses
-$20$ restarts under a fixed seed.
-
-\section{Steering-intervention results}
-\label{sec:intervention-results}
-Both clusterers produce causally faithful summary graphs: negating a supernode moves its
-downstream neighbours in the predicted direction for the large majority of edges, and the
-effect grows with edge weight. Table~\ref{tab:intervention} reports the two methods at
-equal granularity.
-
-\begin{table}[h]
-\centering
-\small
-\caption{Steering-intervention faithfulness on the $100$ analogy graphs, ILP versus a
-$K$-matched $K$-means baseline. Values are means over the $100$ graphs; arrows mark the
-direction of improvement and bold the better method per column. The three causal columns
---- sign-consistency $\mathrm{SC}$ (Eq.~\eqref{eq:sign-consistency}), monotonicity $\rho$,
-and output effect $|\Delta p|$ --- all favour $K$-means, and every per-graph difference is
-significant (paired Wilcoxon $p < 0.01$). The right-most column is diagnostic: the mean
-number of supernode edges left visible in $H$, a measure of exposed structure rather than
-of quality. $K$ is identical for the two methods by construction.}
-\label{tab:intervention}
-\begin{tabular}{l c c c c c}
-\toprule
-Clusterer & $K$ & $\mathrm{SC}\uparrow$ & $\rho\uparrow$ & $|\Delta p|\uparrow$ & edges/graph \\
-\midrule
-ILP ($\lambda = 1$)            & 15.3 & 0.878 & 0.442 & 0.175 & 14.6 \\
-$K$-means (role vectors)       & 15.3 & \textbf{0.941} & \textbf{0.539} & \textbf{0.190} & 13.0 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-At equal $K$ the $K$-means baseline is the more faithful of the two on every causal
-metric. Its edges are more sign-consistent ($0.941$ vs.\ $0.878$), more monotone
-($\rho = 0.539$ vs.\ $0.442$), and its supernodes shift the target probability more
-($0.190$ vs.\ $0.175$); all three gaps hold across the $100$ graphs at $p < 0.01$. The
-pooled, edge-weighted sign-consistency over all $4{,}799$ tested supernode pairs tells the
-same story ($0.927$ vs.\ $0.861$).
-
-The one axis on which the ILP leads is the amount of causal structure it exposes: it
-leaves $14.6$ supernode edges visible per graph against the baseline's $13.0$. This is the
-intended effect of the causal-preservation loss $L_{\text{causal}}$ (D3), which penalizes
-merging directly connected features and so keeps their edge in $H$ instead of absorbing it
-into a supernode. The same mechanism explains the sign-consistency gap: the ILP surfaces
-more --- and individually weaker --- edges and is then graded on all of them, whereas
-$K$-means hides its weakest, most ambiguous edges inside clusters and is graded only on the
-strong ones that remain. The comparison therefore measures per-edge faithfulness at fixed
-$K$, not the overall quality of the abstraction, and it is partly biased toward the method
-that exposes less structure.
-
-Two caveats further temper the result. First, $K$-means optimizes role-vector cohesion
-directly, which is close to what the steering metric rewards, so it is partly graded on its
-own objective. Second, the comparison fixes the trade-off weight at $\lambda = 1$, and that
-weight is precisely the knob moving the ILP along the structure-versus-cohesion axis; a
-sweep over $\lambda$ is needed to locate the operating point at which the two effects
-balance. We conclude that both abstractions are faithful and that, at this single operating
-point, the simple baseline is at least as faithful per edge while the ILP retains more of
-the circuit's causal wiring.
-
-\section{LLM-score evaluation (draft)}
-\label{sec:llm-results}
-This evaluation is in progress and reported in draft. The intended comparison contrasts the
-LLM relevance score of each supernode (Section~\ref{sec:eval-method}) with a human
-relevance judgment on the same supernodes, so that agreement between the two would justify
-using the LLM score as a scalable proxy for human-judged supernode quality. The protocol,
-the prompt design, and the human-rating procedure are fixed; the rated graphs and the
-agreement statistics are still being collected, so no quantitative claim is made here. We
-report this evaluation in full in a later revision.
 
 \section{Chapter Summary}
-This chapter validated the summary graph empirically. The steering intervention confirmed
-that both the exact ILP clusterer and the $K$-means baseline yield causally faithful
-abstractions, with downstream responses matching the sign and magnitude of the summary
-edges on the large majority of pairs across $100$ analogy graphs. The two methods trade
-off along a single axis at the tested operating point: $K$-means is more faithful per edge,
-while the ILP exposes more of the circuit's causal wiring through its causal-preservation
-loss. The result also identified the next step --- a sweep over the trade-off weight
-$\lambda$ --- and an evaluation still under way, the LLM-versus-human relevance comparison.
-The final chapter discusses what these findings mean and where the method falls short.
+
 
 \end{document}

@@ -30,7 +30,7 @@ ROLE DEFINITIONS
 --------------------------------------------------
 
 Input:
-- Detects information directly present in the prompt.
+- Activates on a token directly present in the prompt.
 - Recognizes entities, words, phrases, syntax, or local patterns.
 - Extracts evidence from the prompt.
 - Usually appears early in the computation.
@@ -63,14 +63,12 @@ GLOBAL ANALYSIS PROCEDURE
 
 4. Identify major concepts required to predict the next token.
 
-5. Identify which supernodes provide prompt evidence, combine information, or support the final prediction.
-
-6. For each supernode:
+5. For each supernode:
    - Inspect its features.
    - Inspect each feature's layer and position.
    - Determine what information it contributes to this computation.
 
-7. Prefer explanations that make the set of supernodes coherent as a whole.
+6. Prefer explanations that make the set of supernodes coherent as a whole.
 
 --------------------------------------------------
 LABELING GUIDELINES
@@ -83,9 +81,9 @@ Good labels:
 - Capital cities
 - Geographic entities
 - Country-capital relation
-- Numerical comparison
-- Subject-verb agreement
-- Paris prediction support
+- Numbers ~30
+- say Paris
+- say J_
 
 Bad labels:
 - Neuron that activates on...
@@ -112,9 +110,7 @@ Abstract:
     Country-capital relation
 
 Output:
-    Paris prediction support
-
-Avoid assigning the same label to all three nodes.
+    Say Paris
 
 Adjacent supernodes should typically represent different stages of computation unless the evidence strongly suggests otherwise.
 

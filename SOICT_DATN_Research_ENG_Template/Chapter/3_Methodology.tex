@@ -109,12 +109,11 @@ them directly. The pipeline therefore does not optimize the two properties
 themselves. Each stage instead minimizes a cheap, computable \emph{proxy} expected
 to track one of them, subject to the hard constraints C1 and C2. Pruning minimizes
 the pruning loss $L_{\text{prune}}$ (D1), a faithfulness proxy; clustering minimizes
-the atomicity loss $L_{\text{atom}}$ (D2), an interpretability proxy, traded against
+the atomicity loss $L_{\text{atom}}$ (D2), an interpretability proxy, while bounding
 the causal-preservation loss $L_{\text{causal}}$ (D3), a faithfulness proxy. Each
-loss is defined with the stage that minimizes it. The three stages are solved in
-sequence --- pruning fixes $V'$, clustering partitions it, and interpreting builds
-$H$ from that partition --- so each proxy is minimized given the output of the stage
-before it.
+loss is defined with the stage that uses it. The three stages are solved in sequence
+--- pruning fixes $V'$, clustering partitions it, and interpreting builds $H$ from
+that partition --- so each proxy is optimized given the output of the stage before it.
 
 \subsection{Prune}\label{sec:stage1}
 Pruning keeps the nodes and edges that carry the main computation and discards
@@ -190,7 +189,7 @@ $f : V' \to V_H$ from the pruned node set to the summary-graph node set, with
 embedding and logit nodes fixed as singleton supernodes and feature nodes free to
 be grouped. It compares features by a \emph{role vector} built from their weighted
 edge profiles, scores pairs of features with a role similarity, and partitions them
-by minimizing the objective of Eq.~\eqref{eq:Lstage2}.
+by solving the constrained optimization problem of Eq.~\eqref{eq:Lstage2}.
 
 \paragraph{Role vectors.}
 The role vector of a feature node stacks its weighted outgoing and
@@ -266,17 +265,20 @@ The choice is dictated by the solver below: the signed cosine feeds the
 correlation-clustering objective, which needs a signed similarity to compare against
 the threshold $\theta$, whereas the nonnegative multi-kernel scores feed the spectral
 and agglomerative clusterers, which require a nonnegative affinity. The resolution
-threshold $\theta$ is the only granularity knob for the signed variant, and
-$\theta = 0$ is the natural default, since the sign of the cosine then decides whether
-a pair should merge.
+threshold $\theta$ is the main granularity knob for the signed variant. A fixed
+$\theta = 0$ uses the sign of the cosine as the merge boundary; the implementation
+also accepts an adaptive percentile rule such as \texttt{p65}, which sets $\theta$
+to the corresponding percentile of the allowed-pair cosine distribution for the
+current graph.
 
 \paragraph{Clustering objective.}
-Clustering minimizes two partition-dependent proxies. The \emph{atomicity loss}
-$L_{\text{atom}}$ (D2) makes each supernode read as a single mechanism; it is the
-signed-cosine \emph{correlation-clustering} loss over the free feature nodes. With
-the same-cluster indicator $x_{ij} = \mathbf{1}[f(i) = f(j)]$, a resolution
-threshold $\theta \in [-1, 1]$, and the role similarity $s_{ij} := S^{\cos}_{ij}$ of
-Eq.~\eqref{eq:sim},
+The exact clusterer treats atomicity as the quantity to optimize and causal
+preservation as a hard budget. The \emph{atomicity loss} $L_{\text{atom}}$ (D2)
+makes each supernode read as a single mechanism; it is the signed-cosine
+\emph{correlation-clustering} objective over the free feature nodes. With the
+same-cluster indicator $x_{ij} = \mathbf{1}[f(i) = f(j)]$, a resolution threshold
+$\theta \in [-1, 1]$, and the role similarity $s_{ij} := S^{\cos}_{ij}$ of
+Eq.~\eqref{eq:sim}, the loss is
 \begin{equation}
 L_{\text{atom}}(f)
 \;=\;
@@ -285,14 +287,13 @@ L_{\text{atom}}(f)
 \end{equation}
 A similar pair ($s_{ij} > \theta$) contributes a negative term, so merging it is
 rewarded; a dissimilar pair ($s_{ij} < \theta$) contributes a positive term, so
-merging it is penalized. Minimizing $L_{\text{atom}}$ therefore penalizes
-\emph{over-merging} (dissimilar features placed together) and \emph{under-merging}
-(similar features kept apart) at once. The \emph{causal-preservation loss}
-$L_{\text{causal}}$ (D3) keeps causal edge weight visible between supernodes instead
-of hidden inside them; it is the fraction of pruned edge weight absorbed
-\emph{inside} a supernode --- weight between two members of the same supernode,
-which the interpreting stage collapses into the node and which therefore never
-appears in $H$:
+merging it is penalized. Minimizing $L_{\text{atom}}$ therefore discourages
+over-merging directly and discourages under-merging by making aligned merges lower
+the objective. The \emph{causal-preservation loss} $L_{\text{causal}}$ (D3) keeps
+causal edge weight visible between supernodes instead of hidden inside them; it is
+the fraction of pruned edge weight absorbed \emph{inside} a supernode --- weight
+between two members of the same supernode, which the interpreting stage collapses
+into the node and which therefore never appears in $H$:
 \begin{equation}
 L_{\text{causal}}(f)
 \;=\;
@@ -301,43 +302,54 @@ L_{\text{causal}}(f)
 \;\in\; [0, 1].
 \label{eq:Lcausal}
 \end{equation}
-Clustering minimizes the two as a single weighted objective with one trade-off weight
-$\lambda \ge 0$ on the causal term,
+The exact ILP solves
 \begin{equation}
-L(f) \;=\; L_{\text{atom}}(f) \;+\; \lambda\, L_{\text{causal}}(f),
+\begin{aligned}
+\min_f \quad & L_{\text{atom}}(f) \\
+\text{s.t.}\quad & L_{\text{causal}}(f) \le \varepsilon_{\text{causal}}, \\
+& K(f) \le K_{\max},
+\end{aligned}
 \label{eq:Lstage2}
 \end{equation}
-where $\lambda$ governs a genuine trade-off: merging role-similar features that are
-also directly connected improves atomicity (D2) but hides their edge (D3).
+where $\varepsilon_{\text{causal}} \in [0, 1]$ is an optional hard budget on hidden
+edge mass and $K_{\max}$ is an optional feature-supernode budget. This form matches
+the implementation: the legacy weight $\lambda$ is not part of the ILP objective;
+granularity is controlled by $\theta$, $\varepsilon_{\text{causal}}$, $K_{\max}$,
+and the layer-span mask.
 
 \paragraph{Exact ILP solver.}
-The exact solver chooses the partition $f$ by minimizing the weighted objective
-$L(f)$ of Eq.~\eqref{eq:Lstage2} on the signed cosine, subject to the complexity
-budget (C2); the acyclicity constraint (C1) is deferred to the interpreting stage.
-Both losses are linear in the same-cluster indicators $x_{ij}$: $L_{\text{atom}}$ is
-linear by
-Eq.~\eqref{eq:Latom}, and the absorbed-mass numerator of $L_{\text{causal}}$ is
+The exact solver chooses the partition $f$ by solving Eq.~\eqref{eq:Lstage2} on the
+signed cosine; the acyclicity constraint (C1) is deferred to the interpreting stage.
+The objective and the causal constraint are both linear in same-cluster indicators:
+$L_{\text{atom}}$ is linear by Eq.~\eqref{eq:Latom}, and the numerator of
+$L_{\text{causal}}$ is
 $\sum_{(u, v) \in E'} |W_{vu}|\, x_{uv}$, since a feature edge is internal to a
-supernode exactly when its endpoints share one. The objective is therefore linear,
-and clustering reduces to a binary integer linear program with the following
-variables and constraints.
+supernode exactly when its endpoints share one. The denominator of
+$L_{\text{causal}}$ is the total retained edge mass and is constant for a fixed
+pruned graph, so the causal budget is a linear inequality.
 \begin{itemize}[leftmargin=*,topsep=2pt,itemsep=1pt]
-\item \textbf{Variables.} A binary $x_{ij} \in \{0, 1\}$ for each feature pair
-($x_{ij} = 1$ iff $i, j$ share a supernode), plus binary representative variables
-$r_i \in \{0, 1\}$ ($r_i = 1$ iff $i$ is the lowest-indexed member of its
-supernode) used only to count $K = \sum_i r_i$.
+\item \textbf{Variables.} A binary $x_{ij} \in \{0, 1\}$ for each allowed feature
+pair ($x_{ij} = 1$ iff $i, j$ share a supernode). When a supernode budget is used,
+the program also introduces binary representative variables $r_i \in \{0, 1\}$,
+where $r_i = 1$ iff $i$ is the lowest-indexed member of its supernode, so
+$K(f) = \sum_i r_i$.
 \item \textbf{Valid partition.} Transitivity constraints
 $x_{ij} + x_{jk} - x_{ik} \le 1$ force the indicators to define an equivalence
 relation, so the $x_{ij}$ realize an actual partition.
-\item \textbf{Complexity budget (C2).} $\sum_i r_i \le K_{\max}$, with the
-defining inequalities tying each $r_i$ to its pair variables.
+\item \textbf{Causal budget (D3).} If $\varepsilon_{\text{causal}}$ is set, the
+linear inequality $L_{\text{causal}}(f) \le \varepsilon_{\text{causal}}$ limits
+the retained edge mass that can disappear inside feature supernodes.
+\item \textbf{Complexity budget (C2).} If $K_{\max}$ is set, the representative
+variables enforce $\sum_i r_i \le K_{\max}$.
 \item \textbf{Layer span.} Feature pairs more than a fixed number of layers apart
-are forced to $x_{ij} = 0$; with transitivity this bounds every supernode's layer
-span.
+are omitted from the allowed-pair set, equivalently forced to $x_{ij} = 0$; with
+transitivity this bounds every supernode's layer span and reduces the ILP size.
 \end{itemize}
-For the small pruned graphs considered here the program is solved to optimality
-with a mixed-integer solver, so the reported summary is the exact minimizer, not
-the output of a heuristic.
+The implementation solves this binary integer linear program with a mixed-integer
+solver under explicit variable, constraint, and time limits. If the solver reaches
+the time limit with an incumbent, that incumbent is returned with a warning; if the
+problem is infeasible or too large, the caller must relax the budgets, prune more
+aggressively, or use an approximate clusterer.
 
 \paragraph{Scalable clusterers.}
 The integer program grows with the number of feature pairs and is tractable only on
@@ -347,9 +359,18 @@ affinity as a precomputed graph and cuts it into $K$ groups; \emph{agglomerative
 clustering merges the most similar pair of clusters under average linkage while
 rejecting any merge that would exceed the layer span or create a cycle in the
 supernode graph, so it satisfies the DAG constraint natively. Both select their
-cluster count by minimizing the same closed-form objective $L$ of
-Eq.~\eqref{eq:Lstage2} over a candidate range, so the three solvers optimize one
-criterion and differ only in how they search.
+cluster count by scoring candidate partitions with a normalized reporting scalar
+that combines atomicity and causal preservation,
+\begin{equation}
+L_{\text{score}}(f)
+\;=\;
+\frac{L_{\text{atom,norm}}(f) + \lambda L_{\text{causal}}(f)}
+     {1 + \lambda},
+\label{eq:Lscore}
+\end{equation}
+where $L_{\text{atom,norm}}$ is the normalized signed-cosine disagreement fraction.
+This score is used for approximate search and reporting; it is not the objective of
+the exact ILP in Eq.~\eqref{eq:Lstage2}.
 
 \subsection{Interpret}\label{sec:stage3}
 Interpreting turns the partitioned pruned graph into the acyclic summary graph $H$ and
@@ -412,14 +433,14 @@ became three computable proxies for the summary's faithfulness and interpretabil
 (the pruning loss $L_{\text{prune}}$, the atomicity loss $L_{\text{atom}}$, and the
 causal-preservation loss $L_{\text{causal}}$) together with the acyclicity and
 budget constraints that every admissible $H$ must satisfy. Pruning meets D1 by importance-thresholded
-selection, which also explains why every error node is removed. Clustering meets D2 and
-trades it against D3 through the weighted objective $L_{\text{atom}} + \lambda
-L_{\text{causal}}$, comparing features by a role similarity for which four variants were
-given: the signed cosine consumed by the exact ILP and the three nonnegative
-multi-kernel means consumed by the scalable spectral and agglomerative clusterers.
-Interpreting meets D4 by aggregating the pruned edges into a block-sum adjacency and
-removing cycles, yielding the DAG $H$. The next chapter analyzes the method's
-theoretical properties, and Chapter~5 tests directly whether these proxies yield
-faithful, interpretable summary graphs.
+selection, which also explains why every error node is removed. Clustering meets D2 by
+minimizing a signed-cosine correlation-clustering loss, while D3 enters the exact ILP
+as a hard bound on hidden edge mass and C2 enters as an optional supernode budget.
+Four role-similarity variants were given: the signed cosine consumed by the exact ILP
+and the three nonnegative multi-kernel means consumed by the scalable spectral and
+agglomerative clusterers. Interpreting meets D4 by aggregating the pruned edges into a
+block-sum adjacency and removing cycles, yielding the DAG $H$. The next chapter
+analyzes the method's theoretical properties, and Chapter~5 tests directly whether
+these proxies yield faithful, interpretable summary graphs.
 
 \end{document}
