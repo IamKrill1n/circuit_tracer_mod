@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 # Hard caps beyond which exact HiGHS solves become intractable.
 MAX_ILP_VARS = 200_000
 MAX_ILP_CONSTRAINTS = 2_000_000
+DEFAULT_THETA: str = "p65"
+DEFAULT_EPS_CAUSAL: float = 0.05
+DEFAULT_MAX_SN: int = 20
+DEFAULT_MAX_LAYER_SPAN: int = 7
+DEFAULT_NORMALIZE_WEIGHTS: bool = False
+DEFAULT_TIME_LIMIT: float = 30.0
 
 
 def _validate_args(lambda_causal: float, eps_causal: float | None, max_sn: int | None) -> None:
@@ -116,11 +122,11 @@ def _build_constraints(
     pairs: list[tuple[int, int]],
     col_x: dict[tuple[int, int], int],
     col_r: dict[int, int],
-    max_sn: int | None,
-    eps_causal: float | None,
+    max_sn: int | None = DEFAULT_MAX_SN,
+    eps_causal: float | None = DEFAULT_EPS_CAUSAL,
     causal_coeff: np.ndarray,
     has_causal_mass: bool,
-    max_layer_span: int,
+    max_layer_span: int = DEFAULT_MAX_LAYER_SPAN,
 ) -> LinearConstraint:
     rows: list[int] = []
     cols: list[int] = []
@@ -260,13 +266,13 @@ def _recover_clusters(
 def cluster_graph_ilp(
     prune_graph: PruneGraph,
     *,
-    theta: float | str = 0.0,
+    theta: float | str = DEFAULT_THETA,
     lambda_causal: float = 1.0,
-    eps_causal: float | None = None,
-    max_sn: int | None = None,
-    max_layer_span: int = 1000,
-    normalize_weights: bool = False,
-    time_limit: float = 30.0,
+    eps_causal: float | None = DEFAULT_EPS_CAUSAL,
+    max_sn: int | None = DEFAULT_MAX_SN,
+    max_layer_span: int = DEFAULT_MAX_LAYER_SPAN,
+    normalize_weights: bool = DEFAULT_NORMALIZE_WEIGHTS,
+    time_limit: float = DEFAULT_TIME_LIMIT,
 ) -> list[list[str]]:
     """Cluster a pruned graph by exactly minimising the Stage-2 objective.
 
@@ -290,26 +296,26 @@ def cluster_graph_ilp(
     ----------
     theta:
         Resolution threshold in ``[-1, 1]`` on the signed cosine. ``theta = 0``
-        (the default) makes the cosine sign itself the merge boundary, so no
-        threshold needs to be invented; raise it to merge more conservatively.
-        May also be an *adaptive* percentile spec ``"p<q>"`` (e.g. ``"p65"``):
-        theta is then the q-th percentile of the allowed-pair cosine distribution
-        of *this* graph, so the boundary tracks each graph's similarity scale
-        instead of a fixed global value (the cosine scale varies widely per graph).
+        makes the cosine sign itself the merge boundary. The default is the
+        adaptive percentile spec ``"p65"``: theta is the 65th percentile of the
+        allowed-pair cosine distribution of *this* graph, so the boundary tracks
+        each graph's similarity scale instead of a fixed global value.
     lambda_causal:
         Deprecated compatibility argument. The ILP objective is always ``L_atom``;
         use ``eps_causal`` to constrain causal preservation.
     eps_causal:
         Optional hard budget on ``L_causal`` in ``[0, 1]``. When set, the ILP
         minimises atomicity subject to hiding at most this fraction of retained edge
-        mass inside feature supernodes.
+        mass inside feature supernodes. Default ``0.05``.
     max_sn:
         Complexity budget (C2): a hard cap ``K <= max_sn`` on the number of
-        feature supernodes. ``None`` leaves K endogenous (driven by ``theta``).
+        feature supernodes. Default ``20``. ``None`` leaves K endogenous (driven by
+        ``theta``).
     max_layer_span:
         Tractability prior: forbid merging two features more than this many
         layers apart. The methodology imposes no such constraint; raise it to
         relax. Combined with transitivity this bounds every cluster's layer span.
+        Default ``7``.
     normalize_weights:
         If True, min-max normalise the per-node influence/relevance weights before
         they scale the role vectors (forwarded to ``compute_phi_vectors``). Default

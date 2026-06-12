@@ -27,6 +27,6 @@
     "provider": "gemini",
     "base_url": null,
     "api_key_env": "GOOGLE_API_KEY",
-    "defaults": {"temperature": 0.2, "thinking_effort": "medium"}
+    "defaults": {"temperature": 0.2, "thinking_effort": null}
   }
 }

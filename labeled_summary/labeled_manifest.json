@@ -1,0 +1,202 @@
+[
+  {
+    "normalization": "softmax",
+    "graph_file": "001.pt",
+    "graph_stem": "001",
+    "graph_path": "dataset/analogies/001.pt",
+    "status": "ok",
+    "labelled_supernodes": 12,
+    "num_supernodes": 18,
+    "labeled_summary_graph_path": "labeled_summary/softmax/alpha_0.50/node_0.02/001_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "softmax",
+    "graph_file": "011.pt",
+    "graph_stem": "011",
+    "graph_path": "dataset/analogies/011.pt",
+    "status": "ok",
+    "labelled_supernodes": 9,
+    "num_supernodes": 15,
+    "labeled_summary_graph_path": "labeled_summary/softmax/alpha_0.50/node_0.02/011_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "softmax",
+    "graph_file": "021.pt",
+    "graph_stem": "021",
+    "graph_path": "dataset/analogies/021.pt",
+    "status": "ok",
+    "labelled_supernodes": 13,
+    "num_supernodes": 15,
+    "labeled_summary_graph_path": "labeled_summary/softmax/alpha_0.50/node_0.02/021_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "softmax",
+    "graph_file": "031.pt",
+    "graph_stem": "031",
+    "graph_path": "dataset/analogies/031.pt",
+    "status": "ok",
+    "labelled_supernodes": 9,
+    "num_supernodes": 24,
+    "labeled_summary_graph_path": "labeled_summary/softmax/alpha_0.50/node_0.02/031_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "softmax",
+    "graph_file": "041.pt",
+    "graph_stem": "041",
+    "graph_path": "dataset/analogies/041.pt",
+    "status": "ok",
+    "labelled_supernodes": 8,
+    "num_supernodes": 18,
+    "labeled_summary_graph_path": "labeled_summary/softmax/alpha_0.50/node_0.02/041_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "softmax",
+    "graph_file": "051.pt",
+    "graph_stem": "051",
+    "graph_path": "dataset/analogies/051.pt",
+    "status": "ok",
+    "labelled_supernodes": 7,
+    "num_supernodes": 21,
+    "labeled_summary_graph_path": "labeled_summary/softmax/alpha_0.50/node_0.02/051_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "softmax",
+    "graph_file": "061.pt",
+    "graph_stem": "061",
+    "graph_path": "dataset/analogies/061.pt",
+    "status": "ok",
+    "labelled_supernodes": 15,
+    "num_supernodes": 21,
+    "labeled_summary_graph_path": "labeled_summary/softmax/alpha_0.50/node_0.02/061_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "softmax",
+    "graph_file": "071.pt",
+    "graph_stem": "071",
+    "graph_path": "dataset/analogies/071.pt",
+    "status": "ok",
+    "labelled_supernodes": 11,
+    "num_supernodes": 17,
+    "labeled_summary_graph_path": "labeled_summary/softmax/alpha_0.50/node_0.02/071_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "softmax",
+    "graph_file": "081.pt",
+    "graph_stem": "081",
+    "graph_path": "dataset/analogies/081.pt",
+    "status": "ok",
+    "labelled_supernodes": 10,
+    "num_supernodes": 20,
+    "labeled_summary_graph_path": "labeled_summary/softmax/alpha_0.50/node_0.02/081_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "softmax",
+    "graph_file": "091.pt",
+    "graph_stem": "091",
+    "graph_path": "dataset/analogies/091.pt",
+    "status": "ok",
+    "labelled_supernodes": 14,
+    "num_supernodes": 16,
+    "labeled_summary_graph_path": "labeled_summary/softmax/alpha_0.50/node_0.02/091_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "entmax",
+    "graph_file": "001.pt",
+    "graph_stem": "001",
+    "graph_path": "dataset/analogies/001.pt",
+    "status": "ok",
+    "labelled_supernodes": 12,
+    "num_supernodes": 15,
+    "labeled_summary_graph_path": "labeled_summary/entmax/alpha_0.50/node_0.02/001_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "entmax",
+    "graph_file": "011.pt",
+    "graph_stem": "011",
+    "graph_path": "dataset/analogies/011.pt",
+    "status": "ok",
+    "labelled_supernodes": 8,
+    "num_supernodes": 12,
+    "labeled_summary_graph_path": "labeled_summary/entmax/alpha_0.50/node_0.02/011_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "entmax",
+    "graph_file": "021.pt",
+    "graph_stem": "021",
+    "graph_path": "dataset/analogies/021.pt",
+    "status": "ok",
+    "labelled_supernodes": 13,
+    "num_supernodes": 15,
+    "labeled_summary_graph_path": "labeled_summary/entmax/alpha_0.50/node_0.02/021_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "entmax",
+    "graph_file": "031.pt",
+    "graph_stem": "031",
+    "graph_path": "dataset/analogies/031.pt",
+    "status": "ok",
+    "labelled_supernodes": 10,
+    "num_supernodes": 16,
+    "labeled_summary_graph_path": "labeled_summary/entmax/alpha_0.50/node_0.02/031_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "entmax",
+    "graph_file": "041.pt",
+    "graph_stem": "041",
+    "graph_path": "dataset/analogies/041.pt",
+    "status": "ok",
+    "labelled_supernodes": 12,
+    "num_supernodes": 15,
+    "labeled_summary_graph_path": "labeled_summary/entmax/alpha_0.50/node_0.02/041_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "entmax",
+    "graph_file": "051.pt",
+    "graph_stem": "051",
+    "graph_path": "dataset/analogies/051.pt",
+    "status": "ok",
+    "labelled_supernodes": 10,
+    "num_supernodes": 14,
+    "labeled_summary_graph_path": "labeled_summary/entmax/alpha_0.50/node_0.02/051_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "entmax",
+    "graph_file": "061.pt",
+    "graph_stem": "061",
+    "graph_path": "dataset/analogies/061.pt",
+    "status": "ok",
+    "labelled_supernodes": 15,
+    "num_supernodes": 19,
+    "labeled_summary_graph_path": "labeled_summary/entmax/alpha_0.50/node_0.02/061_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "entmax",
+    "graph_file": "071.pt",
+    "graph_stem": "071",
+    "graph_path": "dataset/analogies/071.pt",
+    "status": "ok",
+    "labelled_supernodes": 14,
+    "num_supernodes": 16,
+    "labeled_summary_graph_path": "labeled_summary/entmax/alpha_0.50/node_0.02/071_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "entmax",
+    "graph_file": "081.pt",
+    "graph_stem": "081",
+    "graph_path": "dataset/analogies/081.pt",
+    "status": "ok",
+    "labelled_supernodes": 12,
+    "num_supernodes": 16,
+    "labeled_summary_graph_path": "labeled_summary/entmax/alpha_0.50/node_0.02/081_labeled_summary_graph.pt"
+  },
+  {
+    "normalization": "entmax",
+    "graph_file": "091.pt",
+    "graph_stem": "091",
+    "graph_path": "dataset/analogies/091.pt",
+    "status": "ok",
+    "labelled_supernodes": 13,
+    "num_supernodes": 15,
+    "labeled_summary_graph_path": "labeled_summary/entmax/alpha_0.50/node_0.02/091_labeled_summary_graph.pt"
+  }
+]
