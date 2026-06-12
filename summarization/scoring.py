@@ -8,7 +8,7 @@ import torch
 from sklearn.metrics import silhouette_score
 
 from summarization.prune import PruneGraph
-from summarization.summarize import Supernode, SummaryGraph
+from summarization.summarize import Supernode, SummaryGraph, compute_sn_adj
 from summarization.utils import node_is_fixed, node_is_logit
 
 def compute_L_atom(
@@ -75,6 +75,36 @@ def compute_L_causal(sng: SummaryGraph) -> float:
         internal_mag += float(np.abs(block).sum())
     return internal_mag / total_mag
 
+
+def compute_edge_mass_metrics(sng: SummaryGraph) -> dict[str, float | int]:
+    """Mass accounting for summary-graph construction.
+
+    ``compute_sn_adj`` gives the raw external block-sum after clustering but before
+    π force-DAG construction. ``sng.adj_matrix`` is the final DAG adjacency after
+    antiparallel collapse and back-edge removal.
+    """
+    total_fine_edge_mass = float(np.abs(sng.pruned_adj.detach().cpu().numpy()).sum())
+    index_lists = [[n.node_idx for n in sn.features if n.node_idx >= 0] for sn in sng.supernodes]
+    raw_adj = compute_sn_adj(index_lists, sng.pruned_adj)
+    raw_superedge_mass = float(np.abs(raw_adj).sum())
+    final_superedge_mass = float(np.abs(sng.adj_matrix).sum())
+    dag_removed_mass = max(raw_superedge_mass - final_superedge_mass, 0.0)
+    dag_removed_mass_fraction = (
+        dag_removed_mass / raw_superedge_mass if raw_superedge_mass > 1e-12 else 0.0
+    )
+    final_retained_mass_fraction = (
+        final_superedge_mass / total_fine_edge_mass if total_fine_edge_mass > 1e-12 else 0.0
+    )
+    return {
+        "total_fine_edge_mass": total_fine_edge_mass,
+        "raw_superedge_mass": raw_superedge_mass,
+        "final_superedge_mass": final_superedge_mass,
+        "dag_removed_mass": dag_removed_mass,
+        "dag_removed_mass_fraction": dag_removed_mass_fraction,
+        "final_retained_mass_fraction": final_retained_mass_fraction,
+        "n_superedges": int(np.count_nonzero(np.abs(sng.adj_matrix) > 0.0)),
+    }
+
 def _supernode_labels_for_middle(
     sng: SummaryGraph,
     middle_node_id_to_local: dict[str, int],
@@ -117,6 +147,7 @@ def compute_L(
     labels = _supernode_labels_for_middle(sng, middle_node_id_to_local, n_middle)
     atom = compute_L_atom(role_vectors_middle, labels)
     causal = compute_L_causal(sng)
+    edge_mass = compute_edge_mass_metrics(sng)
     n_feature_sn = sum(1 for sn in sng.supernodes if sn.type in ("features", "feature"))
     L = (atom["L_atom_norm"] + lambda_causal * causal) / (1.0 + lambda_causal)
     return {
@@ -124,6 +155,8 @@ def compute_L(
         "L_atom": float(atom["L_atom"]),
         "L_atom_norm": float(atom["L_atom_norm"]),
         "L_causal": float(causal),
+        "internalized_mass_fraction": float(causal),
+        **edge_mass,
         "prune_loss": float(prune_loss),
         "K": int(n_feature_sn),
         "n_supernodes": int(len(sng.supernodes)),

@@ -242,6 +242,45 @@ def test_compute_L_causal_zero_for_all_singletons() -> None:
     assert compute_L_causal(sng) == pytest.approx(0.0)
 
 
+def test_edge_mass_metrics_report_dag_loss_for_cycle() -> None:
+    from summarization.scoring import compute_edge_mass_metrics
+
+    a = Supernode("A", [_feat_node("a", 0, layer=5)], "features", 5, 5)
+    b = Supernode("B", [_feat_node("b", 1, layer=5)], "features", 5, 5)
+    c = Supernode("C", [_feat_node("c", 2, layer=5)], "features", 5, 5)
+    block = np.zeros((3, 3))
+    block[1, 0] = 1.0
+    block[2, 1] = 1.0
+    block[0, 2] = 1.0
+    sng = _sng_from_blocks([a, b, c], block)
+
+    metrics = compute_edge_mass_metrics(sng)
+
+    assert metrics["raw_superedge_mass"] == pytest.approx(3.0)
+    assert metrics["final_superedge_mass"] == pytest.approx(2.0)
+    assert metrics["dag_removed_mass_fraction"] == pytest.approx(1.0 / 3.0)
+    assert metrics["final_retained_mass_fraction"] == pytest.approx(2.0 / 3.0)
+
+
+def test_edge_mass_metrics_zero_dag_loss_for_acyclic_input() -> None:
+    from summarization.scoring import compute_edge_mass_metrics
+
+    a = Supernode("A", [_feat_node("a", 0, layer=1)], "features", 1, 1)
+    b = Supernode("B", [_feat_node("b", 1, layer=2)], "features", 2, 2)
+    c = Supernode("C", [_feat_node("c", 2, layer=3)], "features", 3, 3)
+    block = np.zeros((3, 3))
+    block[1, 0] = 1.5
+    block[2, 1] = 2.5
+    block[2, 0] = 0.5
+    sng = _sng_from_blocks([a, b, c], block)
+
+    metrics = compute_edge_mass_metrics(sng)
+
+    assert metrics["raw_superedge_mass"] == pytest.approx(4.5)
+    assert metrics["final_superedge_mass"] == pytest.approx(4.5)
+    assert metrics["dag_removed_mass_fraction"] == pytest.approx(0.0)
+
+
 # --- Plain block-sum sanity --------------------------------------------------
 
 

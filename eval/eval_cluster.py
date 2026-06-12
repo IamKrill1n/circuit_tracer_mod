@@ -4,12 +4,10 @@ import argparse
 import csv
 import json
 import logging
-import math
 import re
 from pathlib import Path
-from typing import Any, Callable, Literal, Sequence
+from typing import Any, Callable, Sequence
 
-import networkx as nx
 import numpy as np
 import torch
 from sklearn.cluster import KMeans, SpectralClustering
@@ -17,22 +15,23 @@ from sklearn.cluster import KMeans, SpectralClustering
 from eval.eval_prune import compute_prune_loss
 from summarization.attr_graph import AttrGraph
 from summarization.cluster import (
-    cluster_graph_spectral,
     clusters_to_supernodes,
     compute_phi_vectors,
-    eigengap_analysis,
     labels_to_supernodes,
 )
-from summarization.scoring import _cosine_similarity, compute_L
+from summarization.ilp_cluster import (
+    DEFAULT_EPS_CAUSAL,
+    DEFAULT_MAX_SN,
+    DEFAULT_THETA,
+    DEFAULT_TIME_LIMIT,
+    cluster_graph_ilp,
+)
+from summarization.scoring import _cosine_similarity, compute_L, silhouette_from_features
 from summarization.prune import PruneGraph, load_prune_graph
 from summarization.summarize import SummaryGraph
 from summarization.utils import node_is_fixed
 
 logger = logging.getLogger(__name__)
-
-METHOD_GRID_DECAY: list[dict[str, float]] = [
-    {"decay_rate": i / 10.0} for i in range(11)
-]
 
 _NORM_TOKENS = {"softmax", "entmax", "sparsemax", "entmax15"}
 
@@ -43,17 +42,22 @@ SUMMARY_COLUMNS = [
     "token_normalization",
     "num_nodes",
     "solver",
-    "decay_rate",
-    "best_k",
-    "k_candidates",
+    "matched_k",
     "n_supernodes",
+    "n_superedges",
     "L",
     "L_atom",
     "L_atom_norm",
+    "sil_raw",
+    "sil_norm",
     "L_causal",
+    "internalized_mass_fraction",
+    "dag_removed_mass_fraction",
+    "final_retained_mass_fraction",
+    "raw_superedge_mass",
+    "final_superedge_mass",
+    "total_fine_edge_mass",
     "prune_loss",
-    "sweep_path",
-    "best_dir",
     "supernode_map_path",
     "result_path",
 ]
@@ -353,9 +357,10 @@ def _spectral_cosine_middle_labels(
     )
 
 
-def _modularity_middle_labels(adjacency_mid: np.ndarray, target_k: int) -> np.ndarray:
-    """K-matched modularity baseline via networkx.greedy_modularity_communities(best_n=K)."""
-    n = adjacency_mid.shape[0]
+def _spectral_affinity_middle_labels(
+    affinity: np.ndarray, target_k: int, random_state: int, n_init: int
+) -> np.ndarray:
+    n = affinity.shape[0]
     if n == 0:
         return np.array([], dtype=np.int64)
     k = max(1, min(target_k, n))
@@ -363,29 +368,46 @@ def _modularity_middle_labels(adjacency_mid: np.ndarray, target_k: int) -> np.nd
         return np.zeros(n, dtype=np.int64)
     if k == n:
         return np.arange(n, dtype=np.int64)
-    graph = nx.from_numpy_array(adjacency_mid)
-    communities = nx.community.greedy_modularity_communities(
-        graph, weight="weight", best_n=k
+    safe_affinity = np.asarray(affinity, dtype=np.float64)
+    safe_affinity = np.clip((safe_affinity + safe_affinity.T) / 2.0, 0.0, None)
+    np.fill_diagonal(safe_affinity, 1.0)
+    return (
+        SpectralClustering(
+            n_clusters=k,
+            affinity="precomputed",
+            assign_labels="kmeans",
+            random_state=random_state,
+            n_init=n_init,  # type: ignore[arg-type]
+        )
+        .fit_predict(safe_affinity)
+        .astype(np.int64)
     )
-    labels = np.zeros(n, dtype=np.int64)
-    for label, community in enumerate(communities):
-        for idx in community:
-            labels[int(idx)] = int(label)
+
+
+def _random_same_size_middle_labels(
+    cluster_sizes: list[int],
+    target_k: int,
+    n_middle: int,
+    random_state: int,
+) -> np.ndarray:
+    if n_middle == 0:
+        return np.array([], dtype=np.int64)
+    k = max(1, min(target_k, n_middle))
+    if k == 1:
+        return np.zeros(n_middle, dtype=np.int64)
+    rng = np.random.default_rng(random_state)
+    order = rng.permutation(n_middle)
+    sizes = [size for size in cluster_sizes if size > 0]
+    if sum(sizes) != n_middle or len(sizes) != k:
+        sizes = [n_middle // k] * k
+        for i in range(n_middle % k):
+            sizes[i] += 1
+    labels = np.empty(n_middle, dtype=np.int64)
+    start = 0
+    for label, size in enumerate(sizes):
+        labels[order[start : start + size]] = label
+        start += size
     return labels
-
-
-def _build_k_candidates(prune_graph: PruneGraph, sim_phi: np.ndarray) -> list[int]:
-    """Eigengap-bounded K range on the symmetrized phi similarity. Shared by all solvers."""
-    n_middle = len(_middle_indices(prune_graph))
-    if n_middle < 3:
-        return [max(1, n_middle)]
-    eg = eigengap_analysis(sim_phi, prune_graph, max_k=min(20, n_middle - 1))
-    k_min_raw, k_max_raw = eg["search_range"]
-    k_min = max(2, int(k_min_raw))
-    k_max = min(n_middle, int(k_max_raw))
-    if k_min > k_max:
-        k_min = k_max
-    return list(range(k_min, k_max + 1))
 
 
 def _write_summary_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -397,7 +419,7 @@ def _write_summary_csv(path: Path, rows: list[dict[str, Any]]) -> None:
             writer.writerow({column: row.get(column, "") for column in SUMMARY_COLUMNS})
 
 
-def _evaluate_solver(
+def _evaluate_partition(
     *,
     prune_graph: PruneGraph,
     graph_path: Path,
@@ -406,83 +428,47 @@ def _evaluate_solver(
     token_normalization: str,
     output_dir: Path,
     solver: str,
-    clusterer_factory: Callable[..., Callable[[int], list[list[str]]]],
-    hyperparam_grid: list[dict[str, Any]],
-    k_candidates: list[int],
+    clusters: list[list[str]],
+    matched_k: int,
+    role_vectors_all: np.ndarray,
     role_vectors_middle: np.ndarray,
     middle_id_to_local: dict[str, int],
     num_nodes: int,
     prune_loss: float,
     lambda_causal: float,
-    enforce_dag: bool,
 ) -> dict[str, Any]:
-    """Full hyperparameter × K sweep; pick argmin(L) and write artifacts."""
-    sweep: list[dict[str, Any]] = []
-    best: dict[str, Any] | None = None
-    best_supernode_map: dict[str, list[str]] | None = None
-
-    grid = hyperparam_grid or [{}]
-    for hp in grid:
-        try:
-            clusterer = clusterer_factory(**hp)
-        except Exception as exc:
-            logger.warning("Factory %s failed for %s: %s", solver, hp, exc)
-            continue
-        for target_k in k_candidates:
-            try:
-                clusters = clusterer(target_k)
-                rows = clusters_to_supernodes(
-                    prune_graph, clusters, enforce_dag=enforce_dag
-                )
-                sng = SummaryGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
-                metrics = compute_L(
-                    sng,
-                    role_vectors_middle,
-                    middle_id_to_local,
-                    prune_loss=prune_loss,
-                    lambda_causal=lambda_causal,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "%s failed at K=%d hp=%s: %s", solver, target_k, hp, exc
-                )
-                continue
-            record = {**hp, "K": int(target_k), **metrics}
-            sweep.append(record)
-            if best is None or record["L"] < best["L"]:
-                best = record
-                best_supernode_map = {sn.name: sn.member_node_ids() for sn in rows}
-
+    rows = clusters_to_supernodes(prune_graph, clusters)
+    sng = SummaryGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
+    metrics = compute_L(
+        sng,
+        role_vectors_middle,
+        middle_id_to_local,
+        prune_loss=prune_loss,
+        lambda_causal=lambda_causal,
+    )
+    sil_raw, sil_norm = silhouette_from_features(role_vectors_all, prune_graph, rows)
+    metrics = {
+        **metrics,
+        "sil_raw": float(sil_raw),
+        "sil_norm": float(sil_norm),
+    }
+    supernode_map = {sn.name: sn.member_node_ids() for sn in rows}
     run_dir = output_dir / "runs" / graph_name / solver
-    sweep_path = run_dir / "sweep.json"
-    best_dir = run_dir / "best"
-    supernode_map_path = best_dir / "supernode_map.json"
-    result_path = best_dir / "result.json"
+    supernode_map_path = run_dir / "supernode_map.json"
+    result_path = run_dir / "result.json"
 
+    _write_json(supernode_map_path, supernode_map)
     _write_json(
-        sweep_path,
+        result_path,
         {
             "solver": solver,
             "graph_name": graph_name,
-            "k_candidates": list(map(int, k_candidates)),
-            "hyperparam_grid": hyperparam_grid,
-            "best": best,
-            "sweep": sweep,
+            "graph_path": str(graph_path),
+            "matched_k": int(matched_k),
+            "metrics": metrics,
+            "supernode_map_path": str(supernode_map_path),
         },
     )
-
-    if best is not None and best_supernode_map is not None:
-        _write_json(supernode_map_path, best_supernode_map)
-        _write_json(
-            result_path,
-            {
-                "solver": solver,
-                "graph_name": graph_name,
-                "graph_path": str(graph_path),
-                "best": best,
-                "supernode_map_path": str(supernode_map_path),
-            },
-        )
 
     summary: dict[str, Any] = {
         "graph_name": graph_name,
@@ -491,19 +477,10 @@ def _evaluate_solver(
         "token_normalization": token_normalization,
         "num_nodes": num_nodes,
         "solver": solver,
-        "decay_rate": best.get("decay_rate") if best else "",
-        "best_k": best.get("K") if best else "",
-        "k_candidates": json.dumps(list(map(int, k_candidates))),
-        "n_supernodes": best.get("n_supernodes") if best else "",
-        "L": best.get("L") if best else math.nan,
-        "L_atom": best.get("L_atom") if best else math.nan,
-        "L_atom_norm": best.get("L_atom_norm") if best else math.nan,
-        "L_causal": best.get("L_causal") if best else math.nan,
-        "prune_loss": best.get("prune_loss") if best else math.nan,
-        "sweep_path": str(sweep_path),
-        "best_dir": str(best_dir),
-        "supernode_map_path": str(supernode_map_path) if best is not None else "",
-        "result_path": str(result_path) if best is not None else "",
+        "matched_k": int(matched_k),
+        "supernode_map_path": str(supernode_map_path),
+        "result_path": str(result_path),
+        **metrics,
     }
     return summary
 
@@ -515,12 +492,15 @@ def evaluate_prune_graph(
     output_dir: Path,
     map_location: str,
     max_layer_span: int,
+    ilp_theta: float | str,
+    ilp_eps_causal: float | None,
+    ilp_max_sn: int | None,
+    ilp_time_limit: float,
     random_state: int,
     n_init: int,
-    enforce_dag: bool,
     lambda_causal: float,
 ) -> list[dict[str, Any]]:
-    """Evaluate all 6 solvers on a single prune graph; return one summary row per solver."""
+    """Evaluate ILP and K-matched baselines on a single prune graph."""
     prune_graph = load_prune_graph(str(graph_path), map_location=map_location)
     graph_name, dataset = _graph_identity(graph_path, input_paths)
     token_normalization = _token_normalization_from_path(graph_path)
@@ -531,12 +511,9 @@ def evaluate_prune_graph(
     num_nodes = len(mid_idx)
 
     phi = compute_phi_vectors(prune_graph).detach().cpu().numpy()
-    sim_phi = _cosine_similarity(phi, nonnegative=True)
     role_vectors_middle = phi[mid_idx]
     phi_mid = role_vectors_middle  # same array, distinct name for baseline clustering input
     adjacency_mid = _adjacency_affinity(prune_graph)[np.ix_(mid_idx, mid_idx)]
-
-    k_candidates = _build_k_candidates(prune_graph, sim_phi)
 
     prune_loss = _compute_prune_loss_for_graph(
         graph_path=graph_path,
@@ -545,79 +522,74 @@ def evaluate_prune_graph(
     )
 
     logger.info(
-        "  %s | dataset=%s norm=%s n_middle=%d k_candidates=%s prune_loss=%.4f",
+        "  %s | dataset=%s norm=%s n_middle=%d prune_loss=%.4f",
         graph_name,
         dataset,
         token_normalization,
         num_nodes,
-        k_candidates,
         prune_loss,
     )
 
-    def make_ours_spectral_factory(mean_method: Literal["geo", "harm", "arith"]):
-        def factory(*, decay_rate: float) -> Callable[[int], list[list[str]]]:
-            dr = float(decay_rate)
+    ilp_clusters = cluster_graph_ilp(
+        prune_graph,
+        theta=ilp_theta,
+        eps_causal=ilp_eps_causal,
+        max_sn=ilp_max_sn,
+        max_layer_span=max_layer_span,
+        time_limit=ilp_time_limit,
+    )
+    ilp_feature_clusters = [
+        cluster
+        for cluster in ilp_clusters
+        if cluster and cluster[0] in middle_id_to_local
+    ]
+    matched_k = len(ilp_feature_clusters)
+    ilp_cluster_sizes = [len(cluster) for cluster in ilp_feature_clusters]
 
-            def clusterer(target_k: int) -> list[list[str]]:
-                # DAG enforcement happens uniformly at clusters_to_supernodes for all solvers.
-                return cluster_graph_spectral(
-                    prune_graph,
-                    target_k=target_k,
-                    max_layer_span=max_layer_span,
-                    mean_method=mean_method,
-                    decay_rate=dr,
-                    enforce_dag=False,
-                    random_state=random_state,
-                    n_init=n_init,
+    logger.info("  matched_k from ILP: %d", matched_k)
+
+    def baseline_from_labels(labels: np.ndarray) -> list[list[str]]:
+        return labels_to_supernodes(prune_graph, middle_ids, labels)
+
+    baseline_builders: list[tuple[str, Callable[[], list[list[str]]]]] = [
+        ("ours-ilp", lambda: ilp_clusters),
+        (
+            "baseline-spectral-cosine",
+            lambda: baseline_from_labels(
+                _spectral_cosine_middle_labels(phi_mid, matched_k, random_state, n_init)
+            ),
+        ),
+        (
+            "baseline-kmeans",
+            lambda: baseline_from_labels(
+                _kmeans_middle_labels(phi_mid, matched_k, random_state, n_init)
+            ),
+        ),
+        (
+            "baseline-spectral-adj",
+            lambda: baseline_from_labels(
+                _spectral_affinity_middle_labels(adjacency_mid, matched_k, random_state, n_init)
+            ),
+        ),
+        (
+            "baseline-random-same-size",
+            lambda: baseline_from_labels(
+                _random_same_size_middle_labels(
+                    ilp_cluster_sizes,
+                    matched_k,
+                    len(middle_ids),
+                    random_state,
                 )
-
-            return clusterer
-
-        return factory
-
-    def make_modularity() -> Callable[[int], list[list[str]]]:
-        def clusterer(target_k: int) -> list[list[str]]:
-            return labels_to_supernodes(
-                prune_graph,
-                middle_ids,
-                _modularity_middle_labels(adjacency_mid, target_k),
-            )
-
-        return clusterer
-
-    def make_spectral_cosine() -> Callable[[int], list[list[str]]]:
-        def clusterer(target_k: int) -> list[list[str]]:
-            return labels_to_supernodes(
-                prune_graph,
-                middle_ids,
-                _spectral_cosine_middle_labels(phi_mid, target_k, random_state, n_init),
-            )
-
-        return clusterer
-
-    def make_kmeans() -> Callable[[int], list[list[str]]]:
-        def clusterer(target_k: int) -> list[list[str]]:
-            return labels_to_supernodes(
-                prune_graph,
-                middle_ids,
-                _kmeans_middle_labels(phi_mid, target_k, random_state, n_init),
-            )
-
-        return clusterer
+            ),
+        ),
+    ]
 
     rows: list[dict[str, Any]] = []
-    solver_specs: list[tuple[str, Callable[..., Any], list[dict[str, Any]]]] = [
-        ("ours-spectral-arith", make_ours_spectral_factory("arith"), METHOD_GRID_DECAY),
-        ("ours-spectral-harm",  make_ours_spectral_factory("harm"),  METHOD_GRID_DECAY),
-        ("ours-spectral-geo",   make_ours_spectral_factory("geo"),   METHOD_GRID_DECAY),
-        ("baseline-modularity", make_modularity, []),
-        ("baseline-spectral-cosine", make_spectral_cosine, []),
-        ("baseline-kmeans", make_kmeans, []),
-    ]
-    for solver_name, factory, grid in solver_specs:
+    for solver_name, build_clusters in baseline_builders:
         logger.info("  solving %s ...", solver_name)
+        clusters = build_clusters()
         rows.append(
-            _evaluate_solver(
+            _evaluate_partition(
                 prune_graph=prune_graph,
                 graph_path=graph_path,
                 graph_name=graph_name,
@@ -625,15 +597,14 @@ def evaluate_prune_graph(
                 token_normalization=token_normalization,
                 output_dir=output_dir,
                 solver=solver_name,
-                clusterer_factory=factory,
-                hyperparam_grid=grid,
-                k_candidates=k_candidates,
+                clusters=clusters,
+                matched_k=matched_k,
+                role_vectors_all=phi,
                 role_vectors_middle=role_vectors_middle,
                 middle_id_to_local=middle_id_to_local,
                 num_nodes=num_nodes,
                 prune_loss=prune_loss,
                 lambda_causal=lambda_causal,
-                enforce_dag=enforce_dag,
             )
         )
     return rows
@@ -645,9 +616,16 @@ def _validate_lambda_causal(lambda_causal: float) -> float:
     return lambda_causal
 
 
+def _parse_ilp_theta(raw: str) -> float | str:
+    if raw.startswith("p"):
+        return raw
+    return float(raw)
+
+
 def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = Path(args.output_dir).expanduser().resolve()
     lambda_causal = _validate_lambda_causal(args.lambda_causal)
+    args.ilp_theta = _parse_ilp_theta(str(args.ilp_theta))
     graph_paths = _discover_prune_graphs(
         args.input_path,
         node_threshold=args.node_threshold,
@@ -673,9 +651,12 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 output_dir=output_dir,
                 map_location=args.map_location,
                 max_layer_span=args.max_layer_span,
+                ilp_theta=args.ilp_theta,
+                ilp_eps_causal=args.ilp_eps_causal,
+                ilp_max_sn=args.ilp_max_sn,
+                ilp_time_limit=args.ilp_time_limit,
                 random_state=args.random_state,
                 n_init=args.n_init,
-                enforce_dag=args.enforce_dag,
                 lambda_causal=lambda_causal,
             )
         )
@@ -701,29 +682,26 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             "graph_paths": [str(path) for path in graph_paths],
             "output_dir": str(output_dir),
             "objective": (
-                "L = (L_atom_norm + lambda_causal * L_causal) / (1 + lambda_causal), the "
-                "Stage-2 objective L_atom + lambda_causal * L_causal (Methodology Eq. "
-                "Lstage2) rescaled to [0, 1] with the normalised atomicity term. "
-                "prune_loss = 1 - flow_completeness is reported alongside but NOT folded "
-                "into L; complexity K is a hard constraint, not a loss term."
+                "Matched-K ILP cluster evaluation. L = (L_atom_norm + lambda_causal "
+                "* L_causal) / (1 + lambda_causal), where L_causal is the fraction "
+                "of fine edge mass internalized inside feature supernodes. Additional "
+                "mass metrics report raw external superedge mass, final DAG-retained "
+                "mass, and mass removed by π DAG construction."
             ),
             "selection_protocol": (
-                "Each solver sweeps its hyperparameter grid x the shared "
-                "eigengap-bounded K candidate set; the (config, K) minimizing "
-                "L is reported as that solver's row. K candidates come from "
-                "auto_grouping.eigengap_analysis on the symmetrized phi cosine."
+                "ILP runs once per graph. Baselines run at the ILP's actual number "
+                "of feature supernodes, using the same fixed-node singleton policy "
+                "and the same SummaryGraph π DAG construction."
             ),
-            "method_grid": METHOD_GRID_DECAY,
             "lambdas": {
                 "lambda_causal": lambda_causal,
             },
             "solvers": [
-                "ours-spectral-arith",
-                "ours-spectral-harm",
-                "ours-spectral-geo",
-                "baseline-modularity",
+                "ours-ilp",
                 "baseline-spectral-cosine",
                 "baseline-kmeans",
+                "baseline-spectral-adj",
+                "baseline-random-same-size",
             ],
             "summary_csv": str(summary_path),
             "results_json": str(results_path),
@@ -732,7 +710,10 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             "config": {
                 "node_threshold": args.node_threshold,
                 "max_layer_span": args.max_layer_span,
-                "enforce_dag": args.enforce_dag,
+                "ilp_theta": args.ilp_theta,
+                "ilp_eps_causal": args.ilp_eps_causal,
+                "ilp_max_sn": args.ilp_max_sn,
+                "ilp_time_limit": args.ilp_time_limit,
                 "map_location": args.map_location,
                 "random_state": args.random_state,
                 "n_init": args.n_init,
@@ -755,8 +736,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Evaluate clustering solvers on saved prune-graph .pt files under the "
-            "Stage-2 objective L = L_atom + lambda_causal * L_causal (Methodology "
-            "Eq. Lstage2), with complexity K as a hard constraint."
+            "matched-K ILP protocol, reporting role-vector silhouette, internalized "
+            "edge mass, and DAG-construction mass loss."
         )
     )
     parser.add_argument(
@@ -788,12 +769,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-layer-span", type=int, default=4)
     parser.add_argument(
+        "--ilp-theta",
+        type=str,
+        default=DEFAULT_THETA,
+        help="ILP cosine resolution threshold. Use a float or percentile string like p65.",
+    )
+    parser.add_argument(
+        "--ilp-eps-causal",
+        type=float,
+        default=DEFAULT_EPS_CAUSAL,
+        help="ILP hard budget on internalized causal mass fraction. Use default p65 setup.",
+    )
+    parser.add_argument(
+        "--ilp-max-sn",
+        type=int,
+        default=DEFAULT_MAX_SN,
+        help="Maximum number of ILP feature supernodes.",
+    )
+    parser.add_argument(
+        "--ilp-time-limit",
+        type=float,
+        default=DEFAULT_TIME_LIMIT,
+        help="HiGHS ILP time limit in seconds per graph.",
+    )
+    parser.add_argument(
         "--enforce-dag",
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Apply DAG constraints in our spectral clustering. "
-            "Default on (matches prior hardcoded eval). Use --no-enforce-dag to disable."
+            "Deprecated no-op. SummaryGraph always applies π DAG construction uniformly "
+            "for every solver."
         ),
     )
     parser.add_argument("--random-state", type=int, default=42)
@@ -820,8 +825,7 @@ def main() -> None:
     if not args.input_path:
         args.input_path = _default_input_paths()
     logger.info(
-        "=== Clustering evaluation (L = L_atom + lambda_causal * L_causal; "
-        "per-solver best) ==="
+        "=== Clustering evaluation (ILP matched-K baselines; edge-mass metrics) ==="
     )
     result = run_evaluation(args)
     logger.info("output_dir: %s", result["output_dir"])

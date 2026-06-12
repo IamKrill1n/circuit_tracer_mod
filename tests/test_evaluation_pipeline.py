@@ -61,6 +61,10 @@ def test_evaluation_pipeline_writes_summary_and_runs_all_solvers(tmp_path) -> No
         node_threshold=None,
         max_layer_span=4,
         enforce_dag=False,
+        ilp_theta="p65",
+        ilp_eps_causal=0.05,
+        ilp_max_sn=20,
+        ilp_time_limit=30.0,
         random_state=42,
         n_init=5,
         lambda_causal=1.0,
@@ -69,26 +73,36 @@ def test_evaluation_pipeline_writes_summary_and_runs_all_solvers(tmp_path) -> No
     result = run_evaluation(args)
 
     assert result["n_graphs"] == 1
-    assert result["n_runs"] == 6  # six solvers per graph
+    assert result["n_runs"] == 5  # ILP plus four matched-K baselines
     assert (output_dir / "summary.csv").exists()
     assert (output_dir / "results.json").exists()
     assert (output_dir / "manifest.json").exists()
 
     rows = json.loads((output_dir / "results.json").read_text(encoding="utf-8"))
-    assert len(rows) == 6
+    assert len(rows) == 5
     solvers = {row["solver"] for row in rows}
     assert {
-        "ours-spectral-arith",
-        "ours-spectral-harm",
-        "ours-spectral-geo",
-        "baseline-modularity",
+        "ours-ilp",
         "baseline-spectral-cosine",
         "baseline-kmeans",
+        "baseline-spectral-adj",
+        "baseline-random-same-size",
     } <= solvers
 
     for row in rows:
         # Every solver row should carry the Stage-2 objective terms from scoring.py.
-        for key in ("L", "L_atom", "L_atom_norm", "L_causal", "prune_loss"):
+        for key in (
+            "matched_k",
+            "L",
+            "L_atom",
+            "L_atom_norm",
+            "sil_norm",
+            "L_causal",
+            "internalized_mass_fraction",
+            "dag_removed_mass_fraction",
+            "final_retained_mass_fraction",
+            "prune_loss",
+        ):
             assert key in row, f"missing {key} in solver row {row.get('solver')}"
         assert row["result_path"]
 
