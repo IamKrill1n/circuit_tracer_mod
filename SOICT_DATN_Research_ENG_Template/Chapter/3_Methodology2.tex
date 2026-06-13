@@ -170,8 +170,8 @@ activation frequency below 0.002\% or above 10\%.
 
 \subsection{Clustering}
 \label{sec:stage2}
-The clustering stage is formulated as a mixed-integer linear programming (MILP)
-model over the retained feature nodes. The model decides which pairs of features
+The clustering stage is formulated as a binary integer linear program (ILP)
+over the retained feature nodes. The program decides which pairs of features
 belong to the same supernode, while embedding and logit nodes are kept outside the
 optimization as singleton supernodes. This formulation makes the design explicit:
 the objective rewards grouping features with similar signed causal roles, and the
@@ -198,8 +198,8 @@ influence $u$, weighted by the relevance of those sources. The coordinates keep
 the sign of $W$, so features that affect the same targets with opposite signs have
 opposing role vectors rather than appearing similar.
 
-\paragraph{MILP data.}
-The MILP is built from pairwise constants computed before optimization. The signed
+\paragraph{ILP data.}
+The ILP is built from pairwise constants computed before optimization. The signed
 role similarity between two retained features is
 \begin{equation}
 s_{ij} =
@@ -210,8 +210,8 @@ s_{ij} =
 \end{equation}
 A resolution threshold $\theta$ converts this similarity into a linear merge cost
 $c^{\text{atom}}_{ij} = \theta - s_{ij}$. If $s_{ij} > \theta$, then
-$c^{\text{atom}}_{ij} < 0$ and the MILP is rewarded for merging the pair; if
-$s_{ij} < \theta$, then $c^{\text{atom}}_{ij} > 0$ and the MILP is penalized for
+$c^{\text{atom}}_{ij} < 0$ and the ILP is rewarded for merging the pair; if
+$s_{ij} < \theta$, then $c^{\text{atom}}_{ij} > 0$ and the ILP is penalized for
 merging the pair. The implementation may use a fixed value such as $\theta = 0$ or
 an adaptive percentile rule such as \texttt{p65}.
 
@@ -238,7 +238,7 @@ constant $\Delta_{\max}$ defines the allowed-pair set
 Pairs outside $\mathcal{P}$ are not allowed to share a supernode.
 
 \paragraph{Decision variables.}
-The MILP uses binary pair variables
+The ILP uses binary pair variables
 \begin{equation}
 x_{ij} \in \{0,1\},
 \qquad (i,j) \in \mathcal{P},
@@ -255,7 +255,7 @@ r_i \in \{0,1\},
 where $r_i=1$ means that $i$ is the lowest-indexed feature in its supernode. The
 number of feature supernodes is therefore $K_F = \sum_{i\in F} r_i$.
 
-\paragraph{MILP objective.}
+\paragraph{ILP objective.}
 The objective minimizes the signed-cosine atomicity loss:
 \begin{equation}
 \min_{x,r}
@@ -284,7 +284,7 @@ x_{ik} + x_{jk} - x_{ij} \le 1,
 whenever the corresponding pair variables are present. If one pair is outside
 $\mathcal{P}$, the same rule becomes a layer-span exclusion; for example, if
 $(i,k)\notin\mathcal{P}$, then $x_{ij}+x_{jk}\le 1$. These constraints prevent the
-MILP from assigning $i$ with $j$ and $j$ with $k$ while keeping $i$ and $k$ in
+ILP from assigning $i$ with $j$ and $j$ with $k$ while keeping $i$ and $k$ in
 different supernodes.
 
 \paragraph{Representative constraints.}
@@ -326,7 +326,7 @@ summary readable by bounding the number of feature supernodes before embedding a
 logit singleton supernodes are added back.
 
 \paragraph{Cluster recovery.}
-After the MILP is solved, the feature partition is recovered from the selected
+After the ILP is solved, the feature partition is recovered from the selected
 pair variables: all pairs with $x_{ij}=1$ are joined, and the connected components
 under these joins become feature supernodes. The transitivity constraints ensure
 that these components define a valid partition. Embedding and logit nodes are then
@@ -401,8 +401,8 @@ three-stage method. The input is a signed directed acyclic attribution graph, an
 the output is a directed acyclic summary graph whose supernodes partition a
 retained subset of non-error nodes. The method first prunes the attribution graph
 using influence, relevance, and the pruning loss $L_{\text{prune}}$. It then
-clusters retained feature nodes by a MILP whose binary pair variables encode
-same-supernode assignments. The MILP minimizes a signed-cosine atomicity objective
+clusters retained feature nodes by a binary ILP whose pair variables encode
+same-supernode assignments. The ILP minimizes a signed-cosine atomicity objective
 subject to transitivity, representative-counting, causal-information, complexity,
 and layer-span constraints. Finally, it aggregates the clustered graph with
 block-sum edge weights, removes cycles, and labels the resulting supernodes for
