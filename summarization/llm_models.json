@@ -21,12 +21,14 @@
     "provider": "gemini",
     "base_url": null,
     "api_key_env": "GOOGLE_API_KEY",
+    "supports_thinking_budget": true,
     "defaults": {"temperature": 0.2, "thinking_effort": null}
   },
   "gemma-4-31b-it": {
     "provider": "gemini",
     "base_url": null,
     "api_key_env": "GOOGLE_API_KEY",
+    "supports_thinking_budget": true,
     "defaults": {"temperature": 0.2, "thinking_effort": null}
   }
 }

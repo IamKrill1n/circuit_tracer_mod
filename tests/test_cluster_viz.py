@@ -87,3 +87,23 @@ def test_edge_paths_are_complete_within_axis_range() -> None:
         assert max(xs) <= x_max
         assert min(ys) >= y_min
         assert max(ys) <= y_max
+
+
+def test_hover_text_includes_supernode_label_role_and_description() -> None:
+    sng = _summary_graph()
+    sng.supernodes[1].name = "Color relation"
+    sng.supernodes[1].role = "Abstract"
+    sng.supernodes[1].description = "Combines object and color evidence."
+
+    fig = supernode_graph_figure(
+        sng,
+        final_supernodes=sng.to_mapping(),
+        use_supernode_names=True,
+    )
+
+    hover_trace = next(trace for trace in fig.data if getattr(trace, "hovertext", None))
+    hover_text = "<br>".join(str(item) for item in hover_trace.hovertext)
+
+    assert "Label: Color relation" in hover_text
+    assert "Role: Abstract" in hover_text
+    assert "Description: Combines object and color evidence." in hover_text

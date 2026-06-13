@@ -1,12 +1,18 @@
 import json
+import sys
+import types
 
 import torch
 
 from summarization.group_llm import (
     LabelScheme,
+    ModelRoute,
+    ModelSettings,
     _build_feature_block,
     _build_graph_user_message,
     _build_single_supernode_user_message,
+    _gemini_generate,
+    _merge_settings,
     _parse_graph_label_response,
     resolve_model,
 )
@@ -20,6 +26,7 @@ def test_resolve_model_routes_gemini_with_google_api_key(tmp_path, monkeypatch) 
             {
                 "gemini-test": {
                     "provider": "gemini",
+                    "model": "gemini-2.5-flash",
                     "base_url": None,
                     "api_key_env": "GOOGLE_API_KEY",
                     "defaults": {"temperature": 0.2, "thinking_effort": None},
@@ -34,6 +41,118 @@ def test_resolve_model_routes_gemini_with_google_api_key(tmp_path, monkeypatch) 
 
     assert route.provider == "gemini"
     assert route.api_key == "google-key"
+    assert route.supports_thinking_budget
+
+
+def test_resolve_model_allows_registry_to_disable_gemini_thinking_budget(
+    tmp_path, monkeypatch
+) -> None:
+    registry_path = tmp_path / "llm_models.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "gemma-test": {
+                    "provider": "gemini",
+                    "model": "gemma-4-31b-it",
+                    "base_url": None,
+                    "api_key_env": "GOOGLE_API_KEY",
+                    "supports_thinking_budget": False,
+                    "defaults": {"temperature": 0.2, "thinking_effort": "medium"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
+
+    route = resolve_model("gemma-test", registry_path)
+
+    assert route.provider == "gemini"
+    assert not route.supports_thinking_budget
+
+
+def test_merge_settings_can_disable_registry_thinking_default() -> None:
+    defaults = ModelSettings(temperature=1.0, thinking_effort="medium")
+
+    merged = _merge_settings(
+        ModelSettings(temperature=0.2, use_default_thinking_effort=False),
+        defaults,
+    )
+
+    assert merged.temperature == 0.2
+    assert merged.thinking_effort is None
+
+
+def test_gemini_generate_omits_thinking_config_for_unsupported_model(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeThinkingConfig:
+        def __init__(self, thinking_budget: int) -> None:
+            calls["thinking_budget"] = thinking_budget
+
+    class FakeGenerateContentConfig:
+        def __init__(self, **kwargs) -> None:
+            calls["config_kwargs"] = kwargs
+
+    class FakeModels:
+        def generate_content(self, *, model: str, config, contents: str):
+            calls["model"] = model
+            calls["config"] = config
+            calls["contents"] = contents
+            return types.SimpleNamespace(text="ok")
+
+    class FakeClient:
+        def __init__(self, api_key: str) -> None:
+            calls["api_key"] = api_key
+            self.models = FakeModels()
+
+    google_module = types.ModuleType("google")
+    google_module.__path__ = []
+    genai_module = types.ModuleType("google.genai")
+    genai_types_module = types.ModuleType("google.genai.types")
+    genai_errors_module = types.ModuleType("google.genai.errors")
+
+    class FakeClientError(Exception):
+        pass
+
+    class FakeServerError(Exception):
+        pass
+
+    genai_module.Client = FakeClient
+    genai_types_module.GenerateContentConfig = FakeGenerateContentConfig
+    genai_types_module.ThinkingConfig = FakeThinkingConfig
+    genai_errors_module.ClientError = FakeClientError
+    genai_errors_module.ServerError = FakeServerError
+    google_module.genai = genai_module
+    genai_module.types = genai_types_module
+    genai_module.errors = genai_errors_module
+
+    monkeypatch.setitem(sys.modules, "google", google_module)
+    monkeypatch.setitem(sys.modules, "google.genai", genai_module)
+    monkeypatch.setitem(sys.modules, "google.genai.types", genai_types_module)
+    monkeypatch.setitem(sys.modules, "google.genai.errors", genai_errors_module)
+
+    route = ModelRoute(
+        provider="gemini",
+        model="gemma-4-31b-it",
+        base_url=None,
+        api_key="google-key",
+        defaults=ModelSettings(),
+        supports_thinking_budget=False,
+    )
+    settings = ModelSettings(temperature=0.2, thinking_effort="medium")
+
+    text = _gemini_generate(route, settings, "system prompt", "user prompt")
+
+    assert text == "ok"
+    assert calls["api_key"] == "google-key"
+    assert calls["model"] == "gemma-4-31b-it"
+    assert calls["contents"] == "user prompt"
+    assert calls["config_kwargs"] == {
+        "system_instruction": "system prompt",
+        "temperature": 0.2,
+    }
+    assert "thinking_budget" not in calls
 
 
 def test_resolve_model_rejects_unknown_provider(tmp_path) -> None:
@@ -78,9 +197,7 @@ def test_parse_graph_label_response_accepts_prompt_contract() -> None:
 
     labels = _parse_graph_label_response(response)
 
-    assert labels == {
-        0: ("Country token", "Input", "Tracks the country named in the prompt.")
-    }
+    assert labels == {0: ("Country token", "Input", "Tracks the country named in the prompt.")}
 
 
 def test_parse_graph_label_response_keeps_legacy_cluster_fields() -> None:
@@ -151,7 +268,9 @@ def test_graph_user_message_uses_layer_not_feature_ids(monkeypatch) -> None:
         pruned_adj=torch.zeros((2, 2)),
         metadata={"scan": "scan", "prompt": "The capital is", "prompt_tokens": ["The", " capital"]},
     )
-    monkeypatch.setattr("summarization.group_llm._fetch_feature_context", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "summarization.group_llm._fetch_feature_context", lambda *args, **kwargs: None
+    )
 
     user_message, ordered = _build_graph_user_message(sng, " Paris", LabelScheme())
 

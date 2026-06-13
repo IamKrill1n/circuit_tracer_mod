@@ -45,6 +45,7 @@ class ModelSettings:
 
     temperature: float | None = None
     thinking_effort: ThinkingEffort | None = None
+    use_default_thinking_effort: bool = True
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,7 @@ class ModelRoute:
     base_url: str | None
     api_key: str
     defaults: ModelSettings
+    supports_thinking_budget: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +84,14 @@ def _registry_path(registry_path: str | Path | None) -> Path:
 
 def load_registry(registry_path: str | Path | None = None) -> dict[str, dict]:
     return json.loads(_registry_path(registry_path).read_text(encoding="utf-8"))
+
+
+def _default_supports_thinking_budget(provider: Provider, model: str) -> bool:
+    """Infer Gemini thinking-budget support when the registry omits the capability flag."""
+    if provider != "gemini":
+        return False
+    normalized = model.lower().removeprefix("models/")
+    return normalized.startswith("gemini-2.5")
 
 
 def resolve_model(model_name: str, registry_path: str | Path | None = None) -> ModelRoute:
@@ -112,12 +122,20 @@ def resolve_model(model_name: str, registry_path: str | Path | None = None) -> M
     defaults = ModelSettings(
         temperature=d.get("temperature"), thinking_effort=d.get("thinking_effort")
     )
+    wire_model = entry.get("model", model_name)
+    supports_thinking_budget = bool(
+        entry.get(
+            "supports_thinking_budget",
+            _default_supports_thinking_budget(provider, wire_model),
+        )
+    )
     return ModelRoute(
         provider=provider,
-        model=entry.get("model", model_name),
+        model=wire_model,
         base_url=entry.get("base_url"),
         api_key=api_key,
         defaults=defaults,
+        supports_thinking_budget=supports_thinking_budget,
     )
 
 
@@ -125,10 +143,16 @@ def _merge_settings(override: ModelSettings | None, defaults: ModelSettings) -> 
     """settings arg field -> registry default -> hardcoded fallback (see ADR 0002)."""
     o = override or ModelSettings()
     temperature = o.temperature if o.temperature is not None else defaults.temperature
-    thinking = o.thinking_effort if o.thinking_effort is not None else defaults.thinking_effort
+    if o.thinking_effort is not None:
+        thinking = o.thinking_effort
+    elif o.use_default_thinking_effort:
+        thinking = defaults.thinking_effort
+    else:
+        thinking = None
     return ModelSettings(
         temperature=temperature if temperature is not None else _FALLBACK_TEMPERATURE,
         thinking_effort=thinking,
+        use_default_thinking_effort=False,
     )
 
 
@@ -207,7 +231,7 @@ def _gemini_generate(
         "system_instruction": system_prompt,
         "temperature": settings.temperature,
     }
-    if settings.thinking_effort is not None:
+    if settings.thinking_effort is not None and route.supports_thinking_budget:
         budget = _GEMINI_THINKING_BUDGET[settings.thinking_effort]
         config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=budget)
     config = genai_types.GenerateContentConfig(**config_kwargs)
@@ -531,9 +555,7 @@ def _label_two_pass(
 
     # Legacy path: per-supernode feature evidence only.
     for sn_idx, blocks in feature_blocks_by_idx.items():
-        user_message = _build_single_supernode_user_message(
-            metadata, target_token, blocks
-        )
+        user_message = _build_single_supernode_user_message(metadata, target_token, blocks)
         parsed = _parse_single_label_response(
             generate_text(route, settings, system_prompt, user_message)
         )
@@ -593,4 +615,6 @@ if __name__ == "__main__":
     )
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(user_message, encoding="utf-8")
-    print(f"Wrote one-pass user message ({len(ordered_clusters)} clusters) to {OUTPUT_PATH.resolve()}")
+    print(
+        f"Wrote one-pass user message ({len(ordered_clusters)} clusters) to {OUTPUT_PATH.resolve()}"
+    )

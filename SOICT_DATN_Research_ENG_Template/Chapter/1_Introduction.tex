@@ -27,23 +27,21 @@ the model's behaviour.
 \label{sec:giaiphap}
 The circuit-tracing methodology already provides a way to shrink an attribution graph, but
 it relies on human judgment at every step. After building the graph, Ameisen et
-al.~\cite{ameisen2025circuit} prune it by hand, keeping the nodes and edges that account
+al.~\cite{ameisen2025circuit} prune it by keeping the nodes and edges that account
 for most of the influence on the output and discarding the rest, and then group the
-surviving features into \emph{supernodes} by inspection, collecting features that play the
+surviving features into \emph{supernodes} by inpsection, collecting features that play the
 same role into a single labelled unit so the circuit can be drawn as a small diagram. Both
 steps are manual: pruning thresholds are tuned by hand, and grouping a single circuit can
 take hours of expert effort, so the analysis does not scale beyond a handful of prompts.
 
 Related efforts address other parts of the problem but leave the structural reduction open.
-ADAG~\cite{arora2026adag} uses a language model to describe an attribution graph in natural
-language, removing the labelling bottleneck, but it describes a graph whose structure is
-taken as given rather than compressing that structure. Work on circuits in the neuron
+Work on circuits in the neuron
 basis~\cite{arora2026sparse} avoids transcoder training and reconstruction error, yet the
 authors note that the resulting circuits are still too large to read and call for principled
-grouping methods. General graph-summarization objectives, such as causal-DAG
-summarization~\cite{youngmann2025causal}, compress large directed graphs but assume
-unweighted, variable-level causal graphs and carry no notion of faithfulness to an
-underlying network. No existing method produces a compact and faithful structural summary
+grouping methods.
+ADAG~\cite{arora2026adag} addresses this by introducing attribution profiles to quantify the role of 
+neurons in the graph and use spectral clustering to cluster them. This approach does not take account for structral information of the neurons,
+making the clustering less mechanisticly faithful. No existing method produces a compact and faithful structural summary
 of a signed attribution graph by jointly pruning and clustering its feature nodes under an
 explicit faithfulness objective.
 
@@ -70,7 +68,7 @@ graph together with explicit desiderata --- importance retention, atomicity,
 causal-information preservation, and interpretability --- and an objective that makes them
 measurable.
 \item It proposes an automated three-stage pipeline --- pruning, clustering, and
-interpreting --- that solves the problem
+interpreting --- that produces a concise summary graph, which enable researchers to study the 
 \item It evaluates the method on the BATS analogy and multi-hop reasoning datasets,
 showing through steering interventions that the resulting summaries are causally faithful
 and that the supernodes behave as the single mechanisms their labels claim.

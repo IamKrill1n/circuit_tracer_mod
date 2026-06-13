@@ -1,6 +1,6 @@
 """Causal validation of supernode clusters via feature interventions.
 
-For each supernode produced by spectral and agglomerative clustering:
+For each supernode in either a saved summary graph or a clustering rebuilt from a prune graph:
   Exp B: constrained-steer the whole SN (value = factor * orig_activation; factor=-1
          negates, matching the paper; 0 ablates) over the direct-effect window
          [l-below, l+above] (default [l, l+1], paper Fig. 9) -> measure the effect on every other SN
@@ -10,9 +10,11 @@ For each supernode produced by spectral and agglomerative clustering:
   Exp D: ablate each node individually -> measure intra-cluster cosine similarity
          of logit-delta vectors (vs. inter-cluster baseline)
 
-All methods are compared against the same baselines used in eval_cluster.py:
-modularity (K-matched), spectral-rbf, and kmeans, all at our spectral's auto-k.
+When prune graphs are used as input, methods are compared against the same baselines used in
+eval_cluster.py: modularity (K-matched), spectral-rbf, and kmeans, all at our spectral's auto-k.
+When summary graphs are used as input, the saved summary graph is evaluated as-is.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -91,7 +93,11 @@ def _steer_interventions(
             continue
         parts = n.node_id.split("_")
         layer, pos, feat = int(parts[0]), n.ctx_idx, int(parts[1])
-        if layer < orig_activations.shape[0] and pos < orig_activations.shape[1] and feat < orig_activations.shape[2]:
+        if (
+            layer < orig_activations.shape[0]
+            and pos < orig_activations.shape[1]
+            and feat < orig_activations.shape[2]
+        ):
             orig_val = orig_activations[layer, pos, feat].item()
             out.append((layer, pos, feat, factor * orig_val))
     return out
@@ -105,7 +111,11 @@ def _mean_activation(sn: Supernode, activations: torch.Tensor) -> float:
             continue
         parts = n.node_id.split("_")
         layer, pos, feat = int(parts[0]), n.ctx_idx, int(parts[1])
-        if layer < activations.shape[0] and pos < activations.shape[1] and feat < activations.shape[2]:
+        if (
+            layer < activations.shape[0]
+            and pos < activations.shape[1]
+            and feat < activations.shape[2]
+        ):
             vals.append(activations[layer, pos, feat].item())
     return float(np.mean(vals)) if vals else 0.0
 
@@ -121,7 +131,9 @@ def _intra_cosine(deltas: torch.Tensor) -> float:
         return float("nan")
     normed = F.normalize(deltas.float(), dim=-1)  # [n, vocab]
     sim = normed @ normed.T  # [n, n]
-    mask = torch.triu(torch.ones(sim.shape[0], sim.shape[0], dtype=torch.bool, device=sim.device), diagonal=1)
+    mask = torch.triu(
+        torch.ones(sim.shape[0], sim.shape[0], dtype=torch.bool, device=sim.device), diagonal=1
+    )
     return sim[mask].mean().item()
 
 
@@ -206,8 +218,11 @@ def steer_source_effects(
         min(n_layers, source_sn.layer_max + layers_above + 1),
     )
     new_logits, new_acts = model.feature_intervention(
-        inputs, interventions, constrained_layers=window,
-        freeze_attention=True, return_activations=True,
+        inputs,
+        interventions,
+        constrained_layers=window,
+        freeze_attention=True,
+        return_activations=True,
     )
     orig_probs = _last_probs(orig_logits)
     new_probs = _last_probs(new_logits)
@@ -248,7 +263,9 @@ def steer_source_effects(
         measured = float(np.sign(tgt_delta))
         row["predicted_sign"] = predicted
         row["measured_sign"] = measured
-        row["sign_consistent"] = bool(predicted != 0.0 and measured != 0.0 and predicted == measured)
+        row["sign_consistent"] = bool(
+            predicted != 0.0 and measured != 0.0 and predicted == measured
+        )
         effect_rows.append(row)
 
     target_rows: list[dict] = []
@@ -270,9 +287,7 @@ def steer_source_effects(
     return effect_rows, target_rows
 
 
-def _sng_from_clusters(
-    prune_graph: PruneGraph, clusters: list[list[str]]
-) -> SummaryGraph:
+def _sng_from_clusters(prune_graph: PruneGraph, clusters: list[list[str]]) -> SummaryGraph:
     return SummaryGraph(
         supernodes=clusters_to_supernodes(prune_graph, clusters),
         pruned_adj=prune_graph.pruned_adj,
@@ -334,7 +349,11 @@ def _build_sngs(
     # per-method comparison is at the same supernode count — unless K-matched to ILP instead.
     baseline_methods = {"baseline-modularity", "baseline-spectral-cosine", "baseline-kmeans"}
     if wanted & baseline_methods:
-        baseline_k = ilp_k if (match_baseline_k_to_ilp and ilp_k is not None) else find_best_k(prune_graph)[0]
+        baseline_k = (
+            ilp_k
+            if (match_baseline_k_to_ilp and ilp_k is not None)
+            else find_best_k(prune_graph)[0]
+        )
         mid_idx = _middle_indices(prune_graph)
         middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
         adjacency_mid = _adjacency_affinity(prune_graph)[np.ix_(mid_idx, mid_idx)]
@@ -404,8 +423,15 @@ def _evaluate_sng(
 
         # Exp B: constrained-steer the supernode -> effect on every other SN + the target token
         eff_rows, tgt_rows = steer_source_effects(
-            model, sng, sn, inputs, orig_logits, orig_activations, factor,
-            layers_below=layers_below, layers_above=layers_above,
+            model,
+            sng,
+            sn,
+            inputs,
+            orig_logits,
+            orig_activations,
+            factor,
+            layers_below=layers_below,
+            layers_above=layers_above,
         )
         for r in eff_rows + tgt_rows:
             r["graph"] = graph_name
@@ -451,13 +477,58 @@ def evaluate_graph(
     for method, sng in sngs.items():
         logger.info("  method=%s  n_supernodes=%d", method, len(sng.supernodes))
         edge_rows, sn_rows, logit_rows = _evaluate_sng(
-            model, sng, inputs, orig_logits, orig_activations, graph_name, method, factor,
-            layers_below, layers_above, run_exp_d=run_exp_d,
+            model,
+            sng,
+            inputs,
+            orig_logits,
+            orig_activations,
+            graph_name,
+            method,
+            factor,
+            layers_below,
+            layers_above,
+            run_exp_d=run_exp_d,
         )
         all_edge.extend(edge_rows)
         all_sn.extend(sn_rows)
         all_logit.extend(logit_rows)
     return all_edge, all_sn, all_logit
+
+
+def evaluate_summary_graph(
+    model: ReplacementModel,
+    sng: SummaryGraph,
+    graph_name: str,
+    method_name: str,
+    factor: float,
+    layers_below: int,
+    layers_above: int,
+    run_exp_d: bool = True,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    prompt = sng.metadata.get("prompt")
+    if not prompt:
+        raise ValueError(f"{graph_name} summary graph is missing metadata['prompt']")
+
+    # The stored prompt begins with a literal "<bos>"; re-feeding it as a raw string would let
+    # the tokenizer prepend a *second* BOS (gemma default), shifting every position by one so each
+    # node's ctx_idx reads the wrong activation and steering silently no-ops. ensure_tokenized is
+    # idempotent on an existing BOS — tokenize once and reuse the tensor for every pass.
+    inputs = model.ensure_tokenized(str(prompt))
+    orig_logits, orig_activations = model.get_activations(inputs)
+    logger.info("  method=%s  n_supernodes=%d", method_name, len(sng.supernodes))
+    return _evaluate_sng(
+        model,
+        sng,
+        inputs,
+        orig_logits,
+        orig_activations,
+        graph_name,
+        method_name,
+        factor,
+        layers_below,
+        layers_above,
+        run_exp_d=run_exp_d,
+    )
 
 
 def _compute_summary(
@@ -479,28 +550,48 @@ def _compute_summary(
             rho_edge = spearmanr(weights, effects).statistic
 
         logit_items = [r for r in items if r["tgt_type"] == "logit"]
-        mean_logit_sn = float(np.mean([abs(r["prob_delta"]) for r in logit_items])) if logit_items else float("nan")
+        mean_logit_sn = (
+            float(np.mean([abs(r["prob_delta"]) for r in logit_items]))
+            if logit_items
+            else float("nan")
+        )
 
         # Edge faithfulness: over all real (nonzero) edges with a measurable source & target
         # effect, fraction whose downstream sign matches sign(edge_weight)·sign(Δa_source),
         # |edge_weight|-weighted so the structural edges dominate.
         sign_items = [
-            r for r in items
+            r
+            for r in items
             if r["edge_weight"] != 0.0 and r["predicted_sign"] != 0.0 and r["measured_sign"] != 0.0
         ]
         total_w = sum(abs(r["edge_weight"]) for r in sign_items)
         sign_consistency = (
             sum(abs(r["edge_weight"]) for r in sign_items if r["sign_consistent"]) / total_w
-            if total_w else float("nan")
+            if total_w
+            else float("nan")
         )
 
         tgt_items = [r for r in logit_rows if r["graph"] == graph and r["method"] == method]
-        mean_target = float(np.mean([abs(r["prob_delta"]) for r in tgt_items])) if tgt_items else float("nan")
+        mean_target = (
+            float(np.mean([abs(r["prob_delta"]) for r in tgt_items])) if tgt_items else float("nan")
+        )
 
         sn_items = [r for r in sn_rows if r["graph"] == graph and r["method"] == method]
-        mean_intra = float(np.mean([r["intra_cosine"] for r in sn_items if not np.isnan(r["intra_cosine"])])) if sn_items else float("nan")
-        mean_inter = float(np.mean([r["inter_cosine"] for r in sn_items if not np.isnan(r["inter_cosine"])])) if sn_items else float("nan")
-        mean_gap = float(np.mean([r["cosine_gap"] for r in sn_items if not np.isnan(r["cosine_gap"])])) if sn_items else float("nan")
+        mean_intra = (
+            float(np.mean([r["intra_cosine"] for r in sn_items if not np.isnan(r["intra_cosine"])]))
+            if sn_items
+            else float("nan")
+        )
+        mean_inter = (
+            float(np.mean([r["inter_cosine"] for r in sn_items if not np.isnan(r["inter_cosine"])]))
+            if sn_items
+            else float("nan")
+        )
+        mean_gap = (
+            float(np.mean([r["cosine_gap"] for r in sn_items if not np.isnan(r["cosine_gap"])]))
+            if sn_items
+            else float("nan")
+        )
 
         summary.append(
             {
@@ -530,11 +621,61 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
+def _summary_graph_paths(summary_graph: Path | None, summary_graphs_dir: Path | None) -> list[Path]:
+    if summary_graph is not None:
+        if not summary_graph.is_file():
+            raise FileNotFoundError(f"summary graph file not found: {summary_graph}")
+        return [summary_graph]
+    if summary_graphs_dir is None:
+        return []
+    paths = sorted(p for p in summary_graphs_dir.rglob("*_summary_graph.pt") if p.is_file())
+    if not paths:
+        raise FileNotFoundError(f"No *_summary_graph.pt files found under {summary_graphs_dir}")
+    return paths
+
+
+def _prune_graph_paths(prune_graphs_dir: Path | None) -> list[Path]:
+    if prune_graphs_dir is None:
+        return []
+    paths = sorted(prune_graphs_dir.glob("*.pt"))
+    if not paths:
+        raise FileNotFoundError(f"No .pt files found in {prune_graphs_dir}")
+    return paths
+
+
+def _summary_graph_name(path: Path, root: Path | None) -> str:
+    stem_path = path.with_suffix("")
+    if stem_path.name.endswith("_summary_graph"):
+        stem_path = stem_path.with_name(stem_path.name.removesuffix("_summary_graph"))
+    if root is None:
+        return stem_path.name
+    try:
+        rel = stem_path.relative_to(root)
+    except ValueError:
+        return stem_path.name
+    return "__".join(rel.parts)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Causal validation of supernode clusters via feature interventions"
     )
-    parser.add_argument("--prune-graphs-dir", required=True, type=Path)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument(
+        "--prune-graphs-dir",
+        type=Path,
+        help="Directory containing PruneGraph .pt files; clustering methods are rebuilt.",
+    )
+    inputs.add_argument(
+        "--summary-graphs-dir",
+        type=Path,
+        help="Directory tree containing *_summary_graph.pt files; saved summary graphs are evaluated as-is.",
+    )
+    inputs.add_argument(
+        "--summary-graph",
+        type=Path,
+        help="Single saved SummaryGraph .pt file to evaluate as-is.",
+    )
     parser.add_argument("--model-name", default="google/gemma-2-2b")
     parser.add_argument("--transcoder-set", default="mntss/clt-gemma-2-2b-2.5M")
     parser.add_argument("--dtype", default="bfloat16", choices=list(DTYPE_MAP))
@@ -565,7 +706,12 @@ def main() -> None:
         "--methods",
         default=",".join(DEFAULT_METHODS),
         help=f"Comma-separated clustering methods to evaluate (from {', '.join(ALL_METHODS)}). "
-        "Default: all non-ILP methods.",
+        "Default: all non-ILP methods. Only used with --prune-graphs-dir.",
+    )
+    parser.add_argument(
+        "--summary-method-name",
+        default="summary",
+        help="Method label used in CSV output when evaluating saved summary graphs.",
     )
     parser.add_argument(
         "--skip-exp-d",
@@ -598,10 +744,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    use_summary_graphs = args.summary_graph is not None or args.summary_graphs_dir is not None
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
-    unknown = set(methods) - set(ALL_METHODS)
-    if unknown:
-        parser.error(f"unknown --methods {sorted(unknown)}; choose from {list(ALL_METHODS)}")
+    if not use_summary_graphs:
+        unknown = set(methods) - set(ALL_METHODS)
+        if unknown:
+            parser.error(f"unknown --methods {sorted(unknown)}; choose from {list(ALL_METHODS)}")
     ilp_kwargs = {
         "ilp_lambda_causal": args.ilp_lambda_causal,
         "ilp_max_sn": args.ilp_max_sn,
@@ -611,12 +759,13 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    graph_paths = sorted(args.prune_graphs_dir.glob("*.pt"))
+    graph_paths = (
+        _summary_graph_paths(args.summary_graph, args.summary_graphs_dir)
+        if use_summary_graphs
+        else _prune_graph_paths(args.prune_graphs_dir)
+    )
     if args.limit:
         graph_paths = graph_paths[: args.limit]
-    if not graph_paths:
-        logger.error("No .pt files found in %s", args.prune_graphs_dir)
-        return
 
     logger.info("Loading model %s / transcoder %s ...", args.model_name, args.transcoder_set)
     model = ReplacementModel.from_pretrained(
@@ -631,15 +780,36 @@ def main() -> None:
     all_sn: list[dict] = []
     all_logit: list[dict] = []
     for path in graph_paths:
-        graph_name = path.stem
-        logger.info("Processing %s ...", graph_name)
-        prune_graph = load_prune_graph(str(path))
-        edge_rows, sn_rows, logit_rows = evaluate_graph(
-            model, prune_graph, graph_name, args.steer_factor,
-            args.layers_below, args.layers_above,
-            methods, run_exp_d=not args.skip_exp_d, ilp_kwargs=ilp_kwargs,
-            match_baseline_k_to_ilp=args.match_baseline_k_to_ilp,
+        graph_name = (
+            _summary_graph_name(path, args.summary_graphs_dir) if use_summary_graphs else path.stem
         )
+        logger.info("Processing %s ...", graph_name)
+        if use_summary_graphs:
+            sng = SummaryGraph.load(str(path))
+            edge_rows, sn_rows, logit_rows = evaluate_summary_graph(
+                model,
+                sng,
+                graph_name,
+                args.summary_method_name,
+                args.steer_factor,
+                args.layers_below,
+                args.layers_above,
+                run_exp_d=not args.skip_exp_d,
+            )
+        else:
+            prune_graph = load_prune_graph(str(path))
+            edge_rows, sn_rows, logit_rows = evaluate_graph(
+                model,
+                prune_graph,
+                graph_name,
+                args.steer_factor,
+                args.layers_below,
+                args.layers_above,
+                methods,
+                run_exp_d=not args.skip_exp_d,
+                ilp_kwargs=ilp_kwargs,
+                match_baseline_k_to_ilp=args.match_baseline_k_to_ilp,
+            )
         all_edge.extend(edge_rows)
         all_sn.extend(sn_rows)
         all_logit.extend(logit_rows)

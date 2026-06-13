@@ -8,54 +8,73 @@ whole. It first weighs the results and the method's limitations, then summarizes
 thesis's contributions and outcomes and points to future work.
 
 \section{Discussion and Limitations}
-The central finding of Chapter~5 is that the summarization pipeline produces causally
-faithful summary graphs: across the analogy graphs, steering a supernode moves its
-downstream neighbours in the direction and roughly the magnitude its summary edge predicts,
-for both the exact integer-program clusterer and the $K$-means baseline. Faithfulness is
-therefore a property of the abstraction rather than of one particular clusterer, which is
-the outcome the objective was designed to produce. The comparison between the two clusterers
-is more nuanced than a single winner: at a fixed supernode count the simpler baseline is
-more faithful per edge, while the integer program exposes more of the circuit's causal
-wiring through its causal-preservation term. The two are different operating points on one
-trade-off, not a ranking, and the steering metric, which grades a method only on the edges
-it chooses to expose, is partly biased toward the method that exposes less structure.
+The empirical results show that attribution-graph summarization can reduce graph
+size while preserving much of the computation needed for interpretation.
+Influence--relevance pruning keeps graph-level faithfulness close to the
+influence-only baseline while giving the method an explicit way to prefer nodes
+connected to the input tokens. The ILP clusterer gives stronger downstream-effect
+coherence and lower structural loss than the clustering baselines, which
+suggests that the resulting supernodes preserve visible causal structure better.
+The steering evaluation further supports this conclusion: the final summary
+graphs have high sign consistency and positive edge-effect rank correlation, so
+their signed edges often predict the direction and relative strength of measured
+intervention responses.
 
-Several limitations bound these conclusions. The method summarizes one prompt at a time and
-inherits the scope of the underlying attribution graph, so it says nothing about mechanisms
-shared across prompts or about circuits that run through attention rather than the MLP
-features the replacement model captures. The exact clusterer solves an integer program whose
-size grows with the number of feature pairs and is tractable only on the small pruned graphs
-studied here; larger graphs fall back to the approximate spectral and agglomerative
-clusterers. The trade-off weight between atomicity and causal preservation was fixed at a
-single value in the evaluation, so the operating point at which the per-edge and structural
-effects balance has not yet been located; a sweep over this weight is the natural next
-experiment. Finally, the evaluation rests on the steering intervention alone: the
-complementary LLM-versus-human relevance comparison is still in progress, and feature
-meanings are taken from existing labels rather than verified, so the readability of the
-summaries has not been measured against human judgment.
+The method still has several limitations. First, the relevance score is computed
+using SHAP-style attribution, while the attribution graph itself represents
+linear feature-to-feature effects inside the replacement model. This mismatch
+means that relevance should be interpreted as a proxy for upstream input
+dependence, not as the same quantity as graph flow. Second, the quantitative
+evaluation focuses mainly on analogy prompts, with multi-hop reasoning used as a
+qualitative stress test. The results therefore do not yet establish performance
+across many tasks, models, or prompt distributions. Third, the interpretation
+stage depends on existing feature descriptions, so summary labels inherit errors
+or missing information from those descriptions.
 
 \section{Conclusion}
-This thesis formalized the problem of summarizing an attribution graph and proposed an
-automated three-stage pipeline --- pruning, clustering, and interpreting --- that replaces
-the manual reduction of the original circuit-tracing methodology. The problem was stated
-through four desiderata and a matching objective, the pipeline was built to optimize that
-objective with an exact integer program and scalable alternatives, and the resulting summary
-graphs were shown to be causally faithful under steering interventions on the BATS analogy
-and multi-hop datasets. Together these results turn a slow, expert-driven analysis into an
-objective-driven procedure that runs without human intervention while keeping the summary
-faithful to the model. Future work follows from the limitations above: sweeping the
-atomicity--causal trade-off to characterize the full Pareto front, scaling the exact solver
-or tightening the approximate clusterers for larger graphs, completing the human-judgment
-evaluation of readability, and extending the summary beyond a single prompt toward mechanisms
-that recur across many.
+This thesis formalized the problem of summarizing attribution graphs and
+proposed an automated pipeline for producing compact, human-readable summary
+graphs. The method replaces manual pruning and manual grouping with explicit
+objectives: retaining important nodes and edges, grouping features with similar
+causal roles, preserving visible directed structure, and assigning labels to the
+resulting supernodes. The output is a directed acyclic summary graph that keeps
+the prompt, the predicted output, and the main signed pathways visible for
+inspection.
+
+The experiments show that this approach can produce summaries that remain
+faithful at the graph level, improve structural coherence over several
+baselines, and preserve much of the signed intervention behavior of the original
+attribution graph. These results support the central claim of the thesis:
+attribution graphs can be compressed into smaller mechanistic summaries without
+discarding the causal information needed for inspection.
+
+\section{Future Work}
+
+Future work should strengthen both the method and its evaluation. A first
+direction is to replace the current SHAP-based relevance proxy with a relevance
+measure defined directly on the attribution graph, so that upstream and
+downstream importance are expressed in the same linear framework. A second
+direction is to evaluate the pipeline on more models, tasks, and prompt types,
+especially cases where circuits involve longer reasoning chains or multiple
+competing answers. A third direction is to improve label validation, either by
+measuring whether supernode labels predict member-feature behavior or by using
+intervention results to test whether a labeled supernode behaves as a single
+mechanism. Finally, the visualization interface can be extended so that
+researchers can move between the raw attribution graph, the pruned graph, and
+the summary graph during analysis.
 
 \section{Chapter Summary}
-This chapter discussed the thesis's results and their limits and drew its conclusions. The
-summarization pipeline was shown to deliver faithful, automated summary graphs, with the
-choice of clusterer setting a trade-off between per-edge faithfulness and exposed structure
-rather than a strict ranking. The main limitations --- the single-prompt scope, the
-tractability ceiling of the exact solver, the unswept trade-off weight, and the
-still-incomplete readability evaluation --- define the agenda for future work, completing
-the account of the method begun in Chapter~3 and validated in Chapter~5.
+
+This chapter interpreted the empirical findings and stated the remaining
+limitations of the proposed summarization method. The results indicate that
+influence--relevance pruning, objective-driven clustering, and supernode
+labeling can turn a large attribution graph into a smaller summary graph while
+preserving important graph-level and intervention-level behavior. The main
+limitations are the use of a proxy relevance score, the narrow quantitative
+evaluation setting, and the dependence on existing feature labels. The thesis
+therefore concludes that automated attribution-graph summarization is a viable
+step toward scalable circuit inspection, while leaving broader validation and
+tighter attribution objectives as future work.
+
 
 \end{document}

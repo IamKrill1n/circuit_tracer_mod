@@ -8,6 +8,7 @@ and Outputs/Logits (top) bars showing the prompt.
 
 from __future__ import annotations
 
+import html
 import math
 from typing import Any
 
@@ -39,20 +40,36 @@ def _sn_kind(sn_name: str, node_by_name: dict[str, Supernode]) -> str:
     return "middle"
 
 
-def _sn_title(sn: str, members: list[str], attr: dict[str, dict[str, Any]] | None) -> str:
+def _sn_title(
+    sn: str,
+    members: list[str],
+    attr: dict[str, dict[str, Any]] | None,
+    supernode: Supernode | None = None,
+) -> str:
+    lines = [f"Label: {html.escape(str(supernode.name if supernode is not None else sn))}"]
+    if supernode is not None and supernode.role:
+        lines.append(f"Role: {html.escape(supernode.role)}")
+    if supernode is not None and supernode.description:
+        lines.append(f"Description: {html.escape(supernode.description)}")
     if not members:
-        return sn
+        return "<br>".join(lines)
+
+    lines.append(f"Members: {len(members)} nodes")
     if attr is None:
-        return f"{sn} ({len(members)} nodes)"
+        return "<br>".join(lines)
+
     previews: list[str] = []
     for nid in members[:5]:
         clerp = str(attr.get(nid, {}).get("clerp", "") or "").strip()
         if clerp:
-            previews.append(f"{nid}: {clerp[:80]}")
+            previews.append(f"{html.escape(str(nid))}: {html.escape(clerp[:80])}")
         else:
-            previews.append(str(nid))
+            previews.append(html.escape(str(nid)))
     more = f" … +{len(members) - 5} more" if len(members) > 5 else ""
-    return sn + "<br>" + "<br>".join(previews) + more
+    lines.extend(previews)
+    if more:
+        lines.append(more)
+    return "<br>".join(lines)
 
 
 def _logit_prob(
@@ -324,7 +341,11 @@ def _output_bar(
             line=dict(color="#B9B29A", width=1),
         )
         fig.add_annotation(
-            x=n, y=y, text=_clean_token(out_label), showarrow=False, font=dict(size=10, color="#333")
+            x=n,
+            y=y,
+            text=_clean_token(out_label),
+            showarrow=False,
+            font=dict(size=10, color="#333"),
         )
     fig.add_annotation(
         xref="paper",
@@ -386,7 +407,7 @@ def supernode_graph_figure(
             key=lambda sn: _logit_prob(sn, mapping.get(sn, []), node_by_name, attr),
             reverse=True,
         )
-        hidden = set(ranked[max(top_k_logits, 0):])
+        hidden = set(ranked[max(top_k_logits, 0) :])
 
     layout_names = [sn for sn in sn_names if sn not in hidden]
     output_x = float(len(prompt_tokens)) if prompt_tokens else None
@@ -503,7 +524,7 @@ def supernode_graph_figure(
         )
         hover_x.append(cx)
         hover_y.append(cy)
-        hover_text.append(_sn_title(sn, members, attr))
+        hover_text.append(_sn_title(sn, members, attr, node_by_name.get(sn)))
 
     # Invisible markers carry the rich hover (composite members).
     fig.add_trace(

@@ -7,7 +7,7 @@ import os
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 import streamlit as st
@@ -874,21 +874,35 @@ if "sng" in st.session_state:
     )
     label_thinking = st.selectbox(
         "thinking effort",
-        options=["(default)", "low", "medium", "high"],
+        options=["off", "(registry default)", "low", "medium", "high"],
         index=0,
         key="lbl_thinking",
-        help="Reasoning models only; '(default)' uses the registry default.",
+        help="Reasoning models only. Leave off for Gemini/Gemma models that reject thinking budgets.",
     )
     if st.button("Label supernodes with LLM", type="primary"):
         try:
-            from summarization.group_llm import LabelScheme, ModelSettings, label_supernodes
+            from summarization.group_llm import (
+                LabelScheme,
+                ModelSettings,
+                ThinkingEffort,
+                label_supernodes,
+            )
 
-            thinking = None if label_thinking == "(default)" else label_thinking
+            thinking = (
+                None
+                if label_thinking in ("off", "(registry default)")
+                else cast(ThinkingEffort, label_thinking)
+            )
+            use_default_thinking = label_thinking == "(registry default)"
             with st.spinner("Labeling supernodes via LLM (one_pass)…"):
                 label_supernodes(
                     sng,
                     label_model,
-                    settings=ModelSettings(temperature=float(label_temp), thinking_effort=thinking),
+                    settings=ModelSettings(
+                        temperature=float(label_temp),
+                        thinking_effort=thinking,
+                        use_default_thinking_effort=use_default_thinking,
+                    ),
                     scheme=LabelScheme(scheme="one_pass"),
                 )
             st.session_state["sng"] = sng

@@ -10,6 +10,7 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 import torch
+import networkx as nx
 from sklearn.cluster import KMeans, SpectralClustering
 
 from eval.eval_prune import compute_prune_loss
@@ -382,6 +383,43 @@ def _spectral_affinity_middle_labels(
         .fit_predict(safe_affinity)
         .astype(np.int64)
     )
+
+
+def _modularity_middle_labels(affinity: np.ndarray, target_k: int) -> np.ndarray:
+    n = affinity.shape[0]
+    if n == 0:
+        return np.array([], dtype=np.int64)
+    k = max(1, min(target_k, n))
+    if k == 1:
+        return np.zeros(n, dtype=np.int64)
+    if k == n:
+        return np.arange(n, dtype=np.int64)
+
+    safe_affinity = np.asarray(affinity, dtype=np.float64)
+    safe_affinity = np.clip((safe_affinity + safe_affinity.T) / 2.0, 0.0, None)
+    np.fill_diagonal(safe_affinity, 0.0)
+
+    graph = nx.Graph()
+    graph.add_nodes_from(range(n))
+    rows, cols = np.triu_indices(n, k=1)
+    for i, j in zip(rows, cols, strict=True):
+        weight = float(safe_affinity[i, j])
+        if weight > 0.0:
+            graph.add_edge(int(i), int(j), weight=weight)
+
+    if graph.number_of_edges() == 0:
+        return np.arange(n, dtype=np.int64) % k
+
+    communities = nx.community.greedy_modularity_communities(
+        graph,
+        weight="weight",
+        cutoff=k,
+        best_n=k,
+    )
+    labels = np.empty(n, dtype=np.int64)
+    for label, community in enumerate(communities):
+        labels[list(community)] = label
+    return labels
 
 
 def _random_same_size_middle_labels(
