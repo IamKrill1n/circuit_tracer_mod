@@ -111,9 +111,17 @@ Influence measures how strongly a node can reach the selected logits, while
 relevance measures how strongly a node is reached from the selected input tokens.
 Let
 \[
-W^{\text{in}}_{ij} = \frac{|W_{ij}|}{\sum_k |W_{kj}|},
+W^{\text{in}}_{ij} =
+\begin{cases}
+\dfrac{|W_{ij}|}{\sum_k |W_{kj}|}, & \text{if } \sum_k |W_{kj}| > 0,\\
+0, & \text{otherwise,}
+\end{cases}
 \qquad
-W^{\text{out}}_{ij} = \frac{|W_{ij}|}{\sum_k |W_{ik}|}
+W^{\text{out}}_{ij} =
+\begin{cases}
+\dfrac{|W_{ij}|}{\sum_k |W_{ik}|}, & \text{if } \sum_k |W_{ik}| > 0,\\
+0, & \text{otherwise}
+\end{cases}
 \]
 be the column-normalized and row-normalized absolute adjacency matrices. The
 per-node influence and relevance vectors are
@@ -141,7 +149,11 @@ influence and relevance to $[0,1]$ across nodes, the node importance score is
 \label{eq:importance}
 \end{equation}
 where $\widehat{\,\cdot\,}$ denotes the rank normalized score. The geometric mean is
-used because it agressively punish nodes with small influence score or relevance score. Edges are scored by applying the same
+used because it assigns a low score to nodes with small influence or relevance.
+Embedding and error nodes have no incoming edges, so their incoming-normalized
+columns are zero; since $\tau$ is supported only on selected embedding nodes and
+error nodes have no incoming path from those tokens, error nodes have relevance
+$0$ and therefore zero geometric importance. Edges are scored by applying the same
 influence--relevance principle to their source and target endpoints.
 
 \paragraph{Threshold selection}
@@ -181,13 +193,12 @@ budget, and a layer-span restriction.
 \paragraph{Feature representation.}
 Let $F = V'_{\text{feature}} = \{1,\dots,n\}$ be the retained feature nodes after
 pruning. A feature's causal role is represented by its signed outgoing and
-incoming edge profiles. The formulas below use the implementation convention that
-$W_{ku}$ is the edge from source $u$ to target $k$. For a retained feature node
+incoming edge profiles. For a retained feature node
 $u \in F$, define
 \begin{align}
-(v_u^{\text{out}})_k &= W_{ku}\,\sqrt{\mathrm{Inf}_k},
+(v_u^{\text{out}})_k &= W_{uk}\,\sqrt{\mathrm{Inf}_k},
 \qquad k \in V', \nonumber\\
-(v_u^{\text{in}})_k &= W_{uk}\,\sqrt{\mathrm{Rel}_k},
+(v_u^{\text{in}})_k &= W_{ku}\,\sqrt{\mathrm{Rel}_k},
 \qquad k \in V', \nonumber\\
 r(u) &= \bigl[\,v_u^{\text{out}};\,v_u^{\text{in}}\,\bigr]
 \;\in\; \mathbb{R}^{2|V'|}. \label{eq:role}
@@ -221,7 +232,7 @@ be hidden if the two features were placed in the same supernode:
 c^{\text{causal}}_{ij}
 =
 \frac{|W_{ij}| + |W_{ji}|}
-     {\sum_{(u,v)\in E'} |W_{vu}|},
+     {\sum_{(u,v)\in E'} |W_{uv}|},
 \qquad i,j \in F,\; i<j.
 \label{eq:causal-coeff}
 \end{equation}
@@ -346,12 +357,12 @@ For each ordered pair of distinct supernodes $(C,C')$, the signed block-sum edge
 weight is
 \begin{equation}
 B_{C \to C'} =
-\sum_{u \in C,\, v \in C'} W_{vu}\,\mathbf{1}[(u,v) \in E'].
+\sum_{u \in C,\, v \in C'} W_{uv}\,\mathbf{1}[(u,v) \in E'].
 \label{eq:block-sum}
 \end{equation}
 This quantity sums all retained attribution-graph edges from members of $C$ to
-members of $C'$. The row-column convention is preserved: $W_{vu}$ is the edge
-from source $u$ to target $v$. Diagonal blocks are omitted because edges inside a
+members of $C'$, where $W_{uv}$ is the edge from source $u$ to target $v$.
+Diagonal blocks are omitted because edges inside a
 supernode are represented as part of that node rather than as visible edges in
 $H$.
 

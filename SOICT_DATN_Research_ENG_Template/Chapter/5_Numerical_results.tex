@@ -21,18 +21,10 @@ knowledge in word embeddings and language models. We use entities from its
 lexicography category and construct prompts of the form ``The saying goes: $A$
 is to $B$ as $C$ is to $D$'', where $A$, $B$, $C$, and $D$ come from the same
 subcategory. The model must predict $D$ from the relation expressed by
-$A \to B$ and the query entity $C$. THe dataset contains 100 prompts in total, 10 for
-each type of relation:
-country - capital
-"E02 [country - language].txt",
-"E03 [UK_city - county].txt",
-"E04 [name - nationality].txt",
-"E05 [name - occupation].txt",
-"E06 [animal - young].txt",
-"E07 [animal - sound].txt",
-"E08 [animal - shelter].txt",
-"E09 [things - color].txt",
-"E10 [male - female].txt",
+$A \to B$ and the query entity $C$. The dataset contains 100 prompts in total,
+with 10 prompts for each of the following relation types: country--capital,
+country--language, UK city--county, name--nationality, name--occupation,
+animal--young, animal--sound, animal--shelter, object--color, and male--female.
 
 The analogy setting is useful because the output entity D can be traced from the relation
 between A and B apply to C. A good summary should keep the
@@ -94,8 +86,7 @@ Eq.~\eqref{eq:inf}. The score is
 \mathrm{Rep}
 =
 \frac{\sum_{v \in V' \cap V_{\text{emb}}} \mathrm{Inf}'_v}
-     {\sum_{v \in V' \cap V_{\text{emb}}} \mathrm{Inf}'_v
-      + \sum_{v \in V \setminus V'} \mathrm{Inf}'_v}.
+     {\sum_{v \in V} \mathrm{Inf}'_v}.
 \label{eq:metric-replacement}
 \end{equation}
 This is a strict score: it is high only when output influence can be traced all
@@ -105,16 +96,24 @@ being absorbed by nodes outside the pruned graph.
 \paragraph{Graph completeness.}
 Graph completeness measures the fraction of incoming edges to all nodes that
 originate from the pruned graph, weighted by each node's influence on the
-output. Let
-$q'_v = \sum_{u \in V'} (W')^{\text{in}}_{uv}
-= 1 - \sum_{u \in V \setminus V'} (W')^{\text{in}}_{uv}$ be the fraction of
-node $v$'s normalized incoming edge mass that comes from retained nodes. The
-score is
+output. As in Chapter~3, $(W')^{\text{in}}$ is column-normalized with zero
+columns left at zero when a node has no incoming edge mass. Let
+\[
+q'_v =
+\begin{cases}
+\sum_{u \in V'} (W')^{\text{in}}_{uv}
+= 1 - \sum_{u \in V \setminus V'} (W')^{\text{in}}_{uv},
+& \text{if node } v \text{ has positive incoming edge mass in } W',\\
+0, & \text{otherwise.}
+\end{cases}
+\]
+This is the fraction of node $v$'s normalized incoming edge mass that comes from
+retained nodes. The score is
 \begin{equation}
 \mathrm{Comp}
 =
-\frac{\sum_{v \in V} q'_v(\mathrm{Inf}'_v + \ell_v)}
-     {\sum_{v \in V}(\mathrm{Inf}'_v + \ell_v)}.
+\frac{\sum_{v \in V} q'_v(\mathrm{Inf}'_v)}
+     {\sum_{v \in V}(\mathrm{Inf}'_v)}.
 \label{eq:metric-completeness}
 \end{equation}
 Unlike replacement score, completeness gives partial credit to nodes that are
@@ -141,7 +140,7 @@ graph, so the comparison isolates partition quality rather than graph size. Let
 $F = V'_{\text{feature}}$ be the retained feature nodes, let $f$ be the
 partition from clustering, and let $r(i)$ be the role vector of
 Eq.~\eqref{eq:role}. All edge-mass formulas use the retained edge set $E'$ and
-the convention that $W_{vu}$ is the edge from source $u$ to target $v$.
+the convention that $W_{uv}$ is the edge from source $u$ to target $v$.
 
 \paragraph{Raw silhouette.}
 Raw silhouette measures geometric compactness in role-vector space. With
@@ -198,8 +197,8 @@ inside supernodes. It is
 \begin{equation}
 \mathrm{Internalized}
 =
-\frac{\sum_{(u,v)\in E':\, f(u)=f(v)} |W_{vu}|}
-     {\sum_{(u,v)\in E'} |W_{vu}|}.
+\frac{\sum_{(u,v)\in E':\, f(u)=f(v)} |W_{uv}|}
+     {\sum_{(u,v)\in E'} |W_{uv}|}.
 \label{eq:metric-internalized}
 \end{equation}
 Lower internalized edge mass means that more retained causal structure remains
@@ -392,9 +391,9 @@ preservation of visible causal structure.}
 \label{tab:clustering-baseline-entmax}
 \begin{tabular}{lrrrrr}
 \toprule
-Solver & Sil. raw & Down. gap & Signed down. gap & Internalized mass & DAG loss \\
+Solver & Sil. raw $\uparrow$ & Down. gap $\uparrow$ & Signed down. gap $\uparrow$ & Internalized mass $\downarrow$ & DAG loss $\downarrow$ \\
 \midrule
-Ours ILP & 0.0409 & 0.0979 & 0.2907 & 0.0491 & 0.0984 \\
+\textbf{Ours ILP} & 0.0409 & 0.0979 & 0.2907 & 0.0491 & 0.0984 \\
 Spectral on role vectors & -0.0347 & 0.0272 & 0.1399 & 0.1081 & 0.1257 \\
 K-means on role vectors & 0.5058 & 0.0382 & 0.2824 & 0.0862 & 0.1423 \\
 Spectral on adjacency & -0.4263 & 0.0434 & 0.0132 & 0.1590 & 0.1818 \\
