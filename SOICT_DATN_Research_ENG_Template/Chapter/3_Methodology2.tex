@@ -99,8 +99,7 @@ the summary is intended to show a forward causal story.
 \label{sec:method}
 \subsection{Pruning}
 \label{sec:stage1}
-
-Pruning reduces the attribution graph before clustering. This stage targets D1:
+Since the attribution graph contains redundant nodes and edges, the author of \cite{ameisen2025circuit} proposed a pruning algorithm to keep nodes and edges that directly or indirectly exert significant influence on the logit nodes. However, it failed to bring the number of nodes and edges down to interpretable range, because even at low thresholds, the pruned graph still contains noisy features, activated from punctuation, stopwords, format scalfolding, ... We usually care more about how the model derives the semantics required to output the next token rather than the syntactic features. Our pruning stage targets D1:
 it keeps nodes and edges that participate in the selected input-to-output
 computation, and removes the rest so that later stages operate on a tractable
 subgraph. The pruning rule is based on two path-reachability scores, influence and
@@ -133,12 +132,42 @@ per-node influence and relevance vectors are
 = \tau^\top \sum_{k \ge 0} (W^{\text{out}})^k
 \;\in\; \mathbb{R}^N. \label{eq:rel}
 \end{align}
+
 Because $G$ is a DAG, both normalized adjacency matrices are nilpotent after a
 topological ordering of the nodes. The Neumann series therefore terminates after
 finitely many terms, so the inverse expressions are well-defined.
 
+Edge influence and relevance are computed after node pruning, so that edge
+scores are assigned only inside the node-pruned graph. Let $\widetilde{W}$ be the
+matrix obtained by setting the rows and columns of unretained nodes to zero, and
+let $\widetilde{W}^{\text{in}}$ and $\widetilde{W}^{\text{out}}$ be its
+column-normalized and row-normalized absolute adjacency matrices. The node
+influence and relevance vectors used for edge scoring are recomputed on this
+node-pruned graph:
+\begin{align}
+\mathrm{Inf}^{\widetilde{G}}
+&= \ell^\top \sum_{k \ge 0}
+\bigl((\widetilde{W}^{\text{in}})^\top\bigr)^k, \nonumber\\
+\mathrm{Rel}^{\widetilde{G}}
+&= \tau^\top \sum_{k \ge 0}
+(\widetilde{W}^{\text{out}})^k . \nonumber
+\end{align}
+For an edge $(i,j)$ from source node $i$ to target node $j$, the edge influence
+and edge relevance are then
+\begin{align}
+\mathrm{Inf}^{\text{edge}}_{ij}
+&= \widetilde{W}^{\text{in}}_{ij}\,
+\mathrm{Inf}^{\widetilde{G}}_j, \label{eq:edge-inf}\\
+\mathrm{Rel}^{\text{edge}}_{ij}
+&= \widetilde{W}^{\text{out}}_{ij}\,
+\mathrm{Rel}^{\widetilde{G}}_i. \label{eq:edge-rel}
+\end{align}
+Thus, edge influence distributes the downstream influence of a target node across
+its retained incoming edges, while edge relevance distributes the upstream
+relevance of a source node across its retained outgoing edges.
+
 \paragraph{Importance score.}
-A node is important only when both scores are high: it must be connected to the
+In \cite{ameisen2025circuit}, the author only used influence to quantify nodes and edges importance. We redefine this assumption saying a node is important only when both scores are high: it must be connected to the
 selected input context and also influence the selected output. After normalizing
 influence and relevance to $[0,1]$ across nodes, the node importance score is
 \begin{equation}
@@ -153,8 +182,16 @@ used because it assigns a low score to nodes with small influence or relevance.
 Embedding and error nodes have no incoming edges, so their incoming-normalized
 columns are zero; since $\tau$ is supported only on selected embedding nodes and
 error nodes have no incoming path from those tokens, error nodes have relevance
-$0$ and therefore zero geometric importance. Edges are scored by applying the same
-influence--relevance principle to their source and target endpoints.
+$0$ and therefore zero geometric importance. Edges are scored by applying the
+same influence--relevance principle to their edge scores:
+\begin{equation}
+\mathrm{Imp}_{ij} =
+\bigl(\widehat{\mathrm{Inf}^{\text{edge}}}_{ij}\bigr)^{\alpha}
+\bigl(\widehat{\mathrm{Rel}^{\text{edge}}}_{ij}\bigr)^{1-\alpha},
+\qquad \alpha \in [0,1],
+\label{eq:edge-importance}
+\end{equation}
+where the normalization is applied across all candidate edges.
 
 \paragraph{Threshold selection}
 The pruning stage keeps the highest-importance nodes whose cumulative importance
@@ -172,7 +209,7 @@ retained nodes and edges, they are chosen so that
 The implementation obtains these sets by sorting nodes and edges by importance in
 descending order and keeping the smallest prefix whose cumulative importance mass
 reaches the corresponding fraction. Larger values of $\eta_V$ and $\eta_E$ retain
-more of the original graph before clustering.
+more of the original graph before clustering. We use default thresholds $\eta_V$ and $\eta_E$ at 0.02 and 0.95 respectively, the choice will be explain in chapter Numerical Results.
 
 \paragraph{Filter dead features and too frequent features}
 A feature's activation frequency is the fraction of tokens in a dataset for which
@@ -182,7 +219,7 @@ activation frequency below 0.002\% or above 10\%.
 
 \subsection{Clustering}
 \label{sec:stage2}
-The clustering stage is formulated as a binary integer linear program (ILP)
+The clustering stage targets D2 and D3 in the desiderata. We formulate it as a binary integer linear program (ILP)
 over the retained feature nodes. The program decides which pairs of features
 belong to the same supernode, while embedding and logit nodes are kept outside the
 optimization as singleton supernodes. This formulation makes the design explicit:
@@ -350,7 +387,7 @@ conditions of Eq.~\eqref{eq:supernode-conditions}.
 Interpreting converts the clustered pruned graph into the final summary graph.
 This stage takes the partition $f$ from clustering, aggregates retained edges
 between supernodes, removes cycles introduced by aggregation, and assigns
-human-readable labels.
+human-readable labels. It ensures D4 is satisfied, so that a human reader can understand the summary clearly.
 
 \paragraph{Block-sum adjacency.}
 For each ordered pair of distinct supernodes $(C,C')$, the signed block-sum edge
