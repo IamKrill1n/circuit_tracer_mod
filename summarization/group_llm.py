@@ -22,12 +22,12 @@ from summarization.summarize import Node, Supernode, SummaryGraph
 _PROMPT_DIR = Path(__file__).with_name("prompts")
 _DEFAULT_REGISTRY_PATH = Path(__file__).with_name("llm_models.json")
 
-Provider = Literal["openai", "gemini", "openai_compat"]
+Provider = Literal["openai", "google", "openai_compat"]
 ThinkingEffort = Literal["low", "medium", "high"]
 SchemeName = Literal["one_pass", "two_pass"]
 
-# low/medium/high -> Gemini thinking_budget in tokens. OpenAI uses the label directly.
-_GEMINI_THINKING_BUDGET = {"low": 512, "medium": 2048, "high": 8192}
+# low/medium/high -> Gemini 2.5 thinking_budget in tokens. OpenAI uses the label directly.
+_GEMINI_2_5_THINKING_BUDGET = {"low": 512, "medium": 2048, "high": 8192}
 
 _FALLBACK_TEMPERATURE = 0.2
 _MAX_RETRIES = 5
@@ -68,6 +68,7 @@ class ModelRoute:
     api_key: str
     defaults: ModelSettings
     supports_thinking_budget: bool = False
+    supports_thinking_level: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -87,11 +88,19 @@ def load_registry(registry_path: str | Path | None = None) -> dict[str, dict]:
 
 
 def _default_supports_thinking_budget(provider: Provider, model: str) -> bool:
-    """Infer Gemini thinking-budget support when the registry omits the capability flag."""
-    if provider != "gemini":
+    """Infer Gemini 2.5 thinking-budget support when the registry omits the flag."""
+    if provider != "google":
         return False
     normalized = model.lower().removeprefix("models/")
     return normalized.startswith("gemini-2.5")
+
+
+def _default_supports_thinking_level(provider: Provider, model: str) -> bool:
+    """Infer Gemma 4 thinking-level support when the registry omits the capability flag."""
+    if provider != "google":
+        return False
+    normalized = model.lower().removeprefix("models/")
+    return normalized.startswith("gemma-4")
 
 
 def resolve_model(model_name: str, registry_path: str | Path | None = None) -> ModelRoute:
@@ -104,10 +113,10 @@ def resolve_model(model_name: str, registry_path: str | Path | None = None) -> M
         raise ValueError(f"Model {model_name!r} not in registry {path}. Available: {available}")
 
     provider = entry["provider"]
-    if provider not in ("openai", "gemini", "openai_compat"):
+    if provider not in ("openai", "google", "openai_compat"):
         raise ValueError(
             f"Model {model_name!r} in registry {path} has unsupported provider {provider!r}. "
-            "Expected one of: openai, gemini, openai_compat"
+            "Expected one of: openai, google, openai_compat"
         )
     api_key = get_env(entry.get("api_key_env", ""), "").strip()
     if not api_key:
@@ -129,6 +138,12 @@ def resolve_model(model_name: str, registry_path: str | Path | None = None) -> M
             _default_supports_thinking_budget(provider, wire_model),
         )
     )
+    supports_thinking_level = bool(
+        entry.get(
+            "supports_thinking_level",
+            _default_supports_thinking_level(provider, wire_model),
+        )
+    )
     return ModelRoute(
         provider=provider,
         model=wire_model,
@@ -136,6 +151,7 @@ def resolve_model(model_name: str, registry_path: str | Path | None = None) -> M
         api_key=api_key,
         defaults=defaults,
         supports_thinking_budget=supports_thinking_budget,
+        supports_thinking_level=supports_thinking_level,
     )
 
 
@@ -168,8 +184,8 @@ def generate_text(
     user_message: str,
 ) -> str:
     """Dispatch one (system, user) request to the model's backend; owns retry/backoff."""
-    if route.provider == "gemini":
-        return _gemini_generate(route, settings, system_prompt, user_message)
+    if route.provider == "google":
+        return _google_generate(route, settings, system_prompt, user_message)
     return _openai_generate(route, settings, system_prompt, user_message)
 
 
@@ -218,10 +234,23 @@ def _openai_generate(
     raise RuntimeError("OpenAI retry loop exited without returning a response")
 
 
-def _gemini_generate(
+def _google_thinking_config(
+    route: ModelRoute, settings: ModelSettings, genai_types: Any
+) -> Any | None:
+    if settings.thinking_effort is None:
+        return None
+    if route.supports_thinking_budget:
+        budget = _GEMINI_2_5_THINKING_BUDGET[settings.thinking_effort]
+        return genai_types.ThinkingConfig(thinking_budget=budget)
+    if route.supports_thinking_level and settings.thinking_effort == "high":
+        return genai_types.ThinkingConfig(thinking_level="high")
+    return None
+
+
+def _google_generate(
     route: ModelRoute, settings: ModelSettings, system_prompt: str, user_message: str
 ) -> str:
-    """Gemini generate_content with 503/429 backoff (honors the API retryDelay hint)."""
+    """Google GenAI generate_content with 503/429 backoff (honors the retryDelay hint)."""
     from google import genai
     from google.genai import types as genai_types
     from google.genai.errors import ClientError, ServerError
@@ -231,9 +260,9 @@ def _gemini_generate(
         "system_instruction": system_prompt,
         "temperature": settings.temperature,
     }
-    if settings.thinking_effort is not None and route.supports_thinking_budget:
-        budget = _GEMINI_THINKING_BUDGET[settings.thinking_effort]
-        config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=budget)
+    thinking_config = _google_thinking_config(route, settings, genai_types)
+    if thinking_config is not None:
+        config_kwargs["thinking_config"] = thinking_config
     config = genai_types.GenerateContentConfig(**config_kwargs)
 
     for attempt in range(_MAX_RETRIES):
@@ -248,10 +277,10 @@ def _gemini_generate(
             hint = re.search(r"retryDelay.*?(\d+)s", str(exc))
             delay = (int(hint.group(1)) + 5) if hint else _BASE_DELAY * (2**attempt)
             print(
-                f"[group_llm] Gemini error ({exc}) — retrying in {delay:.0f}s ({attempt + 1}/{_MAX_RETRIES})"
+                f"[group_llm] Google GenAI error ({exc}) — retrying in {delay:.0f}s ({attempt + 1}/{_MAX_RETRIES})"
             )
             time.sleep(delay)
-    raise RuntimeError("Gemini retry loop exited without returning a response")
+    raise RuntimeError("Google GenAI retry loop exited without returning a response")
 
 
 # ---------------------------------------------------------------------------

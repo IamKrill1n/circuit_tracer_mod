@@ -18,17 +18,17 @@
     "defaults": {"temperature": 1.0, "thinking_effort": "medium"}
   },
   "gemini-2.5-flash": {
-    "provider": "gemini",
+    "provider": "google",
     "base_url": null,
     "api_key_env": "GOOGLE_API_KEY",
     "supports_thinking_budget": true,
     "defaults": {"temperature": 0.2, "thinking_effort": null}
   },
   "gemma-4-31b-it": {
-    "provider": "gemini",
+    "provider": "google",
     "base_url": null,
     "api_key_env": "GOOGLE_API_KEY",
-    "supports_thinking_budget": true,
-    "defaults": {"temperature": 0.2, "thinking_effort": null}
+    "supports_thinking_level": true,
+    "defaults": {"temperature": 0.2, "thinking_effort": "high"}
   }
 }

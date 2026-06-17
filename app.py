@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.parse
 from dataclasses import asdict
 from pathlib import Path
 from typing import Literal, cast
@@ -37,6 +38,10 @@ VIEWER_DIR = REPO / "graph_files"
 GEN_DIR.mkdir(exist_ok=True)
 VIEWER_DIR.mkdir(exist_ok=True)
 SERVER_PORT = 8032
+MAX_SUBGRAPH_VIEWER_NODES = 200
+DEFAULT_KEEP_ALL_TOKENS_AND_LOGITS = False
+DEFAULT_ENFORCE_DAG = False
+DEFAULT_ILP_EPS_CAUSAL = 0.05
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -48,6 +53,90 @@ def _is_qwen(model_name: str) -> bool:
 
 def _slugify(text: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "-" for c in text).strip("-") or "graph"
+
+
+def _summary_graph_viewer_payload(
+    sng: SummaryGraph,
+    max_nodes: int = MAX_SUBGRAPH_VIEWER_NODES,
+) -> tuple[list[str], list[list[str]], dict[str, int]]:
+    """Convert a SummaryGraph into the stock frontend subgraph URL format.
+
+    The frontend renders at most 200 pinned nodes in the subgraph panel. Keep
+    multi-member supernodes complete, then fill remaining slots with singletons.
+    """
+    pinned_ids: list[str] = []
+    pinned_set: set[str] = set()
+    grouped: list[list[str]] = []
+    dropped_supernodes = 0
+    dropped_members = 0
+
+    for supernode in sng.supernodes:
+        member_ids = supernode.member_node_ids()
+        if len(member_ids) <= 1:
+            continue
+
+        new_member_ids = [node_id for node_id in member_ids if node_id not in pinned_set]
+        if len(pinned_ids) + len(new_member_ids) > max_nodes:
+            dropped_supernodes += 1
+            dropped_members += len(member_ids)
+            continue
+
+        for node_id in new_member_ids:
+            pinned_ids.append(node_id)
+            pinned_set.add(node_id)
+        grouped.append([supernode.name, *member_ids])
+
+    for supernode in sng.supernodes:
+        member_ids = supernode.member_node_ids()
+        if len(member_ids) != 1:
+            continue
+
+        node_id = member_ids[0]
+        if node_id in pinned_set:
+            continue
+        if len(pinned_ids) >= max_nodes:
+            dropped_members += 1
+            continue
+        pinned_ids.append(node_id)
+        pinned_set.add(node_id)
+
+    stats = {
+        "pinned": len(pinned_ids),
+        "supernodes": len(grouped),
+        "dropped_supernodes": dropped_supernodes,
+        "dropped_members": dropped_members,
+    }
+    return pinned_ids, grouped, stats
+
+
+def _summary_graph_supernodes_for_upload(sng: SummaryGraph) -> list[list[str]]:
+    """Neuronpedia subgraph format: [label, member_1, ...] for grouped supernodes."""
+    used_labels: set[str] = set()
+    upload_supernodes: list[list[str]] = []
+
+    for supernode in sng.supernodes:
+        member_ids = supernode.member_node_ids()
+        if len(member_ids) <= 1:
+            continue
+
+        base_label = supernode.name.strip() or "supernode"
+        label = base_label
+        suffix = 2
+        while label in used_labels:
+            label = f"{base_label} ({suffix})"
+            suffix += 1
+        used_labels.add(label)
+        upload_supernodes.append([label, *member_ids])
+
+    return upload_supernodes
+
+
+def _viewer_url(slug: str, extra_params: dict[str, str] | None = None) -> str:
+    params = {"slug": slug}
+    if extra_params:
+        params.update(extra_params)
+    query = urllib.parse.urlencode(params)
+    return f"http://localhost:{SERVER_PORT}/index.html?{query}"
 
 
 def _run_attribution(
@@ -151,11 +240,30 @@ def _graph_model_and_scan(pt_path: str) -> tuple[str, str]:
     return d["cfg"].tokenizer_name, scan_str
 
 
-@st.cache_resource(show_spinner=False)
 def _serve(viewer_dir_str: str, port: int):
     from circuit_tracer.frontend.local_server import serve
 
     return serve(data_dir=viewer_dir_str, port=port)
+
+
+def _stop_viewer_server() -> None:
+    server = st.session_state.pop("viewer_server", None)
+    st.session_state.pop("viewer_server_dir", None)
+    if server is not None:
+        server.stop()
+
+
+def _ensure_viewer_server(viewer_dir_str: str, port: int):
+    if st.session_state.get("viewer_server_dir") == viewer_dir_str:
+        server = st.session_state.get("viewer_server")
+        if server is not None:
+            return server
+
+    _stop_viewer_server()
+    server = _serve(viewer_dir_str, port)
+    st.session_state["viewer_server"] = server
+    st.session_state["viewer_server_dir"] = viewer_dir_str
+    return server
 
 
 @st.cache_resource(show_spinner=False)
@@ -369,7 +477,7 @@ def _cluster_dispatch(
     random_state: int,
     n_init: int,
     theta: float | str = 0.0,
-    lambda_causal: float = 0.0,
+    lambda_causal: float = 1.0,
     eps_causal: float | None = None,
     ilp_time_limit: float = 30.0,
 ) -> list[list[str]]:
@@ -562,13 +670,19 @@ if gen_btn:
             st.success(f"Loaded `{pt_path}` and wrote viewer JSON to `{viewer_dir}`.")
 
         ag = AttrGraph.from_graph(str(pt_path))
+        viewer_dir_str = str(viewer_dir)
+        if "viewer_server" in st.session_state:
+            _stop_viewer_server()
         st.session_state["attr_graph"] = ag
         st.session_state["pt_path"] = str(pt_path)
-        st.session_state["viewer_dir"] = str(viewer_dir)
+        st.session_state["viewer_dir"] = viewer_dir_str
         st.session_state["graph_slug"] = slug
         st.session_state.pop("prune_graph", None)
         st.session_state.pop("sng", None)
         st.session_state.pop("sng_labeled", None)
+        st.session_state.pop("viewer_subgraph_params", None)
+        st.session_state.pop("viewer_subgraph_stats", None)
+        st.session_state.pop("viewer_subgraph_slug", None)
     except Exception as exc:
         st.error(f"Failed: {exc}")
 
@@ -579,9 +693,43 @@ if "viewer_dir" in st.session_state:
     viewer_dir = st.session_state["viewer_dir"]
     slug = st.session_state["graph_slug"]
     try:
-        _serve(viewer_dir, SERVER_PORT)
-        url = f"http://localhost:{SERVER_PORT}/index.html?slug={slug}"
-        st.caption(f"Open directly: [{url}]({url})")
+        _ensure_viewer_server(viewer_dir, SERVER_PORT)
+
+        if "sng" in st.session_state:
+            v_c1, v_c2 = st.columns([1, 1])
+            if v_c1.button("Show summary graph in subgraph panel", type="primary"):
+                sng_for_viewer: SummaryGraph = st.session_state["sng"]
+                pinned_ids, supernodes, stats = _summary_graph_viewer_payload(sng_for_viewer)
+                st.session_state["viewer_subgraph_params"] = {
+                    "pinnedIds": ",".join(pinned_ids),
+                    "supernodes": json.dumps(supernodes, separators=(",", ":")),
+                    "viewerImport": str(int(time.time())),
+                }
+                st.session_state["viewer_subgraph_stats"] = stats
+                st.session_state["viewer_subgraph_slug"] = slug
+            if v_c2.button("Clear imported subgraph"):
+                st.session_state.pop("viewer_subgraph_params", None)
+                st.session_state.pop("viewer_subgraph_stats", None)
+                st.session_state.pop("viewer_subgraph_slug", None)
+
+        extra_params = None
+        if st.session_state.get("viewer_subgraph_slug") == slug:
+            extra_params = st.session_state.get("viewer_subgraph_params")
+            stats = st.session_state.get("viewer_subgraph_stats")
+            if stats:
+                st.caption(
+                    "Summary subgraph active: "
+                    f"{stats['pinned']} pinned nodes, {stats['supernodes']} grouped supernodes."
+                )
+                if stats["dropped_members"]:
+                    st.warning(
+                        "The stock subgraph panel only renders the first "
+                        f"{MAX_SUBGRAPH_VIEWER_NODES} pinned nodes; dropped "
+                        f"{stats['dropped_members']} members from this viewer import."
+                    )
+
+        url = _viewer_url(slug, extra_params)
+        st.caption(f"Open directly: [viewer]({url})")
         st.components.v1.iframe(url, height=720, scrolling=True)
     except Exception as exc:
         st.warning(f"Could not start local_server: {exc}")
@@ -631,7 +779,12 @@ if "attr_graph" in st.session_state:
     )
     normalization = p_c6.selectbox("normalization", ["rank", "min_max"], key="pr_norm")
     alpha = st.slider("alpha", 0.0, 1.0, 0.5, step=0.05, key="pr_alpha")
-    keep_all = st.checkbox("keep_all_tokens_and_logits", value=True, key="pr_keep")
+    keep_all = st.checkbox(
+        "keep_all_tokens_and_logits",
+        value=DEFAULT_KEEP_ALL_TOKENS_AND_LOGITS,
+        key="pr_keep",
+        help="Matches `python -m summarization` default: off unless explicitly enabled.",
+    )
     filter_act = st.checkbox(
         "filter_act_density (activation-density filter from feature dashboards, post-prune)",
         value=False,
@@ -779,15 +932,23 @@ if "prune_graph" in st.session_state:
             key="cl_theta",
         )
         theta_arg = float(ilp_theta)
+    use_ilp_eps = i_c2.checkbox(
+        "use eps_causal",
+        value=False,
+        disabled=not is_ilp,
+        key="cl_use_eps",
+        help="Matches `summarization.cluster.cluster` default: no causal-loss constraint.",
+    )
     ilp_eps = i_c2.number_input(
-        "eps_causal (0-1)",
+        "eps_causal",
         min_value=0.0,
         max_value=1.0,
-        value=1.0,
+        value=DEFAULT_ILP_EPS_CAUSAL,
         step=0.05,
-        disabled=not is_ilp,
+        disabled=not (is_ilp and use_ilp_eps),
         key="cl_eps",
     )
+    eps_causal = float(ilp_eps) if is_ilp and use_ilp_eps else None
     ilp_time_limit = i_c3.number_input(
         "ilp time_limit (s)",
         min_value=1.0,
@@ -799,7 +960,11 @@ if "prune_graph" in st.session_state:
 
     is_spectral = method == "ours-spectral"
     enforce_dag = st.checkbox(
-        "enforce_dag (ours-spectral only)", value=True, disabled=not is_spectral, key="cl_dag"
+        "enforce_dag (ours-spectral only)",
+        value=DEFAULT_ENFORCE_DAG,
+        disabled=not is_spectral,
+        key="cl_dag",
+        help="Matches summarization.cluster_graph_spectral default.",
     )
     s_c1, s_c2 = st.columns(2)
     random_state = s_c1.number_input("random_state", value=42, step=1, key="cl_rs")
@@ -821,7 +986,7 @@ if "prune_graph" in st.session_state:
                     random_state=int(random_state),
                     n_init=int(n_init),
                     theta=theta_arg,
-                    eps_causal=float(ilp_eps),
+                    eps_causal=eps_causal,
                     ilp_time_limit=float(ilp_time_limit),
                 )
                 rows = clusters_to_supernodes(prune_graph, clusters)
@@ -850,7 +1015,8 @@ if "prune_graph" in st.session_state:
 if "sng" in st.session_state:
     st.header("5. Supernode graph")
     sng: SummaryGraph = st.session_state["sng"]
-    supernode_map = st.session_state["supernode_map"]
+    supernode_map = sng.to_mapping()
+    st.session_state["supernode_map"] = supernode_map
     attr = st.session_state["attr"]
     method = st.session_state.get("cluster_method", "")
     slug = st.session_state.get("graph_slug", "")
@@ -948,8 +1114,8 @@ if "sng" in st.session_state:
 # 6. Upload to Neuronpedia ---------------------------------------------------
 if "sng" in st.session_state and "prune_graph" in st.session_state:
     st.header("6. Upload to Neuronpedia")
+    sng: SummaryGraph = st.session_state["sng"]
     prune_graph = st.session_state["prune_graph"]
-    clusters = st.session_state.get("clusters", [])
 
     u_c1, u_c2 = st.columns(2)
     up_model_id = u_c1.text_input("model_id", value="gemma-2-2b", key="up_model_id")
@@ -967,13 +1133,8 @@ if "sng" in st.session_state and "prune_graph" in st.session_state:
         elif not up_display_name:
             st.error("display_name is required for upload.")
         else:
-            labelled = [
-                [f"cluster_{i}", *members] for i, members in enumerate(clusters) if len(members) > 1
-            ]
-            # log labelled supernodes for debugging; Neuronpedia will re-derive them from the pinnedIds
-            st.write(
-                "Labelled supernodes (for debugging; Neuronpedia will re-derive these from the pinnedIds):"
-            )
+            labelled = _summary_graph_supernodes_for_upload(sng)
+            st.write("Supernodes sent to Neuronpedia:")
             st.json(labelled)
             with st.spinner("Uploading…"):
                 status, body = save_subgraph(

@@ -11,7 +11,7 @@ from summarization.group_llm import (
     _build_feature_block,
     _build_graph_user_message,
     _build_single_supernode_user_message,
-    _gemini_generate,
+    _google_generate,
     _merge_settings,
     _parse_graph_label_response,
     resolve_model,
@@ -19,76 +19,17 @@ from summarization.group_llm import (
 from summarization.summarize import Node, SummaryGraph, Supernode
 
 
-def test_resolve_model_routes_gemini_with_google_api_key(tmp_path, monkeypatch) -> None:
-    registry_path = tmp_path / "llm_models.json"
-    registry_path.write_text(
-        json.dumps(
-            {
-                "gemini-test": {
-                    "provider": "gemini",
-                    "model": "gemini-2.5-flash",
-                    "base_url": None,
-                    "api_key_env": "GOOGLE_API_KEY",
-                    "defaults": {"temperature": 0.2, "thinking_effort": None},
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
-
-    route = resolve_model("gemini-test", registry_path)
-
-    assert route.provider == "gemini"
-    assert route.api_key == "google-key"
-    assert route.supports_thinking_budget
-
-
-def test_resolve_model_allows_registry_to_disable_gemini_thinking_budget(
-    tmp_path, monkeypatch
-) -> None:
-    registry_path = tmp_path / "llm_models.json"
-    registry_path.write_text(
-        json.dumps(
-            {
-                "gemma-test": {
-                    "provider": "gemini",
-                    "model": "gemma-4-31b-it",
-                    "base_url": None,
-                    "api_key_env": "GOOGLE_API_KEY",
-                    "supports_thinking_budget": False,
-                    "defaults": {"temperature": 0.2, "thinking_effort": "medium"},
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
-
-    route = resolve_model("gemma-test", registry_path)
-
-    assert route.provider == "gemini"
-    assert not route.supports_thinking_budget
-
-
-def test_merge_settings_can_disable_registry_thinking_default() -> None:
-    defaults = ModelSettings(temperature=1.0, thinking_effort="medium")
-
-    merged = _merge_settings(
-        ModelSettings(temperature=0.2, use_default_thinking_effort=False),
-        defaults,
-    )
-
-    assert merged.temperature == 0.2
-    assert merged.thinking_effort is None
-
-
-def test_gemini_generate_omits_thinking_config_for_unsupported_model(monkeypatch) -> None:
-    calls: dict[str, object] = {}
-
+def _install_fake_google_genai(monkeypatch, calls: dict[str, object]) -> None:
     class FakeThinkingConfig:
-        def __init__(self, thinking_budget: int) -> None:
-            calls["thinking_budget"] = thinking_budget
+        def __init__(
+            self,
+            thinking_budget: int | None = None,
+            thinking_level: str | None = None,
+        ) -> None:
+            if thinking_budget is not None:
+                calls["thinking_budget"] = thinking_budget
+            if thinking_level is not None:
+                calls["thinking_level"] = thinking_level
 
     class FakeGenerateContentConfig:
         def __init__(self, **kwargs) -> None:
@@ -132,38 +73,55 @@ def test_gemini_generate_omits_thinking_config_for_unsupported_model(monkeypatch
     monkeypatch.setitem(sys.modules, "google.genai.types", genai_types_module)
     monkeypatch.setitem(sys.modules, "google.genai.errors", genai_errors_module)
 
-    route = ModelRoute(
-        provider="gemini",
-        model="gemma-4-31b-it",
-        base_url=None,
-        api_key="google-key",
-        defaults=ModelSettings(),
-        supports_thinking_budget=False,
-    )
-    settings = ModelSettings(temperature=0.2, thinking_effort="medium")
 
-    text = _gemini_generate(route, settings, "system prompt", "user prompt")
-
-    assert text == "ok"
-    assert calls["api_key"] == "google-key"
-    assert calls["model"] == "gemma-4-31b-it"
-    assert calls["contents"] == "user prompt"
-    assert calls["config_kwargs"] == {
-        "system_instruction": "system prompt",
-        "temperature": 0.2,
-    }
-    assert "thinking_budget" not in calls
-
-
-def test_resolve_model_rejects_unknown_provider(tmp_path) -> None:
+def test_resolve_model_routes_google_with_google_api_key(tmp_path, monkeypatch) -> None:
     registry_path = tmp_path / "llm_models.json"
     registry_path.write_text(
         json.dumps(
             {
                 "gemini-test": {
                     "provider": "google",
+                    "model": "gemini-2.5-flash",
                     "base_url": None,
-                    "api_key_env": "GEMINI_API_KEY",
+                    "api_key_env": "GOOGLE_API_KEY",
+                    "defaults": {"temperature": 0.2, "thinking_effort": None},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
+
+    route = resolve_model("gemini-test", registry_path)
+
+    assert route.provider == "google"
+    assert route.api_key == "google-key"
+    assert route.supports_thinking_budget
+    assert not route.supports_thinking_level
+
+
+def test_resolve_model_uses_gemma_registry_default(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
+
+    route = resolve_model("gemma-4-31b-it")
+
+    assert route.provider == "google"
+    assert route.api_key == "google-key"
+    assert route.defaults.thinking_effort == "high"
+    assert not route.supports_thinking_budget
+    assert route.supports_thinking_level
+
+
+def test_resolve_model_rejects_gemini_provider(tmp_path) -> None:
+    registry_path = tmp_path / "llm_models.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "gemma-test": {
+                    "provider": "gemini",
+                    "model": "gemma-4-31b-it",
+                    "base_url": None,
+                    "api_key_env": "GOOGLE_API_KEY",
                     "defaults": {"temperature": 0.2, "thinking_effort": None},
                 }
             }
@@ -172,11 +130,97 @@ def test_resolve_model_rejects_unknown_provider(tmp_path) -> None:
     )
 
     try:
-        resolve_model("gemini-test", registry_path)
+        resolve_model("gemma-test", registry_path)
     except ValueError as exc:
         assert "unsupported provider" in str(exc)
+        assert "google" in str(exc)
     else:
-        raise AssertionError("expected unsupported provider to raise ValueError")
+        raise AssertionError("expected gemini provider to raise ValueError")
+
+
+def test_merge_settings_can_disable_registry_thinking_default() -> None:
+    defaults = ModelSettings(temperature=1.0, thinking_effort="medium")
+
+    merged = _merge_settings(
+        ModelSettings(temperature=0.2, use_default_thinking_effort=False),
+        defaults,
+    )
+
+    assert merged.temperature == 0.2
+    assert merged.thinking_effort is None
+
+
+def test_google_generate_sends_gemini_thinking_budget(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+    _install_fake_google_genai(monkeypatch, calls)
+
+    route = ModelRoute(
+        provider="google",
+        model="gemini-2.5-flash",
+        base_url=None,
+        api_key="google-key",
+        defaults=ModelSettings(),
+        supports_thinking_budget=True,
+    )
+    settings = ModelSettings(temperature=0.2, thinking_effort="medium")
+
+    text = _google_generate(route, settings, "system prompt", "user prompt")
+
+    assert text == "ok"
+    assert calls["api_key"] == "google-key"
+    assert calls["model"] == "gemini-2.5-flash"
+    assert calls["contents"] == "user prompt"
+    assert calls["thinking_budget"] == 2048
+    assert "thinking_level" not in calls
+    assert "thinking_config" in calls["config_kwargs"]
+
+
+def test_google_generate_sends_gemma_high_thinking_level(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+    _install_fake_google_genai(monkeypatch, calls)
+
+    route = ModelRoute(
+        provider="google",
+        model="gemma-4-31b-it",
+        base_url=None,
+        api_key="google-key",
+        defaults=ModelSettings(),
+        supports_thinking_level=True,
+    )
+    settings = ModelSettings(temperature=0.2, thinking_effort="high")
+
+    text = _google_generate(route, settings, "system prompt", "user prompt")
+
+    assert text == "ok"
+    assert calls["model"] == "gemma-4-31b-it"
+    assert calls["thinking_level"] == "high"
+    assert "thinking_budget" not in calls
+    assert "thinking_config" in calls["config_kwargs"]
+
+
+def test_google_generate_omits_gemma_medium_thinking_level(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+    _install_fake_google_genai(monkeypatch, calls)
+
+    route = ModelRoute(
+        provider="google",
+        model="gemma-4-31b-it",
+        base_url=None,
+        api_key="google-key",
+        defaults=ModelSettings(),
+        supports_thinking_level=True,
+    )
+    settings = ModelSettings(temperature=0.2, thinking_effort="medium")
+
+    text = _google_generate(route, settings, "system prompt", "user prompt")
+
+    assert text == "ok"
+    assert calls["config_kwargs"] == {
+        "system_instruction": "system prompt",
+        "temperature": 0.2,
+    }
+    assert "thinking_level" not in calls
+    assert "thinking_budget" not in calls
 
 
 def test_parse_graph_label_response_accepts_prompt_contract() -> None:
