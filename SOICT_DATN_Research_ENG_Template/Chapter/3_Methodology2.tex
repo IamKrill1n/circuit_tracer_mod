@@ -212,10 +212,11 @@ reaches the corresponding fraction. Larger values of $\eta_V$ and $\eta_E$ retai
 more of the original graph before clustering. We use default thresholds $\eta_V$ and $\eta_E$ at 0.02 and 0.95 respectively, the choice will be explain in chapter Numerical Results.
 
 \paragraph{Filter dead features and too frequent features}
+Because the transcoders are not perfect, they often include features that activate too frequent or too infrequent.
 A feature's activation frequency is the fraction of tokens in a dataset for which
 the feature has positive activation. Dead features have activation frequency near
 0, while some features activate too frequently. We discard features with
-activation frequency below 0.002\% or above 10\%.
+activation frequency below 0.002\% or above 10\%. The choice of thresholds is arbitrary.
 
 \subsection{Clustering}
 \label{sec:stage2}
@@ -434,14 +435,20 @@ By construction, all surviving edges point forward in the imposed order, so $H$ 
 a DAG.
 
 \paragraph{Labeling.}
-Labeling adds display metadata to the acyclic summary graph: each feature
-supernode receives a short label, a role, and a one-sentence description. The
-implementation sends an LLM the original prompt, the predicted token, and compact
-feature evidence for each supernode, including layer, token position, activation
-examples, neighboring tokens, and top positive logits. The returned JSON assigns
-one of four roles --- Input, Abstract, Output, or Trash --- and does not change
-$V_H$, $E_H$, or $W_H$; prompt details are deferred to the Appendix.
+The labeling step uses an LLM to translate the supernodes into human-interpretable concepts.
+We label the supernodes by adapting previous automatic-interpretability techniques \cite{bills2023language} to better fit our pipeline.
+The implementation provides the LLM with the original prompt, the predicted token, and compact
+feature evidence for each supernode, including its layer, token position, activation
+examples, neighboring tokens, and top positive logits. For each supernode, the output includes a short label, a role, and a one-sentence description.
+We divide the supernodes into four roles:
+\begin{description}[leftmargin=2.0em,style=nextline,topsep=2pt,itemsep=3pt]
+\item[Input.] Low-level features that mainly extract evidence from the prompt.
+\item[Output.] Features that promote the prediction of specific tokens.
+\item[Abstract.] High-level concepts and intermediate computations.
+\item[Trash.] Uninterpretable features.
+\end{description}
 
+This taxonomy follows \cite{lindsey2025biology} and fits the detokenization--abstract-features--retokenization picture of Elhage et al.~\cite{elhage2022solu}.
 \section{Chapter Summary}
 
 This chapter formalized attribution-graph summarization and defined the proposed
