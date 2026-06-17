@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "einops>=0.8.0",
+    "fastapi>=0.115.0",
     "huggingface_hub<1.0.0",
     "ipykernel>=6.29.5,<7.0.0",
     "ipywidgets>=8.1.7",
@@ -18,9 +19,11 @@ dependencies = [
     "tokenizers>=0.21.0",
     "torch>=2.0.0",
     "openai>=1.0.0",
+    "python-multipart>=0.0.9",
     "tqdm>=4.60.0",
     "transformer-lens>=2.16.0",
     "transformers>=4.56.0,<=4.57.3",
+    "uvicorn>=0.30.0",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Circuit Tracer Graphs</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Attribution Graph Dashboard</h1>
+        <p>Visualize local circuit_tracer graphs, generate new graphs, and build summaries.</p>
+      </div>
+      <div class="actions">
+        <button id="refreshBtn" class="secondary">Refresh</button>
+        <button id="uploadBtn" class="secondary">Upload .pt</button>
+        <button id="newGraphBtn" class="primary">Generate New Graph</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <div class="section-title">Local Graphs</div>
+        <div id="graphList" class="graph-list"></div>
+      </aside>
+
+      <section class="viewer-panel">
+        <div class="viewer-toolbar">
+          <div>
+            <strong id="activeTitle">No graph selected</strong>
+            <span id="activeMeta"></span>
+          </div>
+          <div class="actions">
+            <button id="summaryBtn" class="primary" disabled>Generate Summary</button>
+            <button id="showSummaryBtn" class="secondary" disabled>Show Summary</button>
+            <button id="showRawBtn" class="secondary" disabled>Show Raw</button>
+          </div>
+        </div>
+        <iframe id="viewerFrame" title="circuit_tracer dashboard"></iframe>
+      </section>
+
+      <aside class="summary-panel">
+        <div class="section-title">Summary Details</div>
+        <div id="summaryDetails" class="summary-details muted">Summary roles and descriptions appear here.</div>
+      </aside>
+    </main>
+
+    <dialog id="generateDialog">
+      <form method="dialog" class="modal">
+        <button class="close" value="cancel" aria-label="Close">&times;</button>
+        <h2>Generate New Graph</h2>
+        <p class="muted">Generate a new attribution graph for a custom prompt using circuit-tracer.</p>
+
+        <div class="two-col">
+          <label>Model <input id="genModel" value="google/gemma-2-2b" /></label>
+          <label>Source Set <input id="genTranscoder" value="mntss/clt-gemma-2-2b-2.5M" /></label>
+          <label>Custom Graph ID <input id="genSlug" placeholder="optional-slug" /></label>
+          <label>Max # Logits <input id="genMaxLogits" type="number" min="1" value="15" /></label>
+        </div>
+
+        <div class="preview-box">
+          <button id="previewBtn" type="button" class="secondary">Preview Tokens</button>
+          <div id="previewOut" class="preview-output muted">Token preview has not run.</div>
+        </div>
+
+        <div class="two-col">
+          <label>Desired Logit Probability <input id="genDesiredProb" type="number" min="0" max="1" step="0.01" value="0.99" /></label>
+          <label>Max # Nodes <input id="genMaxNodes" type="number" min="1" value="8192" /></label>
+          <label>Node Threshold <input id="genNodeThreshold" type="number" min="0" max="1" step="0.01" value="0.8" /></label>
+          <label>Edge Threshold <input id="genEdgeThreshold" type="number" min="0" max="1" step="0.01" value="0.98" /></label>
+        </div>
+
+        <details>
+          <summary>Advanced</summary>
+          <div class="two-col">
+            <label>Dtype
+              <select id="genDtype">
+                <option>bfloat16</option>
+                <option>float16</option>
+                <option>float32</option>
+              </select>
+            </label>
+            <label>Backend
+              <select id="genBackend">
+                <option>transformerlens</option>
+                <option>nnsight</option>
+              </select>
+            </label>
+            <label>Batch Size <input id="genBatch" type="number" min="1" value="256" /></label>
+          </div>
+        </details>
+
+        <label>Prompt to Complete <textarea id="genPrompt" rows="4">The capital of the state containing Dallas is</textarea></label>
+
+        <footer>
+          <span id="generateStatus" class="status"></span>
+          <button type="reset" class="secondary">Reset</button>
+          <button id="startGenerateBtn" type="button" class="primary">Start Generation</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="uploadDialog">
+      <form method="dialog" class="modal">
+        <button class="close" value="cancel" aria-label="Close">&times;</button>
+        <h2>Upload Attribution Graph</h2>
+        <label>Graph .pt <input id="uploadFile" type="file" accept=".pt" /></label>
+        <label>Slug <input id="uploadSlug" placeholder="inferred from filename" /></label>
+        <label>Scan / Source Set <input id="uploadScan" placeholder="inferred when possible" /></label>
+        <footer>
+          <span id="uploadStatus" class="status"></span>
+          <button id="startUploadBtn" type="button" class="primary">Upload</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="summaryDialog">
+      <form method="dialog" class="modal">
+        <button class="close" value="cancel" aria-label="Close">&times;</button>
+        <h2>Generate Summary</h2>
+        <div class="two-col">
+          <label>Node Threshold <input id="sumNodeThreshold" type="number" min="0" max="1" step="0.01" value="0.8" /></label>
+          <label>Edge Threshold <input id="sumEdgeThreshold" type="number" min="0" max="1" step="0.01" value="0.98" /></label>
+          <label>Target K <input id="sumTargetK" type="number" min="1" value="7" /></label>
+          <label>Label Model <input id="sumLabelModel" value="gemini-2.5-flash" /></label>
+        </div>
+
+        <details>
+          <summary>Pruning</summary>
+          <div class="two-col">
+            <label>Logit Weights
+              <select id="sumLogitWeights"><option>target</option><option>probs</option></select>
+            </label>
+            <label>Token Weights
+              <select id="sumTokenWeights"><option value="uniform">uniform</option><option value="shap">generate shap</option></select>
+            </label>
+            <label>Combine Method
+              <select id="sumCombine"><option>geometric</option><option>arithmetic</option><option>harmonic</option></select>
+            </label>
+            <label>Normalization
+              <select id="sumNormalization"><option>rank</option><option>min_max</option></select>
+            </label>
+            <label>Alpha <input id="sumAlpha" type="number" min="0" max="1" step="0.05" value="0.5" /></label>
+            <label><input id="sumKeepAll" type="checkbox" /> Keep all tokens and logits</label>
+            <label><input id="sumFilterAct" type="checkbox" /> Filter activation density</label>
+          </div>
+        </details>
+
+        <details>
+          <summary>Clustering</summary>
+          <div class="two-col">
+            <label>Method
+              <select id="sumClusterMethod"><option value="spectral">spectral</option><option value="agglomerative">agglomerative</option><option value="ilp">ilp</option></select>
+            </label>
+            <label>Max Layer Span <input id="sumLayerSpan" type="number" min="1" value="4" /></label>
+            <label>Max Supernodes <input id="sumMaxSn" type="number" min="0" placeholder="0 = no cap" /></label>
+            <label>Mean Method
+              <select id="sumMean"><option>arith</option><option>geo</option><option>harm</option></select>
+            </label>
+            <label><input id="sumNormalizeWeights" type="checkbox" /> Normalize weights</label>
+            <label>Decay Rate <input id="sumDecay" type="number" min="0" step="0.1" value="1.0" /></label>
+            <label>Random State <input id="sumRandom" type="number" value="42" /></label>
+            <label>N Init <input id="sumNInit" type="number" min="1" value="20" /></label>
+            <label>ILP Time Limit <input id="sumIlpTime" type="number" min="1" value="30" /></label>
+          </div>
+        </details>
+
+        <details>
+          <summary>Labeling</summary>
+          <div class="two-col">
+            <label><input id="sumDoLabel" type="checkbox" checked /> Label supernodes</label>
+            <label>Temperature <input id="sumLabelTemp" type="number" min="0" max="1" step="0.05" value="0.2" /></label>
+            <label>Thinking Effort
+              <select id="sumThinking"><option value="off">off</option><option value="default">registry default</option><option>low</option><option>medium</option><option>high</option></select>
+            </label>
+          </div>
+        </details>
+
+        <footer>
+          <span id="summaryStatus" class="status"></span>
+          <button id="startSummaryBtn" type="button" class="primary">Generate Summary</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
