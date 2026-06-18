@@ -21,15 +21,15 @@ from config import HUGGINGFACE_API_KEY
 if HUGGINGFACE_API_KEY and not os.getenv("HF_TOKEN"):
     os.environ["HF_TOKEN"] = HUGGINGFACE_API_KEY
 from attribute_utils import format_qwen_with_tokenizer
+from eval.legacy_cluster_baselines import cluster_graph_agglomerative, cluster_graph_spectral
 from summarization.attr_graph import AttrGraph
-from summarization.classify import filter_act_density
 from summarization.cluster import (
-    cluster_graph_agglomerative,
-    cluster_graph_spectral,
     clusters_to_supernodes,
+    compute_phi_vectors,
     labels_to_supernodes,
 )
 from summarization.cluster_viz import supernode_graph_figure
+from summarization.prune import filter_act_density
 from summarization.summarize import SummaryGraph
 
 REPO = Path(__file__).parent
@@ -507,7 +507,7 @@ def _cluster_dispatch(
     if method == "ours-ilp":
         # Exact Stage-2 epsilon-constraint ILP: min L_atom subject to optional
         # L_causal <= eps_causal and K <= max_sn. target_k is ignored.
-        from summarization.ilp_cluster import cluster_graph_ilp
+        from summarization.cluster import cluster_graph_ilp
 
         return cluster_graph_ilp(
             prune_graph,
@@ -528,7 +528,6 @@ def _cluster_dispatch(
         _modularity_middle_labels,
         _spectral_cosine_middle_labels,
     )
-    from summarization.cluster import compute_phi_vectors
 
     mid_idx = _middle_indices(prune_graph)
     middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
@@ -937,7 +936,7 @@ if "prune_graph" in st.session_state:
         value=False,
         disabled=not is_ilp,
         key="cl_use_eps",
-        help="Matches `summarization.cluster.cluster` default: no causal-loss constraint.",
+        help="Adds the ILP hard constraint L_causal <= eps_causal.",
     )
     ilp_eps = i_c2.number_input(
         "eps_causal",
@@ -964,7 +963,7 @@ if "prune_graph" in st.session_state:
         value=DEFAULT_ENFORCE_DAG,
         disabled=not is_spectral,
         key="cl_dag",
-        help="Matches summarization.cluster_graph_spectral default.",
+        help="Legacy spectral compatibility option.",
     )
     s_c1, s_c2 = st.columns(2)
     random_state = s_c1.number_input("random_state", value=42, step=1, key="cl_rs")
@@ -1047,7 +1046,7 @@ if "sng" in st.session_state:
     )
     if st.button("Label supernodes with LLM", type="primary"):
         try:
-            from summarization.group_llm import (
+            from summarization.label import (
                 LabelScheme,
                 ModelSettings,
                 ThinkingEffort,

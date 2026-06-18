@@ -4,7 +4,7 @@ import types
 
 import torch
 
-from summarization.group_llm import (
+from summarization.label import (
     LabelScheme,
     ModelRoute,
     ModelSettings,
@@ -312,9 +312,7 @@ def test_graph_user_message_uses_layer_not_feature_ids(monkeypatch) -> None:
         pruned_adj=torch.zeros((2, 2)),
         metadata={"scan": "scan", "prompt": "The capital is", "prompt_tokens": ["The", " capital"]},
     )
-    monkeypatch.setattr(
-        "summarization.group_llm._fetch_feature_context", lambda *args, **kwargs: None
-    )
+    monkeypatch.setattr("summarization.label._fetch_feature_context", lambda *args, **kwargs: None)
 
     user_message, ordered = _build_graph_user_message(sng, " Paris", LabelScheme())
 

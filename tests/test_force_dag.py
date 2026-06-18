@@ -52,9 +52,7 @@ def _logit_node(node_id: str, node_idx: int, ctx_idx: int = 0) -> Node:
     )
 
 
-def _sng_from_blocks(
-    sns: list[Supernode], adj_block: np.ndarray
-) -> SummaryGraph:
+def _sng_from_blocks(sns: list[Supernode], adj_block: np.ndarray) -> SummaryGraph:
     """Build a SummaryGraph whose pre-π block-sum is exactly ``adj_block``.
 
     Each Supernode is given a single member with a unique ``node_idx``, so the
@@ -196,9 +194,9 @@ def test_pi_is_dag_on_complex_input() -> None:
     c = Supernode("C", [_feat_node("c", 2, layer=3)], "features", 3, 3)
     block = np.array(
         [
-            [0.0, 2.0, 0.7],   # to A: from B (2), from C (0.7 — back-edge)
-            [5.0, 0.0, 1.5],   # to B: from A (5), from C (1.5 — back-edge)
-            [0.5, 1.0, 0.0],   # to C: from A (0.5), from B (1)
+            [0.0, 2.0, 0.7],  # to A: from B (2), from C (0.7 — back-edge)
+            [5.0, 0.0, 1.5],  # to B: from A (5), from C (1.5 — back-edge)
+            [0.5, 1.0, 0.0],  # to C: from A (0.5), from B (1)
         ]
     )
     sng = _sng_from_blocks([a, b, c], block)
@@ -210,7 +208,7 @@ def test_pi_is_dag_on_complex_input() -> None:
 
 def test_compute_L_causal_is_internal_mass_fraction() -> None:
     # Eq. Lcausal: fraction of pruned edge mass absorbed *inside* a supernode.
-    from summarization.scoring import compute_L_causal
+    from eval.eval_cluster import compute_L_causal
 
     a = _feat_node("a", 0, layer=1)
     b = _feat_node("b", 1, layer=2)
@@ -227,13 +225,13 @@ def test_compute_L_causal_is_internal_mass_fraction() -> None:
     )
     sng = SummaryGraph(supernodes=[ab, c_sn], pruned_adj=pruned_adj)
 
-    internal = 2.0           # only a->b lives inside a supernode
+    internal = 2.0  # only a->b lives inside a supernode
     total = 2.0 + 1.0 + 3.0  # all pruned edge mass
     assert compute_L_causal(sng) == pytest.approx(internal / total)
 
 
 def test_compute_L_causal_zero_for_all_singletons() -> None:
-    from summarization.scoring import compute_L_causal
+    from eval.eval_cluster import compute_L_causal
 
     a = Supernode("A", [_feat_node("a", 0, layer=1)], "features", 1, 1)
     b = Supernode("B", [_feat_node("b", 1, layer=2)], "features", 2, 2)
@@ -243,7 +241,7 @@ def test_compute_L_causal_zero_for_all_singletons() -> None:
 
 
 def test_edge_mass_metrics_report_dag_loss_for_cycle() -> None:
-    from summarization.scoring import compute_edge_mass_metrics
+    from eval.eval_cluster import compute_edge_mass_metrics
 
     a = Supernode("A", [_feat_node("a", 0, layer=5)], "features", 5, 5)
     b = Supernode("B", [_feat_node("b", 1, layer=5)], "features", 5, 5)
@@ -263,7 +261,7 @@ def test_edge_mass_metrics_report_dag_loss_for_cycle() -> None:
 
 
 def test_edge_mass_metrics_zero_dag_loss_for_acyclic_input() -> None:
-    from summarization.scoring import compute_edge_mass_metrics
+    from eval.eval_cluster import compute_edge_mass_metrics
 
     a = Supernode("A", [_feat_node("a", 0, layer=1)], "features", 1, 1)
     b = Supernode("B", [_feat_node("b", 1, layer=2)], "features", 2, 2)
@@ -286,9 +284,7 @@ def test_edge_mass_metrics_zero_dag_loss_for_acyclic_input() -> None:
 
 def test_compute_sn_adj_is_plain_block_sum() -> None:
     """Confirm compute_sn_adj keeps both antiparallel directions (no tie-break)."""
-    pruned_adj = torch.tensor(
-        [[0.0, 3.0], [1.0, 0.0]], dtype=torch.float32
-    )  # [tgt, src]
+    pruned_adj = torch.tensor([[0.0, 3.0], [1.0, 0.0]], dtype=torch.float32)  # [tgt, src]
     block = compute_sn_adj([[0], [1]], pruned_adj)
     assert block[0, 1] == 3.0
     assert block[1, 0] == 1.0

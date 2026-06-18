@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from summarization.cluster import (
+from eval.legacy_cluster_baselines import (
     compute_similarity,
     eigengap_analysis,
     find_best_k,

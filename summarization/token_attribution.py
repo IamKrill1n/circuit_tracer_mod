@@ -39,7 +39,9 @@ def _normalize_scores(
 
     non_special_mask = ~special_mask
     if not non_special_mask.any():
-        raise ValueError("All prompt tokens are special tokens; cannot normalize attribution scores.")
+        raise ValueError(
+            "All prompt tokens are special tokens; cannot normalize attribution scores."
+        )
 
     masked_scores = values.to(torch.float32).clone()
     if method == "softmax":
@@ -264,7 +266,11 @@ def _extract_shap_values(raw_explanation: Any) -> torch.Tensor:
 
     tensor_values = torch.as_tensor(values, dtype=torch.float32).squeeze()
     if tensor_values.ndim == 2:
-        if n_input is not None and tensor_values.shape[1] == n_input and tensor_values.shape[0] != n_input:
+        if (
+            n_input is not None
+            and tensor_values.shape[1] == n_input
+            and tensor_values.shape[0] != n_input
+        ):
             tensor_values = tensor_values.sum(dim=0)
         else:
             tensor_values = tensor_values.sum(dim=-1)
@@ -283,6 +289,7 @@ def get_token_attribution(
     masker_keep_prefix: int | None = None,
     entmax_alpha: float | None = None,
     pin_special_tokens: bool = False,
+    target_token_id: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Same pipeline as ``shap.Explainer(model, tokenizer)`` on an HF causal LM.
 
@@ -298,6 +305,9 @@ def get_token_attribution(
     entmax_alpha
         Alpha for ``normalize_method='entmax'``. Ignored by other methods.
         Uses ``DEFAULT_ENTMAX_ALPHA`` when unset.
+    target_token_id
+        Optional vocabulary id for the target continuation. When unset, SHAP uses
+        the model's generated continuation.
     Returns
     -------
     tuple[torch.Tensor, torch.Tensor]
@@ -314,6 +324,15 @@ def get_token_attribution(
         work_prompt, work_tokens, n_prefix_tokens_dropped = _strip_leading_bos_for_shap(
             prompt, list(prompt_tokens), tokenizer
         )
+    target_text: str | None = None
+    if target_token_id is not None:
+        target_text = tokenizer.decode([int(target_token_id)])
+        target_ids = tokenizer(target_text, add_special_tokens=False)["input_ids"]
+        if len(target_ids) != 1 or int(target_ids[0]) != int(target_token_id):
+            raise ValueError(
+                f"target_token_id={target_token_id} decoded to {target_text!r}, "
+                f"which tokenizes as {target_ids}."
+            )
 
     explainer = _build_shap_lm_explainer(
         model_name=model_name,
@@ -322,7 +341,10 @@ def get_token_attribution(
         pin_special_tokens=pin_special_tokens,
     )
     try:
-        shap_values = explainer([work_prompt], batch_size=1)
+        if target_text is None:
+            shap_values = explainer([work_prompt], batch_size=1)
+        else:
+            shap_values = explainer([work_prompt], [target_text], batch_size=1)
     except RuntimeError as exc:
         # SHAP TeacherForcing may fail for keep_prefix > 1 due to batch-shape mismatch.
         # Fall back to standard masking and emulate prefix pinning post-hoc.
@@ -335,7 +357,10 @@ def get_token_attribution(
             keep_prefix=None,
             pin_special_tokens=pin_special_tokens,
         )
-        shap_values = explainer([work_prompt], batch_size=1)
+        if target_text is None:
+            shap_values = explainer([work_prompt], batch_size=1)
+        else:
+            shap_values = explainer([work_prompt], [target_text], batch_size=1)
     values = _extract_shap_values(shap_values)
     expected = len(work_tokens)
     if values.shape[0] == expected + 1:
@@ -364,9 +389,7 @@ def get_token_attribution(
             device=normalized.device,
         )
         normalized = torch.cat([prefix, normalized], dim=0)
-        values = torch.cat(
-            [prefix.to(dtype=values.dtype, device=values.device), values], dim=0
-        )
+        values = torch.cat([prefix.to(dtype=values.dtype, device=values.device), values], dim=0)
     return values, normalized
 
 
@@ -383,7 +406,7 @@ def get_token_attribution_from_graph(
 
     Returns the **normalized** weight vector (same length as ``metadata['prompt_tokens']``).
     """
-    prompt, prompt_tokens, _target_token_id = _cached_prompt_payload_from_graph(str(graph_path))
+    prompt, prompt_tokens, target_token_id = _cached_prompt_payload_from_graph(str(graph_path))
     _raw, normalized = get_token_attribution(
         prompt=prompt,
         prompt_tokens=list(prompt_tokens),
@@ -393,8 +416,10 @@ def get_token_attribution_from_graph(
         masker_keep_prefix=masker_keep_prefix,
         entmax_alpha=entmax_alpha,
         pin_special_tokens=pin_special_tokens,
+        target_token_id=target_token_id,
     )
     return normalized
+
 
 if __name__ == "__main__":
     from attribute_utils import format_qwen
@@ -402,7 +427,10 @@ if __name__ == "__main__":
     _model = "Qwen/Qwen3-4B"
     _tok = _cached_tokenizer(_model)
     _prompt = format_qwen(
-        [{"role" : "system", "content": "Answer in one word and no more"},{"role": "user", "content": "The capital of France is"}],
+        [
+            {"role": "system", "content": "Answer in one word and no more"},
+            {"role": "user", "content": "The capital of France is"},
+        ],
         add_generation_prompt=True,
         enable_thinking=False,
     )

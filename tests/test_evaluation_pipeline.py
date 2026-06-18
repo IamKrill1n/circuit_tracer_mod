@@ -90,7 +90,7 @@ def test_evaluation_pipeline_writes_summary_and_runs_all_solvers(tmp_path) -> No
     } <= solvers
 
     for row in rows:
-        # Every solver row should carry the Stage-2 objective terms from scoring.py.
+        # Every solver row should carry the eval-local Stage-2 objective terms.
         for key in (
             "matched_k",
             "L",

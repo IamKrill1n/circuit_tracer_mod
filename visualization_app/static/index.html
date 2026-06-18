@@ -120,10 +120,10 @@
         <button class="close" value="cancel" aria-label="Close">&times;</button>
         <h2>Generate Summary</h2>
         <div class="two-col">
-          <label>Node Threshold <input id="sumNodeThreshold" type="number" min="0" max="1" step="0.01" value="0.8" /></label>
-          <label>Edge Threshold <input id="sumEdgeThreshold" type="number" min="0" max="1" step="0.01" value="0.98" /></label>
+          <label>Node Threshold <input id="sumNodeThreshold" type="number" min="0" max="1" step="0.01" value="0.02" /></label>
+          <label>Edge Threshold <input id="sumEdgeThreshold" type="number" min="0" max="1" step="0.01" value="0.9" /></label>
           <label>Target K <input id="sumTargetK" type="number" min="1" value="7" /></label>
-          <label>Label Model <input id="sumLabelModel" value="gemini-2.5-flash" /></label>
+          <label>Label Model <input id="sumLabelModel" value="gemma-4-31b-it" /></label>
         </div>
 
         <details>
@@ -133,8 +133,15 @@
               <select id="sumLogitWeights"><option>target</option><option>probs</option></select>
             </label>
             <label>Token Weights
-              <select id="sumTokenWeights"><option value="uniform">uniform</option><option value="shap">generate shap</option></select>
+              <select id="sumTokenWeights"><option value="shap">generate shap</option><option value="shap_file">load shap file</option><option value="uniform">uniform</option></select>
             </label>
+            <label>Token Attribution Normalization
+              <select id="sumTokenAttrNormalize"><option value="entmax">entmax</option><option value="softmax">softmax</option><option value="entmax15">entmax15</option><option value="sparsemax">sparsemax</option></select>
+            </label>
+            <label>Entmax Alpha <input id="sumEntmaxAlpha" type="number" min="1" step="0.05" value="1.25" /></label>
+            <label>SHAP Values JSON <input id="sumShapValuesPath" value="dataset/analogies/shap_values.json" /></label>
+            <label>Token Attribution Model <input id="sumTokenAttrModel" placeholder="default = graph model" /></label>
+            <label>Token Attribution Device <input id="sumDevice" value="cuda" /></label>
             <label>Combine Method
               <select id="sumCombine"><option>geometric</option><option>arithmetic</option><option>harmonic</option></select>
             </label>
@@ -143,7 +150,7 @@
             </label>
             <label>Alpha <input id="sumAlpha" type="number" min="0" max="1" step="0.05" value="0.5" /></label>
             <label><input id="sumKeepAll" type="checkbox" /> Keep all tokens and logits</label>
-            <label><input id="sumFilterAct" type="checkbox" /> Filter activation density</label>
+            <label><input id="sumFilterAct" type="checkbox" checked /> Filter activation density</label>
           </div>
         </details>
 
@@ -151,10 +158,12 @@
           <summary>Clustering</summary>
           <div class="two-col">
             <label>Method
-              <select id="sumClusterMethod"><option value="spectral">spectral</option><option value="agglomerative">agglomerative</option><option value="ilp">ilp</option></select>
+              <select id="sumClusterMethod"><option value="ilp">ilp</option><option value="spectral">spectral</option><option value="agglomerative">agglomerative</option></select>
             </label>
-            <label>Max Layer Span <input id="sumLayerSpan" type="number" min="1" value="4" /></label>
-            <label>Max Supernodes <input id="sumMaxSn" type="number" min="0" placeholder="0 = no cap" /></label>
+            <label>Max Layer Span <input id="sumLayerSpan" type="number" min="1" value="7" /></label>
+            <label>Max Supernodes <input id="sumMaxSn" type="number" min="0" value="20" /></label>
+            <label>Epsilon Causal <input id="sumEpsCausal" type="number" min="0" max="1" step="0.01" value="0.05" /></label>
+            <label>Theta <input id="sumTheta" type="number" min="-1" max="1" step="0.05" value="0" /></label>
             <label>Mean Method
               <select id="sumMean"><option>arith</option><option>geo</option><option>harm</option></select>
             </label>

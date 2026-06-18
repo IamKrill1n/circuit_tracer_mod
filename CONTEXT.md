@@ -29,6 +29,31 @@ The strategy by which an LLM assigns each supernode its name/role/description. T
 labeling scheme is **one-pass**: a single whole-graph request labels every supernode together
 from feature evidence.
 
+## Labeling
+
+The act of assigning display names, roles, and descriptions to supernodes. Labeling happens
+after supernodes exist; it is not per-feature classification.
+
+## Feature classification
+
+Deprecated language for assigning roles to individual features. The summarization pipeline uses
+supernode labeling instead.
+
+## Activation-density filter
+
+A pruning refinement that removes circuit nodes whose feature activation frequency is outside
+the chosen interpretability band. It changes which evidence remains before supernodes are
+formed, but does not assign roles or labels.
+
+## Clustering
+
+The stage that partitions a pruned attribution graph into supernodes.
+
+## Role vector
+
+A vector representation of one circuit node's upstream and downstream contribution pattern,
+used to decide which nodes play similar roles in the computation.
+
 ## Feature evidence
 
 The local evidence used to interpret a feature within the current computation. Feature

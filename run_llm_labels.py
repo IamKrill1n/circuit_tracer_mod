@@ -48,10 +48,11 @@ def main() -> None:
     args = _parse_args()
 
     # Lazy imports so arg parsing is fast
+    from eval.legacy_cluster_baselines import cluster_graph_spectral
+    from summarization.cluster import clusters_to_supernodes
+    from summarization.label import LabelScheme, ModelSettings, label_supernodes
     from summarization.prune import load_prune_graph
-    from summarization.cluster import cluster_graph_spectral, clusters_to_supernodes
     from summarization.summarize import SummaryGraph
-    from summarization.group_llm import LabelScheme, ModelSettings, label_supernodes
 
     graphs_dir = Path(args.graphs_dir)
     pt_files = sorted(graphs_dir.glob("*_prune_graph.pt"))

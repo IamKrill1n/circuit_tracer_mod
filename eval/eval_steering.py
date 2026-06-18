@@ -15,6 +15,7 @@ Two experiments share setup:
 PruneGraphs are pre-cached under eval_outputs/analogies/.../node_0.02/. Spectral
 clustering (mean_method="geo") is run on top to produce the SummaryGraph.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -28,7 +29,8 @@ import torch
 import torch.nn.functional as F
 
 from circuit_tracer import ReplacementModel
-from summarization.cluster import cluster_graph_spectral, clusters_to_supernodes, find_best_k
+from eval.legacy_cluster_baselines import cluster_graph_spectral, find_best_k
+from summarization.cluster import clusters_to_supernodes
 from summarization.prune import PruneGraph, load_prune_graph
 from summarization.summarize import Supernode, SummaryGraph
 
@@ -37,15 +39,23 @@ logger = logging.getLogger(__name__)
 DTYPE_MAP = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
 
 RELATION_NAMES = [
-    "capital_country", "country_language", "city_county", "person_nationality",
-    "person_profession", "animal_young", "animal_sound", "animal_shelter",
-    "object_color", "male_female",
+    "capital_country",
+    "country_language",
+    "city_county",
+    "person_nationality",
+    "person_profession",
+    "animal_young",
+    "animal_sound",
+    "animal_shelter",
+    "object_color",
+    "male_female",
 ]
 
 
 # ---------------------------------------------------------------------------
 # Data + SNG construction
 # ---------------------------------------------------------------------------
+
 
 def load_dataset(analogies_file: Path) -> list[dict]:
     """Parse bats_analogies.txt -> [{idx, relation, raw}], 100 rows.
@@ -82,6 +92,7 @@ def get_target(prune_graph: PruneGraph) -> tuple[int, float]:
 # ---------------------------------------------------------------------------
 # Intervention tuple builders
 # ---------------------------------------------------------------------------
+
 
 def _negated_interventions(sn: Supernode, orig_acts: torch.Tensor) -> list[tuple]:
     """Ablation per user spec: value = -1 * a_orig[layer, ctx_idx, feat_idx].
@@ -137,6 +148,7 @@ def _steering_interventions(
 # Forward + measurement
 # ---------------------------------------------------------------------------
 
+
 def p_and_top1(logits: torch.Tensor, target_id: int) -> tuple[float, int, float]:
     """Return (P(target), top1_token_id, P(top1)) at the last position."""
     last = logits.squeeze(0)[-1] if logits.ndim == 3 else logits[-1]
@@ -148,6 +160,7 @@ def p_and_top1(logits: torch.Tensor, target_id: int) -> tuple[float, int, float]
 # ---------------------------------------------------------------------------
 # Exp A: ablation
 # ---------------------------------------------------------------------------
+
 
 def run_ablate(model: ReplacementModel, args: argparse.Namespace) -> None:
     dataset = load_dataset(Path(args.analogies_file))
@@ -169,7 +182,11 @@ def run_ablate(model: ReplacementModel, args: argparse.Namespace) -> None:
         feature_sns = [s for s in sng.supernodes if s.type == "features"]
         logger.info(
             "[ablate] %03d  p_orig=%.3f baseline_p(stored)=%.3f top1_orig=%d  n_sn=%d",
-            entry["idx"], p_orig, baseline_p, top1_orig, len(feature_sns),
+            entry["idx"],
+            p_orig,
+            baseline_p,
+            top1_orig,
+            len(feature_sns),
         )
 
         # Per-supernode ablation
@@ -181,20 +198,22 @@ def run_ablate(model: ReplacementModel, args: argparse.Namespace) -> None:
                 prompt, interventions, return_activations=False
             )
             p_new, top1_new, _ = p_and_top1(new_logits, target_id)
-            rows.append({
-                "prompt_idx": entry["idx"],
-                "relation": RELATION_NAMES[entry["relation"]],
-                "supernode": sn.name,
-                "n_features": len(interventions),
-                "layer_min": sn.layer_min,
-                "layer_max": sn.layer_max,
-                "p_orig": p_orig,
-                "p_new": p_new,
-                "log_ratio": float(torch.log(torch.tensor(p_new / max(p_orig, 1e-12)))),
-                "top1_orig": top1_orig,
-                "top1_new": top1_new,
-                "top1_kept": int(top1_new == top1_orig),
-            })
+            rows.append(
+                {
+                    "prompt_idx": entry["idx"],
+                    "relation": RELATION_NAMES[entry["relation"]],
+                    "supernode": sn.name,
+                    "n_features": len(interventions),
+                    "layer_min": sn.layer_min,
+                    "layer_max": sn.layer_max,
+                    "p_orig": p_orig,
+                    "p_new": p_new,
+                    "log_ratio": float(torch.log(torch.tensor(p_new / max(p_orig, 1e-12)))),
+                    "top1_orig": top1_orig,
+                    "top1_new": top1_new,
+                    "top1_kept": int(top1_new == top1_orig),
+                }
+            )
 
         # Full-graph ablation: negate every features-type SN at once.
         all_interventions: list[tuple] = []
@@ -205,20 +224,22 @@ def run_ablate(model: ReplacementModel, args: argparse.Namespace) -> None:
                 prompt, all_interventions, return_activations=False
             )
             p_new, top1_new, _ = p_and_top1(new_logits, target_id)
-            rows.append({
-                "prompt_idx": entry["idx"],
-                "relation": RELATION_NAMES[entry["relation"]],
-                "supernode": "__ALL__",
-                "n_features": len(all_interventions),
-                "layer_min": min(s.layer_min for s in feature_sns),
-                "layer_max": max(s.layer_max for s in feature_sns),
-                "p_orig": p_orig,
-                "p_new": p_new,
-                "log_ratio": float(torch.log(torch.tensor(p_new / max(p_orig, 1e-12)))),
-                "top1_orig": top1_orig,
-                "top1_new": top1_new,
-                "top1_kept": int(top1_new == top1_orig),
-            })
+            rows.append(
+                {
+                    "prompt_idx": entry["idx"],
+                    "relation": RELATION_NAMES[entry["relation"]],
+                    "supernode": "__ALL__",
+                    "n_features": len(all_interventions),
+                    "layer_min": min(s.layer_min for s in feature_sns),
+                    "layer_max": max(s.layer_max for s in feature_sns),
+                    "p_orig": p_orig,
+                    "p_new": p_new,
+                    "log_ratio": float(torch.log(torch.tensor(p_new / max(p_orig, 1e-12)))),
+                    "top1_orig": top1_orig,
+                    "top1_new": top1_new,
+                    "top1_kept": int(top1_new == top1_orig),
+                }
+            )
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -238,21 +259,24 @@ def _ablation_summary(rows: list[dict]) -> list[dict]:
     for relation, items in sorted(by_rel.items()):
         per_sn = [r for r in items if r["supernode"] != "__ALL__"]
         full = [r for r in items if r["supernode"] == "__ALL__"]
-        out.append({
-            "relation": relation,
-            "n_per_sn_rows": len(per_sn),
-            "mean_log_ratio_per_sn": _mean([r["log_ratio"] for r in per_sn]),
-            "frac_top1_kept_per_sn": _mean([r["top1_kept"] for r in per_sn]),
-            "n_full_graph_rows": len(full),
-            "mean_log_ratio_full_graph": _mean([r["log_ratio"] for r in full]),
-            "frac_top1_kept_full_graph": _mean([r["top1_kept"] for r in full]),
-        })
+        out.append(
+            {
+                "relation": relation,
+                "n_per_sn_rows": len(per_sn),
+                "mean_log_ratio_per_sn": _mean([r["log_ratio"] for r in per_sn]),
+                "frac_top1_kept_per_sn": _mean([r["top1_kept"] for r in per_sn]),
+                "n_full_graph_rows": len(full),
+                "mean_log_ratio_full_graph": _mean([r["log_ratio"] for r in full]),
+                "frac_top1_kept_full_graph": _mean([r["top1_kept"] for r in full]),
+            }
+        )
     return out
 
 
 # ---------------------------------------------------------------------------
 # Exp B: cross-prompt steering
 # ---------------------------------------------------------------------------
+
 
 def run_steer(model: ReplacementModel, args: argparse.Namespace) -> None:
     dataset = load_dataset(Path(args.analogies_file))
@@ -282,7 +306,9 @@ def run_steer(model: ReplacementModel, args: argparse.Namespace) -> None:
         }
         logger.info(
             "[steer] precomp %03d  target=%d base_p=%.3f n_sn=%d last_pos=%d",
-            idx, target_id, baseline_p,
+            idx,
+            target_id,
+            baseline_p,
             sum(1 for s in sng.supernodes if s.type == "features"),
             last_pos,
         )
@@ -313,31 +339,37 @@ def run_steer(model: ReplacementModel, args: argparse.Namespace) -> None:
                 if not donor:
                     continue
                 for alpha in alphas:
-                    interventions = _steering_interventions(
-                        donor, orig_acts_a, last_pos_a, alpha
-                    )
+                    interventions = _steering_interventions(donor, orig_acts_a, last_pos_a, alpha)
                     new_logits, _ = model.feature_intervention(
                         entry_a["prompt"], interventions, return_activations=False
                     )
                     p_a, top1, p_top1 = p_and_top1(new_logits, target_a)
-                    p_b = float(F.softmax(
-                        (new_logits.squeeze(0)[-1] if new_logits.ndim == 3 else new_logits[-1]).float(),
-                        dim=-1,
-                    )[target_b].item())
-                    rows.append({
-                        "relation": RELATION_NAMES[rel],
-                        "idx_a": idx_a,
-                        "idx_b": idx_b,
-                        "donor_sn": donor_sn.name,
-                        "n_donor_features": len(donor),
-                        "alpha": alpha,
-                        "p_target_a": p_a,
-                        "p_target_b": p_b,
-                        "top1": top1,
-                        "top1_is_target_a": int(top1 == target_a),
-                        "top1_is_target_b": int(top1 == target_b),
-                        "p_top1": p_top1,
-                    })
+                    p_b = float(
+                        F.softmax(
+                            (
+                                new_logits.squeeze(0)[-1]
+                                if new_logits.ndim == 3
+                                else new_logits[-1]
+                            ).float(),
+                            dim=-1,
+                        )[target_b].item()
+                    )
+                    rows.append(
+                        {
+                            "relation": RELATION_NAMES[rel],
+                            "idx_a": idx_a,
+                            "idx_b": idx_b,
+                            "donor_sn": donor_sn.name,
+                            "n_donor_features": len(donor),
+                            "alpha": alpha,
+                            "p_target_a": p_a,
+                            "p_target_b": p_b,
+                            "top1": top1,
+                            "top1_is_target_a": int(top1 == target_a),
+                            "top1_is_target_b": int(top1 == target_b),
+                            "p_top1": p_top1,
+                        }
+                    )
         if args.limit_pairs and pair_count >= args.limit_pairs:
             logger.info("[steer] hit --limit-pairs=%d, stopping", args.limit_pairs)
             break
@@ -374,25 +406,28 @@ def _steering_summary(rows: list[dict]) -> list[dict]:
     out: list[dict] = []
     for (relation, alpha), items in sorted(by_rel_alpha.items()):
         pair_items = by_rel_alpha_pair.get((relation, alpha), [])
-        out.append({
-            "relation": relation,
-            "alpha": alpha,
-            "n_rows": len(items),
-            "n_pairs": len(pair_items),
-            "mean_p_target_a_any_donor": _mean([r["p_target_a"] for r in items]),
-            "mean_p_target_b_any_donor": _mean([r["p_target_b"] for r in items]),
-            "frac_top1_is_b_any_donor": _mean([r["top1_is_target_b"] for r in items]),
-            "frac_top1_is_a_any_donor": _mean([r["top1_is_target_a"] for r in items]),
-            "best_donor_mean_p_target_b": _mean([r["p_target_b"] for r in pair_items]),
-            "best_donor_frac_top1_is_b": _mean([r["top1_is_target_b"] for r in pair_items]),
-            "best_donor_frac_top1_is_a": _mean([r["top1_is_target_a"] for r in pair_items]),
-        })
+        out.append(
+            {
+                "relation": relation,
+                "alpha": alpha,
+                "n_rows": len(items),
+                "n_pairs": len(pair_items),
+                "mean_p_target_a_any_donor": _mean([r["p_target_a"] for r in items]),
+                "mean_p_target_b_any_donor": _mean([r["p_target_b"] for r in items]),
+                "frac_top1_is_b_any_donor": _mean([r["top1_is_target_b"] for r in items]),
+                "frac_top1_is_a_any_donor": _mean([r["top1_is_target_a"] for r in items]),
+                "best_donor_mean_p_target_b": _mean([r["p_target_b"] for r in pair_items]),
+                "best_donor_frac_top1_is_b": _mean([r["top1_is_target_b"] for r in pair_items]),
+                "best_donor_frac_top1_is_a": _mean([r["top1_is_target_a"] for r in pair_items]),
+            }
+        )
     return out
 
 
 # ---------------------------------------------------------------------------
 # I/O
 # ---------------------------------------------------------------------------
+
 
 def _mean(values: list) -> float:
     nums = [float(v) for v in values if v is not None]
@@ -413,6 +448,7 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--mode", choices=["ablate", "steer"], required=True)
@@ -423,7 +459,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--analogies-file", type=Path, default=Path("bats_analogies.txt"))
     p.add_argument("--output-dir", type=Path, default=Path("eval_outputs/steering"))
-    p.add_argument("--target-k", type=int, default=None, help="If unset, use auto-k via find_best_k.")
+    p.add_argument(
+        "--target-k", type=int, default=None, help="If unset, use auto-k via find_best_k."
+    )
     p.add_argument("--limit", type=int, default=None, help="Ablate: cap on analogies processed.")
     p.add_argument(
         "--alphas",
@@ -438,7 +476,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated relation indices 0..9 (steer mode). Default: all.",
     )
     p.add_argument(
-        "--limit-pairs", type=int, default=None,
+        "--limit-pairs",
+        type=int,
+        default=None,
         help="Cap on total (A,B) pairs processed across all relations (steer mode).",
     )
     p.add_argument("--model-name", default="google/gemma-2-2b")

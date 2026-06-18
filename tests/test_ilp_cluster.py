@@ -3,8 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from summarization.cluster import cluster
-from summarization.ilp_cluster import cluster_graph_ilp
+from summarization.cluster import cluster, cluster_graph_ilp
 from summarization.prune import PruneGraph
 from summarization.summarize import Supernode
 from summarization.utils import _node_from_json_dict, layer_index_from_node, node_is_fixed
@@ -138,7 +137,7 @@ def test_ilp_infeasible_max_sn_raises() -> None:
 
 def test_ilp_too_large_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     # Fast-fail (not a 30s timeout) when the MILP would exceed the variable cap.
-    import summarization.ilp_cluster as ilp
+    import summarization.cluster as ilp
 
     monkeypatch.setattr(ilp, "MAX_ILP_VARS", 1)
     pg = _build_test_graph()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from summarization.cluster import cluster, cluster_graph_spectral, compute_similarity
+from eval.legacy_cluster_baselines import cluster, cluster_graph_spectral, compute_similarity
 from summarization.prune import PruneGraph
 from summarization.summarize import Supernode
 from summarization.utils import _node_from_json_dict

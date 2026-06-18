@@ -36,13 +36,15 @@ from eval.eval_cluster import (
     _modularity_middle_labels,
     _spectral_cosine_middle_labels,
 )
-from summarization.cluster import (
+from eval.legacy_cluster_baselines import (
     cluster_graph_agglomerative,
     cluster_graph_spectral,
-    clusters_to_supernodes,
-    compute_phi_vectors,
     find_best_k,
     find_best_k_for_clusterer,
+)
+from summarization.cluster import (
+    clusters_to_supernodes,
+    compute_phi_vectors,
     labels_to_supernodes,
 )
 from summarization.prune import PruneGraph, load_prune_graph
@@ -317,7 +319,7 @@ def _build_sngs(
     # ILP is solved if requested as a method, or if baselines must be K-matched to it.
     ilp_k: int | None = None
     if "ilp" in wanted or match_baseline_k_to_ilp:
-        from summarization.ilp_cluster import cluster_graph_ilp  # local: avoids import cycle
+        from summarization.cluster import cluster_graph_ilp
 
         clusters = cluster_graph_ilp(
             prune_graph,

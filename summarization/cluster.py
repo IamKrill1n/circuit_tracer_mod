@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Literal
-
 import logging
+from typing import Literal
+
 import numpy as np
 import torch
-from scipy.linalg import eigvalsh
-from sklearn.cluster import SpectralClustering
-
+from scipy.optimize import Bounds, LinearConstraint, milp
+from scipy.sparse import csr_matrix
 
 from summarization.prune import PruneGraph
-from summarization.scoring import _cosine_similarity, _middle_indices, compute_L
 from summarization.summarize import (
     Node,
     Supernode,
-    SummaryGraph,
     cluster_kind_to_supernode_type,
     node_from_prune_graph,
 )
@@ -28,52 +25,53 @@ from summarization.utils import (
 
 logger = logging.getLogger(__name__)
 
+# Hard caps beyond which exact HiGHS solves become intractable.
+MAX_ILP_VARS = 200_000
+MAX_ILP_CONSTRAINTS = 2_000_000
+DEFAULT_THETA: str = "p65"
+DEFAULT_EPS_CAUSAL: float = 0.05
+DEFAULT_MAX_SN: int = 20
+DEFAULT_MAX_LAYER_SPAN: int = 7
+DEFAULT_NORMALIZE_WEIGHTS: bool = False
+DEFAULT_TIME_LIMIT: float = 30.0
+
 
 def _nodes_by_id(prune_graph: PruneGraph) -> dict[str, Node]:
     return {n.node_id: n for n in prune_graph.nodes}
 
 
 def _fixed_singletons(
-    kept_ids: list[str], nodes_by_id: dict[str, Node]
+    kept_ids: list[str],
+    nodes_by_id: dict[str, Node],
 ) -> tuple[list[list[str]], list[list[str]]]:
     emb = [[nid] for nid in kept_ids if node_is_embedding(nodes_by_id[nid])]
     logit = [[nid] for nid in kept_ids if node_is_logit(nodes_by_id[nid])]
     return emb, logit
 
 
-def _middle_node_indices(kept_ids: list[str], nodes_by_id: dict[str, Node]) -> list[int]:
-    return [i for i, nid in enumerate(kept_ids) if not node_is_fixed(nodes_by_id[nid])]
-
-
-def _node_ids_at(kept_ids: list[str], indices: list[int]) -> list[str]:
-    return [kept_ids[i] for i in indices]
-
-
 def _classify_node(node_id: str, nodes_by_id: dict[str, Node]) -> str:
-    n = nodes_by_id.get(node_id)
-    if n is None:
+    node = nodes_by_id.get(node_id)
+    if node is None:
         return "middle"
-    if node_is_embedding(n):
+    if node_is_embedding(node):
         return "emb"
-    if node_is_logit(n):
+    if node_is_logit(node):
         return "logit"
     return "middle"
 
 
 def _layer_numeric(node_id: str, nodes_by_id: dict[str, Node]) -> int:
-    n = nodes_by_id.get(node_id)
-    return layer_index_from_node(n) if n is not None else layer_index_from_node_id(node_id)
-
-
-def _cosine_norm(matrix: torch.Tensor) -> torch.Tensor:
-    diag = torch.sqrt(torch.diag(matrix).clamp(min=1e-8))
-    return matrix / diag.unsqueeze(1) / diag.unsqueeze(0)
+    node = nodes_by_id.get(node_id)
+    return layer_index_from_node(node) if node is not None else layer_index_from_node_id(node_id)
 
 
 def _prepare_node_weights(
-    scores: torch.Tensor | None, n_nodes: int, device: torch.device, normalize: bool = False
+    scores: torch.Tensor | None,
+    n_nodes: int,
+    device: torch.device,
+    normalize: bool = False,
 ) -> torch.Tensor:
-    # Missing tensors can happen for older serialized PruneGraph payloads.
+    # Older serialized PruneGraph payloads may not carry influence/relevance tensors.
     if scores is None:
         return torch.ones(n_nodes, dtype=torch.float32, device=device)
 
@@ -96,146 +94,58 @@ def compute_phi_vectors(
     prune_graph: PruneGraph,
     normalize_weights: bool = False,
 ) -> torch.Tensor:
-    """Per-feature [v_out; v_in] vectors used by `compute_similarity` (no layer decay).
+    """Role vectors rᵢ = [v_out; v_in] used by ILP clustering.
 
-    Shape [N, 2N]. The two blocks are:
-      v_out[i, k] = pruned_adj[k, i] * sqrt(Inf_k)   (i's outgoing edges, weighted by target influence)
-      v_in[i, k]  = pruned_adj[i, k] * sqrt(Rel_k)   (i's incoming edges, weighted by source relevance)
+    Shape: (N, 2N). ``pruned_adj[target, source]`` is the adjacency convention.
     """
-    adj = prune_graph.pruned_adj.float()  # [target, source] convention
+    adj = prune_graph.pruned_adj.float()  # (N, N)
     n_nodes = adj.shape[0]
     device = adj.device
-    inf = _prepare_node_weights(prune_graph.node_influence, n_nodes, device, normalize=normalize_weights)
-    rel = _prepare_node_weights(prune_graph.node_relevance, n_nodes, device, normalize=normalize_weights)
-    sqrt_inf = inf.clamp(min=0.0).sqrt()
-    sqrt_rel = rel.clamp(min=0.0).sqrt()
-    v_out = adj.T * sqrt_inf.unsqueeze(0)  # row i = pruned_adj[:, i] (outgoing from i), scaled by sqrt(Inf)
-    v_in = adj * sqrt_rel.unsqueeze(0)  # row i = pruned_adj[i, :] (incoming to i), scaled by sqrt(Rel)
+    influence = _prepare_node_weights(
+        prune_graph.node_influence,
+        n_nodes,
+        device,
+        normalize=normalize_weights,
+    )
+    relevance = _prepare_node_weights(
+        prune_graph.node_relevance,
+        n_nodes,
+        device,
+        normalize=normalize_weights,
+    )
+    sqrt_influence = influence.clamp(min=0.0).sqrt()
+    sqrt_relevance = relevance.clamp(min=0.0).sqrt()
+    v_out = adj.T * sqrt_influence.unsqueeze(0)
+    v_in = adj * sqrt_relevance.unsqueeze(0)
     return torch.cat([v_out, v_in], dim=1)
 
 
-def compute_similarity(
-    prune_graph: PruneGraph,
-    mean_method: Literal["geo", "harm", "arith"] = "arith",
-    normalize_weights: bool = False,
-    decay_rate: float | None = None,
-    max_layer_span: int | None = None,
-    epsilon: float = 1e-12,
-) -> torch.Tensor:
-    """
-    Compute node similarity from weighted shared out/in structure.
-
-    Output/input cosine similarities are always clamped to ``[0, 1]`` before
-    being combined.
-    """
-    adj = prune_graph.pruned_adj.clone().float().T
-    n_nodes = adj.shape[0]
-    node_inf = _prepare_node_weights(prune_graph.node_influence, n_nodes, adj.device, normalize=normalize_weights)
-    node_rel = _prepare_node_weights(prune_graph.node_relevance, n_nodes, adj.device, normalize=normalize_weights)
-    s_out = adj @ torch.diag(node_inf) @ adj.T
-    s_in = adj.T @ torch.diag(node_rel) @ adj
-
-    s_out_cos = _cosine_norm(s_out).clamp(0.0, 1.0)
-    s_in_cos = _cosine_norm(s_in).clamp(0.0, 1.0)
-
-    if mean_method == "geo":
-        s = (s_out_cos * s_in_cos).sqrt()
-    elif mean_method == "harm":
-        # Equivalent to 2 / (1/a + 1/b) but safe when a or b is exactly 0
-        # (cosine values are clamped to [0, 1] above, so zeros are common).
-        s = (2.0 * s_out_cos * s_in_cos) / (s_out_cos + s_in_cos + 1e-12)
-    elif mean_method == "arith":
-        s = (s_out_cos + s_in_cos) / 2.0
-    else:
-        raise ValueError(f"Unsupported mean_method={mean_method!r}.")
-
-    if decay_rate is not None and decay_rate > 0.0:
-        layer_indices = []
-        for n in prune_graph.nodes:
-            try:
-                layer_indices.append(layer_index_from_node(n))
-            except Exception:
-                layer_indices.append(0)
-
-        layers_t = torch.tensor(layer_indices, dtype=torch.float32, device=s.device)
-        layer_diffs = torch.abs(layers_t.unsqueeze(1) - layers_t.unsqueeze(0))
-
-        penalty = torch.exp(-decay_rate * layer_diffs)
-        if max_layer_span is not None:
-            penalty[layer_diffs > max_layer_span] = 0.0
-
-        s = s * penalty
-
-    s = s.clamp(epsilon, 1.0)
-
-    return s
+def _cosine_similarity(features: np.ndarray, nonnegative: bool = False) -> np.ndarray:
+    """Pairwise cosine similarity of row features."""
+    safe = np.asarray(features, dtype=np.float64)
+    if safe.size == 0:
+        return np.zeros((0, 0), dtype=np.float64)
+    norms = np.linalg.norm(safe, axis=1, keepdims=True)
+    norms = np.where(norms > 1e-12, norms, 1.0)
+    normalized = safe / norms
+    similarity = np.nan_to_num(normalized @ normalized.T, nan=0.0, posinf=0.0, neginf=0.0)
+    if nonnegative:
+        similarity = np.clip((similarity + 1.0) / 2.0, 0.0, 1.0)
+    return similarity
 
 
 def _sort_clusters_by_layer(
-    clusters: list[list[str]], nodes_by_id: dict[str, Node]
+    clusters: list[list[str]],
+    nodes_by_id: dict[str, Node],
 ) -> list[list[str]]:
     return sorted(clusters, key=lambda c: min(_layer_numeric(n, nodes_by_id) for n in c))
 
 
-def _merge_to_budget(
-    clusters: list[list[str]], nodes_by_id: dict[str, Node], max_sn: int
-) -> list[list[str]]:
-    """Greedily merge layer-adjacent clusters until budget is met."""
-    while len(clusters) > max_sn:
-        best_i = -1
-        best_gap = float("inf")
-        for i in range(len(clusters) - 1):
-            hi_i = max(_layer_numeric(n, nodes_by_id) for n in clusters[i])
-            lo_j = min(_layer_numeric(n, nodes_by_id) for n in clusters[i + 1])
-            gap = abs(lo_j - hi_i)
-            if gap < best_gap:
-                best_gap = gap
-                best_i = i
-
-        if best_i < 0:
-            break
-
-        merged = clusters[best_i] + clusters[best_i + 1]
-        clusters = clusters[:best_i] + [merged] + clusters[best_i + 2 :]
-
-    return clusters
-
-
 def _groups_from_labels(node_ids: list[str], labels: np.ndarray) -> list[list[str]]:
     grouped: dict[int, list[str]] = {}
-    for node_id, label in zip(node_ids, labels):
+    for node_id, label in zip(node_ids, labels, strict=True):
         grouped.setdefault(int(label), []).append(node_id)
     return [grouped[label] for label in sorted(grouped)]
-
-
-def _middle_similarity(sim: torch.Tensor, middle_idx: list[int]) -> np.ndarray:
-    mid_sim = sim[middle_idx][:, middle_idx].detach().cpu().numpy().clip(0.0, 1.0)
-    return ((mid_sim + mid_sim.T) / 2.0).clip(0.0, 1.0)
-
-
-def _supernode_from_member_ids(
-    prune_graph: PruneGraph,
-    name: str,
-    member_ids: list[str],
-    kind: str,
-    id_to_idx: dict[str, int] | None = None,
-) -> Supernode:
-    nodes = [node_from_prune_graph(prune_graph, node_id, id_to_idx=id_to_idx) for node_id in member_ids]
-    nodes_map = _nodes_by_id(prune_graph)
-    layers = [_layer_numeric(node_id, nodes_map) for node_id in member_ids]
-    if kind == "emb":
-        sn_type = cluster_kind_to_supernode_type("emb")
-    elif kind == "logit":
-        sn_type = cluster_kind_to_supernode_type("logit")
-    else:
-        sn_type = cluster_kind_to_supernode_type("middle")
-    return Supernode(
-        name=name,
-        features=nodes,
-        type=sn_type,
-        layer_min=min(layers) if layers else 0,
-        layer_max=max(layers) if layers else 0,
-    )
 
 
 def labels_to_supernodes(
@@ -249,270 +159,31 @@ def labels_to_supernodes(
     return middle_clusters + emb_singletons + logit_singletons
 
 
-def cluster_graph_spectral(
+def _supernode_from_member_ids(
     prune_graph: PruneGraph,
-    target_k: int = 7,
-    max_layer_span: int = 4,
-    mean_method: Literal["geo", "harm", "arith"] = "arith",
-    normalize_weights: bool = False,
-    decay_rate: float | None = 1.0,
-    enforce_dag: bool = False,
-    random_state: int = 42,
-    n_init: int = 20,
-) -> list[list[str]]:
-    """
-    Cluster a pruned attribution graph into supernodes.
-
-    Args:
-        prune_graph: Output of `prune`.
-        target_k: Target number of middle supernodes.
-        max_layer_span: Maximum allowed layer span within a middle supernode.
-        mean_method: Mean used to combine output/input cosine similarities.
-        normalize_weights: If True, min-max normalize influence/relevance weights before computing similarity.
-        random_state: Random seed for spectral clustering k-means init.
-        n_init: Number of k-means runs for `SpectralClustering(assign_labels="kmeans")`.
-
-    Returns:
-        List of supernodes where each supernode is a list of node ids.
-        Embedding/logit nodes are returned as singleton supernodes.
-    """
-    del enforce_dag  # legacy: π in SummaryGraph is always on; partition is preserved
-    logger.info("Starting cluster_graph_spectral (target_k=%d, max_layer_span=%s)", target_k, max_layer_span)
-    kept_ids = prune_graph.node_ids
-    nodes_by_id = _nodes_by_id(prune_graph)
-
-    if not kept_ids:
-        logger.info("No kept_ids found, returning empty clusters.")
-        return []
-
-    logger.info("Computing similarity matrix...")
-    sim = compute_similarity(
-        prune_graph,
-        mean_method=mean_method,
-        normalize_weights=normalize_weights,
-        decay_rate=decay_rate,
-        max_layer_span=max_layer_span,
-    )
-
-    middle_idx = _middle_node_indices(kept_ids, nodes_by_id)
-    middle_ids = _node_ids_at(kept_ids, middle_idx)
-    logger.info("Extracted %d middle nodes.", len(middle_ids))
-
-    if not middle_ids:
-        logger.info("No middle nodes found, returning singletons.")
-        fixed_only = [[nid] for nid in kept_ids]
-        return fixed_only
-
-    mid_sim = _middle_similarity(sim, middle_idx)
-    target_k = max(1, min(target_k, len(middle_ids)))
-
-    if target_k == 1:
-        labels = np.zeros(len(middle_ids), dtype=np.int64)
-    elif target_k == len(middle_ids):
-        labels = np.arange(len(middle_ids), dtype=np.int64)
+    name: str,
+    member_ids: list[str],
+    kind: str,
+    id_to_idx: dict[str, int] | None = None,
+) -> Supernode:
+    nodes = [
+        node_from_prune_graph(prune_graph, node_id, id_to_idx=id_to_idx) for node_id in member_ids
+    ]
+    nodes_map = _nodes_by_id(prune_graph)
+    layers = [_layer_numeric(node_id, nodes_map) for node_id in member_ids]
+    if kind == "emb":
+        supernode_type = cluster_kind_to_supernode_type("emb")
+    elif kind == "logit":
+        supernode_type = cluster_kind_to_supernode_type("logit")
     else:
-        logger.info("Running SpectralClustering with target_k=%d...", target_k)
-        labels = SpectralClustering(
-            n_clusters=target_k,
-            affinity="precomputed",
-            assign_labels="kmeans",
-            random_state=int(random_state),
-            n_init=int(n_init),
-        ).fit_predict(mid_sim)
-        logger.info("Finished SpectralClustering.")
-
-    middle_clusters = _sort_clusters_by_layer(_groups_from_labels(middle_ids, labels), nodes_by_id)
-
-    emb_singletons, logit_singletons = _fixed_singletons(kept_ids, nodes_by_id)
-
-    supernodes = middle_clusters + emb_singletons + logit_singletons
-    logger.info("Returning %d total supernodes.", len(supernodes))
-    return supernodes
-
-
-def _merge_creates_cycle(ca: np.ndarray, a: int, b: int, active: set[int]) -> bool:
-    """
-    True iff merging clusters a and b would create a cycle in the cluster DAG.
-
-    A direct edge a→b (or b→a) is fine — it just becomes internal to the merged
-    cluster. A cycle arises only when an out-neighbor of the merged cluster can
-    reach {a, b} via other clusters, i.e. there is an indirect path (length ≥ 2)
-    between a and b.
-    """
-    n = ca.shape[0]
-    # Out-neighbors of the merged cluster that are neither a nor b
-    out_nbrs = [c for c in range(n) if c in active and c != a and c != b and (ca[a, c] or ca[b, c])]
-    for c in out_nbrs:
-        visited = {c}
-        stack = [c]
-        while stack:
-            node = stack.pop()
-            for nbr in range(n):
-                if ca[node, nbr] and nbr in active and nbr not in visited:
-                    if nbr == a or nbr == b:
-                        return True
-                    visited.add(nbr)
-                    stack.append(nbr)
-    return False
-
-
-def cluster_graph_agglomerative(
-    prune_graph: PruneGraph,
-    target_k: int = 7,
-    max_layer_span: int = 4,
-    max_sn: int | None = None,
-    mean_method: Literal["geo", "harm", "arith"] = "arith",
-    normalize_weights: bool = False,
-    decay_rate: float | None = 1.0,
-) -> list[list[str]]:
-    """
-    Cycle-Constrained Agglomerative Clustering (Approach 1 from clusterv3.md).
-
-    Merges the most-similar pair of clusters that (a) keeps layer span <= max_layer_span
-    and (b) does not create a cycle in the supernode DAG, until target_k middle clusters
-    remain. The DAG guarantee is native — no post-processing needed.
-    """
-    logger.info("Starting cluster_graph_agglomerative (target_k=%d)...", target_k)
-    kept_ids = prune_graph.node_ids
-    nodes_by_id = _nodes_by_id(prune_graph)
-
-    if not kept_ids:
-        logger.info("No kept_ids, returning empty list.")
-        return []
-
-    logger.info("Computing similarity matrix...")
-    sim = compute_similarity(
-        prune_graph,
-        mean_method=mean_method,
-        normalize_weights=normalize_weights,
-        decay_rate=decay_rate,
-        max_layer_span=max_layer_span,
+        supernode_type = cluster_kind_to_supernode_type("middle")
+    return Supernode(
+        name=name,
+        features=nodes,
+        type=supernode_type,
+        layer_min=min(layers) if layers else 0,
+        layer_max=max(layers) if layers else 0,
     )
-
-    middle_idx = _middle_node_indices(kept_ids, nodes_by_id)
-    middle_ids = _node_ids_at(kept_ids, middle_idx)
-
-    if not middle_ids:
-        logger.info("No middle nodes, returning mapped fixed nodes as separate clusters.")
-        return [[nid] for nid in kept_ids]
-
-    m = len(middle_ids)
-    target_k = max(1, min(target_k, m))
-    logger.info("Extracted %d middle nodes.", m)
-
-    mid_sim = _middle_similarity(sim, middle_idx)
-
-    # Working cluster-level similarity matrix (weighted average linkage)
-    cs = mid_sim.copy()
-    np.fill_diagonal(cs, -np.inf)
-
-    sizes = np.ones(m, dtype=float)
-
-    # members[k] = list of indices into middle_ids
-    members: dict[int, list[int]] = {i: [i] for i in range(m)}
-
-    logger.info("Initializing cluster-level DAG...")
-    # Cluster-level DAG: ca[s, t] = True iff any edge from cluster s -> cluster t
-    # pruned_adj[target, source]: pruned_adj[t, s] > 0 means edge s -> t
-    full_adj = prune_graph.pruned_adj.detach().cpu().numpy()
-    adj_mid = full_adj[np.ix_(middle_idx, middle_idx)]  # adj_mid[t, s] = edge s -> t
-
-    ca = np.zeros((m, m), dtype=bool)
-    tgts, srcs = np.where(adj_mid > 0)
-    for s, t in zip(srcs, tgts):
-        if s != t:
-            ca[s, t] = True  # edge s -> t
-
-    active: set[int] = set(range(m))
-
-    # Precompute per-node layer values for span checks
-    node_layers = [_layer_numeric(nid, nodes_by_id) for nid in middle_ids]
-
-    logger.info("Starting agglomerative merge loop...")
-    while len(active) > target_k:
-        active_list = sorted(active)
-        best_sim = -np.inf
-        best_a = best_b = -1
-
-        for ii in range(len(active_list)):
-            a = active_list[ii]
-            for jj in range(ii + 1, len(active_list)):
-                b = active_list[jj]
-                if cs[a, b] <= best_sim:
-                    continue
-                # Hard layer-span constraint
-                merged_layers = [node_layers[i] for i in members[a]] + [node_layers[i] for i in members[b]]
-                if max(merged_layers) - min(merged_layers) > max_layer_span:
-                    continue
-                # Cycle constraint: reject if merge would create a cycle
-                if _merge_creates_cycle(ca, a, b, active):
-                    continue
-                best_sim = cs[a, b]
-                best_a, best_b = a, b
-
-        if best_a < 0:
-            logger.info("No valid merge remaining. Terminating merge early.")
-            break  # no valid merge remains
-
-        logger.debug("Merging cluster index %d into %d. Remaining clusters: %d", best_b, best_a, len(active) - 1)
-
-        # Merge best_b into best_a (weighted average linkage)
-        sa, sb = sizes[best_a], sizes[best_b]
-        for k in active:
-            if k == best_a or k == best_b:
-                continue
-            merged_val = (sa * cs[best_a, k] + sb * cs[best_b, k]) / (sa + sb)
-            cs[best_a, k] = merged_val
-            cs[k, best_a] = merged_val
-
-        sizes[best_a] = sa + sb
-        members[best_a].extend(members.pop(best_b))
-
-        # Update cluster DAG: best_a inherits best_b's edges
-        ca[best_a, :] |= ca[best_b, :]
-        ca[:, best_a] |= ca[:, best_b]
-        ca[best_a, best_a] = False  # no self-loop
-        ca[best_b, :] = False
-        ca[:, best_b] = False
-
-        active.discard(best_b)
-
-    logger.info("Finished agglomeration loop. Formulating output clusters...")
-    middle_clusters = [[middle_ids[i] for i in members[k]] for k in sorted(active)]
-
-    if max_sn is not None and len(middle_clusters) > max_sn:
-        logger.info("Merging up to maximum supernode budget of %d...", max_sn)
-        middle_clusters = _merge_to_budget(middle_clusters, nodes_by_id, max_sn=max_sn)
-
-    middle_clusters = _sort_clusters_by_layer(middle_clusters, nodes_by_id)
-    emb_singletons, logit_singletons = _fixed_singletons(kept_ids, nodes_by_id)
-
-    total_supernodes = len(middle_clusters) + len(emb_singletons) + len(logit_singletons)
-    logger.info("Agglomerative clustering done. Returning %d total supernodes.", total_supernodes)
-    return middle_clusters + emb_singletons + logit_singletons
-
-
-def cluster_graph_with_labels(
-    prune_graph: PruneGraph,
-    method: Literal["spectral", "agglomerative"] = "spectral",
-    **kwargs,
-) -> list[list[str]]:
-    """
-    Convenience wrapper for Neuronpedia-style format:
-    [[label, node_id, ...], ...]
-    """
-    if method == "spectral":
-        raw = cluster_graph_spectral(prune_graph, **kwargs)
-    elif method == "agglomerative":
-        raw = cluster_graph_agglomerative(prune_graph, **kwargs)
-    else:
-        raise ValueError(f"Invalid method: {method}")
-    out: list[list[str]] = []
-    for i, members in enumerate(raw):
-        if len(members) == 1:
-            continue
-        out.append([f"cluster_{i}", *members])
-    return out
 
 
 def clusters_to_supernodes(
@@ -522,12 +193,7 @@ def clusters_to_supernodes(
     *,
     enforce_dag: bool = True,
 ) -> list[Supernode]:
-    """Convert `cluster_graph_spectral` member lists into named `Supernode` rows (middle + emb + logit).
-
-    The legacy ``enforce_dag`` parameter is ignored — π in ``SummaryGraph`` is
-    always on and operates at the edge level, so the clusterer's partition is
-    preserved exactly as given.
-    """
+    """Convert member-id clusters into typed ``Supernode`` rows."""
     del enforce_dag
     nodes_by_id = _nodes_by_id(prune_graph)
     middle: list[list[str]] = []
@@ -550,15 +216,39 @@ def clusters_to_supernodes(
     out: list[Supernode] = []
     id_to_idx = {n.node_id: i for i, n in enumerate(prune_graph.nodes)}
     for i, sn in enumerate(middle):
-        k = _classify_node(sn[0], nodes_by_id)
-        out.append(_supernode_from_member_ids(prune_graph, f"{middle_prefix}_{i}", list(sn), k, id_to_idx=id_to_idx))
+        kind = _classify_node(sn[0], nodes_by_id)
+        out.append(
+            _supernode_from_member_ids(
+                prune_graph,
+                f"{middle_prefix}_{i}",
+                list(sn),
+                kind,
+                id_to_idx=id_to_idx,
+            )
+        )
     emb_logit: list[Supernode] = []
     for i, sn in enumerate(emb):
-        k = _classify_node(sn[0], nodes_by_id)
-        emb_logit.append(_supernode_from_member_ids(prune_graph, f"SN_EMB_{i}", list(sn), k, id_to_idx=id_to_idx))
+        kind = _classify_node(sn[0], nodes_by_id)
+        emb_logit.append(
+            _supernode_from_member_ids(
+                prune_graph,
+                f"SN_EMB_{i}",
+                list(sn),
+                kind,
+                id_to_idx=id_to_idx,
+            )
+        )
     for i, sn in enumerate(logit):
-        k = _classify_node(sn[0], nodes_by_id)
-        emb_logit.append(_supernode_from_member_ids(prune_graph, f"SN_LOGIT_{i}", list(sn), k, id_to_idx=id_to_idx))
+        kind = _classify_node(sn[0], nodes_by_id)
+        emb_logit.append(
+            _supernode_from_member_ids(
+                prune_graph,
+                f"SN_LOGIT_{i}",
+                list(sn),
+                kind,
+                id_to_idx=id_to_idx,
+            )
+        )
     return out + emb_logit
 
 
@@ -567,288 +257,430 @@ def supernodes_to_mapping(
     supernodes: list[list[str]],
     middle_prefix: str = "SN",
 ) -> dict[str, list[str]]:
-    """Convert `cluster_graph_spectral` output into a named supernode mapping (dict shim)."""
     rows = clusters_to_supernodes(prune_graph, supernodes, middle_prefix=middle_prefix)
     return {s.name: s.member_node_ids() for s in rows}
 
 
-def mapping_dict_to_supernodes(prune_graph: PruneGraph, mapping: dict[str, list[str]]) -> list[Supernode]:
-    """Preserve dict insertion order; one `Supernode` per key (features may be filtered later in graph build)."""
+def mapping_dict_to_supernodes(
+    prune_graph: PruneGraph, mapping: dict[str, list[str]]
+) -> list[Supernode]:
     nodes_by_id = _nodes_by_id(prune_graph)
     out: list[Supernode] = []
     id_to_idx = {n.node_id: i for i, n in enumerate(prune_graph.nodes)}
     for name, feats in mapping.items():
         if not feats:
             continue
-        k = _classify_node(feats[0], nodes_by_id)
-        out.append(_supernode_from_member_ids(prune_graph, name, list(feats), k, id_to_idx=id_to_idx))
+        kind = _classify_node(feats[0], nodes_by_id)
+        out.append(
+            _supernode_from_member_ids(prune_graph, name, list(feats), kind, id_to_idx=id_to_idx)
+        )
     return out
 
 
-# ---------------------------------------------------------------------------
-# Auto-k selection (folded from the former auto_grouping.py)
-# ---------------------------------------------------------------------------
+def _validate_args(lambda_causal: float, eps_causal: float | None, max_sn: int | None) -> None:
+    # lambda_causal is kept only so older call sites fail less abruptly; it no longer
+    # contributes to the ILP objective.
+    if lambda_causal < 0:
+        raise ValueError(f"lambda_causal must be non-negative, got {lambda_causal}")
+    if eps_causal is not None and not 0.0 <= eps_causal <= 1.0:
+        raise ValueError(f"eps_causal must be in [0, 1], got {eps_causal}")
+    if max_sn is not None and max_sn < 1:
+        raise ValueError(f"max_sn must be >= 1, got {max_sn}")
 
 
-def eigengap_analysis(
-    similarity: Any,
+def _pair_key(a: int, b: int) -> tuple[int, int]:
+    return (a, b) if a < b else (b, a)
+
+
+def _allowed_pairs(layers: np.ndarray, max_layer_span: int) -> list[tuple[int, int]]:
+    n = len(layers)
+    return [
+        (i, j)
+        for i in range(n)
+        for j in range(i + 1, n)
+        if abs(int(layers[i]) - int(layers[j])) <= max_layer_span
+    ]
+
+
+def _resolve_theta(theta: float | str, cos: np.ndarray, pairs: list[tuple[int, int]]) -> float:
+    if not isinstance(theta, str):
+        return float(theta)
+
+    if not (theta.startswith("p") and theta[1:].replace(".", "", 1).isdigit()):
+        raise ValueError(f"theta string must be 'p<percentile>' (e.g. 'p65'), got {theta!r}")
+    q = float(theta[1:])
+    if not 0.0 <= q <= 100.0:
+        raise ValueError(f"theta percentile must be in [0, 100], got {q}")
+    allowed_cos = np.array([cos[i, j] for i, j in pairs], dtype=np.float64)
+    return float(np.percentile(allowed_cos, q)) if allowed_cos.size else 0.0
+
+
+def _partners_by_node(n: int, pairs: list[tuple[int, int]]) -> list[list[int]]:
+    partners: list[list[int]] = [[] for _ in range(n)]
+    for i, j in pairs:
+        partners[i].append(j)
+        partners[j].append(i)
+    for lst in partners:
+        lst.sort()
+    return partners
+
+
+def _check_problem_size(n: int, n_var_x: int, n_var_r: int, max_layer_span: int) -> None:
+    n_var = n_var_x + n_var_r
+    if n_var <= MAX_ILP_VARS:
+        return
+    raise ValueError(
+        f"ILP too large: {n_var:,} variables for n_middle={n} "
+        f"({n_var_x} same-cluster + {n_var_r} representative), "
+        f"max_layer_span={max_layer_span}. Reduce graph size, lower "
+        "max_layer_span, or use an eval-owned legacy baseline."
+    )
+
+
+def _causal_coefficients(
     prune_graph: PruneGraph,
-    max_k: int = 20,
-) -> dict[str, Any]:
-    """Estimate a plausible k range via normalized-Laplacian eigengap."""
-    s = np.asarray(similarity.detach().cpu().numpy() if hasattr(similarity, "detach") else similarity)
-    mid = _middle_indices(prune_graph)
-    m = len(mid)
-    if m < 3:
-        return {"eigengap_k": 2, "eigenvalues": np.array([0.0, 1.0]), "gaps": np.array([1.0]), "search_range": (2, 2)}
+    mid_idx: list[int],
+    col_x: dict[tuple[int, int], int],
+) -> tuple[np.ndarray, float]:
+    prune_adj = prune_graph.pruned_adj.detach().cpu().numpy()  # adj[tgt, src]
+    w_total = float(np.abs(prune_adj).sum())
+    coeff = np.zeros(len(col_x), dtype=np.float64)
+    if w_total <= 0.0:
+        return coeff, w_total
 
-    s_mid = ((s[np.ix_(mid, mid)] + s[np.ix_(mid, mid)].T) / 2.0).clip(0.0, 1.0)
-    deg = s_mid.sum(axis=1)
-    deg_safe = np.where(deg > 1e-8, deg, 1e-8)
-    d_inv = np.diag(1.0 / np.sqrt(deg_safe))
-    l_norm = d_inv @ (np.diag(deg) - s_mid) @ d_inv
-
-    n_eig = min(max_k + 1, m)
-    evals = np.sort(eigvalsh(l_norm))[:n_eig]
-    gaps = np.diff(evals)
-
-    search_end = min(len(gaps), max_k)
-    if search_end < 2:
-        k_hat = 2
-    else:
-        k_hat = int(np.argmax(gaps[1:search_end])) + 2
-
-    k_min = max(2, k_hat - 2)
-    k_max = min(m - 1, k_hat + 2)
-    if k_max - k_min < 2:
-        k_max = min(m - 1, k_min + 4)
-
-    return {"eigengap_k": k_hat, "eigenvalues": evals, "gaps": gaps, "search_range": (k_min, k_max)}
+    for (i, j), k in col_x.items():
+        gi, gj = mid_idx[i], mid_idx[j]  # local -> global pruned_adj indices
+        pair_mass = abs(float(prune_adj[gi, gj])) + abs(float(prune_adj[gj, gi]))
+        coeff[k] = pair_mass / w_total
+    return coeff, w_total
 
 
-def _phi_and_similarity(prune_graph: PruneGraph) -> tuple[np.ndarray, np.ndarray]:
-    """Phi role vectors over all nodes and their cosine similarity (nonnegative).
-
-    The similarity is the method-neutral matrix used by auto-k for the eigengap range.
-    """
-    phi = compute_phi_vectors(prune_graph).detach().cpu().numpy()
-    return phi, _cosine_similarity(phi, nonnegative=True)
-
-
-def find_best_k(
-    prune_graph: PruneGraph,
-    max_layer_span: int = 4,
-    k_min_override: int | None = None,
-    k_max_override: int | None = None,
-    max_sn: int | None = None,
-    mean_method: Literal["geo", "harm", "arith"] = "arith",
-    decay_rate: float | None = None,
-    random_state: int = 42,
-    n_init: int = 20,
-    prune_loss: float = 0.0,
-    lambda_causal: float = 1.0,
-) -> tuple[int, dict[int, dict[str, Any]]]:
-    """Auto-select k for spectral clustering by minimizing the closed-form L objective.
-
-    The eigengap search range is computed against sim_phi (the cosine of the
-    influence/relevance-weighted feature vectors). For each k in the range we build
-    the spectral partition and score it with `compute_L`. Best k = argmin(L).
-
-    Returns `(best_k, results)` where each results[k] includes `final_supernodes`.
-    """
-    phi, sim_phi = _phi_and_similarity(prune_graph)
-    mid_idx = _middle_indices(prune_graph)
-    n_middle = len(mid_idx)
-    if n_middle < 3:
-        return 2, {}
-
-    role_vectors_middle = phi[mid_idx]
-    middle_id_to_local = {prune_graph.nodes[i].node_id: local for local, i in enumerate(mid_idx)}
-
-    eg = eigengap_analysis(sim_phi, prune_graph, max_k=min(20, n_middle - 1))
-    k_min = k_min_override if k_min_override is not None else int(eg["search_range"][0])
-    k_max = k_max_override if k_max_override is not None else int(eg["search_range"][1])
-    if max_sn is not None:
-        k_max = min(k_max, max_sn)  # budget caps candidate k instead of post-merging
-    k_min = max(2, k_min)
-    k_max = min(n_middle - 1, k_max)
-    if k_min > k_max:
-        k_min = k_max
-
-    results: dict[int, dict[str, Any]] = {}
-    for k in range(k_min, k_max + 1):
-        supernodes = cluster_graph_spectral(
-            prune_graph,
-            target_k=k,
-            max_layer_span=max_layer_span,
-            mean_method=mean_method,
-            decay_rate=decay_rate,
-            random_state=random_state,
-            n_init=n_init,
-        )
-        rows = clusters_to_supernodes(prune_graph, supernodes)
-        sng = SummaryGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
-        sc: dict[str, Any] = dict(compute_L(
-            sng,
-            role_vectors_middle,
-            middle_id_to_local,
-            prune_loss=prune_loss,
-            lambda_causal=lambda_causal,
-        ))
-        sc["final_supernodes"] = {s.name: s.member_node_ids() for s in rows}
-        results[k] = sc
-
-    if not results:
-        return int(eg["eigengap_k"]), {}
-    best_k = min(results, key=lambda x: float(results[x]["L"]))
-    return best_k, results
-
-
-def find_best_k_for_clusterer(
+def _objective(
     *,
+    n_var: int,
+    col_x: dict[tuple[int, int], int],
+    cos: np.ndarray,
+    theta_val: float,
+) -> np.ndarray:
+    c = np.zeros(n_var, dtype=np.float64)
+    for (i, j), k in col_x.items():
+        c[k] = theta_val - float(cos[i, j])
+    return c
+
+
+def _build_constraints(
+    *,
+    n: int,
+    n_var: int,
+    pairs: list[tuple[int, int]],
+    col_x: dict[tuple[int, int], int],
+    col_r: dict[int, int],
+    max_sn: int | None = DEFAULT_MAX_SN,
+    eps_causal: float | None = DEFAULT_EPS_CAUSAL,
+    causal_coeff: np.ndarray,
+    has_causal_mass: bool,
+    max_layer_span: int = DEFAULT_MAX_LAYER_SPAN,
+) -> LinearConstraint:
+    rows: list[int] = []
+    cols: list[int] = []
+    data: list[float] = []
+    b_l: list[float] = []
+    b_u: list[float] = []
+    row = 0
+
+    def add(col: int, val: float) -> None:
+        rows.append(row)
+        cols.append(col)
+        data.append(val)
+
+    partners = _partners_by_node(n, pairs)
+
+    # Transitivity over same-cluster indicators.
+    for apex in range(n):
+        apex_partners = partners[apex]
+        for ii, p in enumerate(apex_partners):
+            x_ap = col_x[_pair_key(apex, p)]
+            for q in apex_partners[ii + 1 :]:
+                add(x_ap, 1.0)
+                add(col_x[_pair_key(apex, q)], 1.0)
+                pq = col_x.get(_pair_key(p, q))
+                if pq is not None:
+                    add(pq, -1.0)
+                b_l.append(-np.inf)
+                b_u.append(1.0)
+                row += 1
+
+    if max_sn is not None:
+        for i in range(n):
+            earlier = [j for j in partners[i] if j < i]
+            for j in earlier:
+                add(col_r[i], 1.0)
+                add(col_x[_pair_key(j, i)], 1.0)
+                b_l.append(-np.inf)
+                b_u.append(1.0)
+                row += 1
+
+            add(col_r[i], 1.0)
+            for j in earlier:
+                add(col_x[_pair_key(j, i)], 1.0)
+            b_l.append(1.0)
+            b_u.append(np.inf)
+            row += 1
+
+        for i in range(n):
+            add(col_r[i], 1.0)
+        b_l.append(-np.inf)
+        b_u.append(float(max_sn))
+        row += 1
+
+    if eps_causal is not None and has_causal_mass:
+        for k, coeff in enumerate(causal_coeff):
+            if coeff > 0.0:
+                add(k, float(coeff))
+        b_l.append(-np.inf)
+        b_u.append(float(eps_causal))
+        row += 1
+
+    if row > MAX_ILP_CONSTRAINTS:
+        raise ValueError(
+            f"ILP too large: {row:,} constraints for n_middle={n}, "
+            f"max_layer_span={max_layer_span}. Lower max_layer_span or graph size."
+        )
+
+    matrix = csr_matrix((data, (rows, cols)), shape=(row, n_var))
+    return LinearConstraint(matrix, np.array(b_l), np.array(b_u))
+
+
+def _solve_ilp(
+    *,
+    c: np.ndarray,
+    constraints: LinearConstraint,
+    time_limit: float,
+    n_middle: int,
+    max_sn: int | None,
+    max_layer_span: int,
+    eps_causal: float | None,
+) -> np.ndarray:
+    res = milp(
+        c=c,
+        constraints=constraints,
+        integrality=np.ones(len(c), dtype=np.int64),
+        bounds=Bounds(0, 1),
+        options={"time_limit": time_limit},
+    )
+
+    if res.x is None:
+        if res.status == 2:  # 2 = infeasible
+            raise ValueError(
+                f"ILP infeasible (n_middle={n_middle}, max_sn={max_sn}, "
+                f"max_layer_span={max_layer_span}, eps_causal={eps_causal}). "
+                "Raise max_sn, max_layer_span, or eps_causal."
+            )
+        raise ValueError(
+            f"ILP found no solution within time_limit={time_limit}s (status={res.status}, "
+            f"n_middle={n_middle}). Raise time_limit or reduce graph size."
+        )
+    if res.status == 1:  # 1 = time/iteration limit, but an incumbent exists
+        logger.warning(
+            "ILP hit the %.1fs time limit; using the best incumbent (may be suboptimal).",
+            time_limit,
+        )
+    return res.x
+
+
+def _recover_clusters(
+    middle_ids: list[str],
+    col_x: dict[tuple[int, int], int],
+    x_values: np.ndarray,
+) -> list[list[str]]:
+    parent = list(range(len(middle_ids)))
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+
+    for (i, j), k in col_x.items():
+        if x_values[k] > 0.5:
+            union(i, j)
+
+    grouped: dict[int, list[str]] = {}
+    for i, node_id in enumerate(middle_ids):
+        grouped.setdefault(find(i), []).append(node_id)
+    return list(grouped.values())
+
+
+def cluster_graph_ilp(
     prune_graph: PruneGraph,
-    clusterer: Any,
-    k_min_override: int | None = None,
-    k_max_override: int | None = None,
-    prune_loss: float = 0.0,
+    *,
+    theta: float | str = DEFAULT_THETA,
     lambda_causal: float = 1.0,
-) -> tuple[int, dict[int, dict[str, Any]]]:
-    """Auto-select k for an arbitrary clusterer by minimizing the closed-form L objective."""
-    phi, sim_phi = _phi_and_similarity(prune_graph)
-    mid_idx = _middle_indices(prune_graph)
-    n_middle = len(mid_idx)
-    role_vectors_middle = phi[mid_idx] if n_middle else phi[:0]
-    middle_id_to_local = {prune_graph.nodes[i].node_id: local for local, i in enumerate(mid_idx)}
+    eps_causal: float | None = DEFAULT_EPS_CAUSAL,
+    max_sn: int | None = DEFAULT_MAX_SN,
+    max_layer_span: int = DEFAULT_MAX_LAYER_SPAN,
+    normalize_weights: bool = DEFAULT_NORMALIZE_WEIGHTS,
+    time_limit: float = DEFAULT_TIME_LIMIT,
+) -> list[list[str]]:
+    """Cluster a pruned graph by exactly minimising the Stage-2 objective.
 
-    if n_middle < 3:
-        fallback_k = max(0, n_middle)
-        clusters = clusterer(fallback_k)
-        rows = clusters_to_supernodes(prune_graph, clusters)
-        sng = SummaryGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
-        result: dict[str, Any] = dict(compute_L(
-            sng,
-            role_vectors_middle,
-            middle_id_to_local,
-            prune_loss=prune_loss,
-            lambda_causal=lambda_causal,
-        ))
-        result["final_supernodes"] = {s.name: s.member_node_ids() for s in rows}
-        return fallback_k, {fallback_k: result}
+    This is the Stage-2 solver of the methodology. It minimises atomicity
+    (signed-cosine correlation clustering, Eq. Latom) and treats causal
+    preservation as an optional epsilon constraint:
 
-    eigengap = eigengap_analysis(sim_phi, prune_graph, max_k=min(20, n_middle - 1))
-    k_min = k_min_override if k_min_override is not None else int(eigengap["search_range"][0])
-    k_max = k_max_override if k_max_override is not None else int(eigengap["search_range"][1])
-    k_min = max(2, min(k_min, n_middle))
-    k_max = max(k_min, min(k_max, n_middle))
+        min_f  L_atom(f)
+             = sum_{i<j} x_ij (theta - cos(r_i, r_j))
+        s.t.   L_causal(f) <= eps_causal                         (D3, optional)
+               K <= max_sn                                       (C2, optional)
 
-    results: dict[int, dict[str, Any]] = {}
-    for target_k in range(k_min, k_max + 1):
-        clusters = clusterer(target_k)
-        rows = clusters_to_supernodes(prune_graph, clusters)
-        sng = SummaryGraph(supernodes=rows, pruned_adj=prune_graph.pruned_adj)
-        result = dict(compute_L(
-            sng,
-            role_vectors_middle,
-            middle_id_to_local,
-            prune_loss=prune_loss,
-            lambda_causal=lambda_causal,
-        ))
-        result["final_supernodes"] = {s.name: s.member_node_ids() for s in rows}
-        results[target_k] = result
+    with ``x_ij = 1`` iff middle features ``i, j`` share a supernode, ``|W_ij|`` the
+    pruned edge mass between them (both directions), and ``W_total`` the total pruned
+    edge mass (the constant Eq. Lcausal denominator). The atomicity term is the
+    symmetric over/under-merge penalty: a similar pair (``cos > theta``)
+    carries a negative coefficient (merging rewarded), a dissimilar/antagonistic pair
+    a positive one. Acyclicity (C1) is deferred to Stage 3.
 
-    best_k = min(results, key=lambda k: float(results[k]["L"]))
-    return best_k, results
+    Parameters
+    ----------
+    theta:
+        Resolution threshold in ``[-1, 1]`` on the signed cosine. ``theta = 0``
+        makes the cosine sign itself the merge boundary. The default is the
+        adaptive percentile spec ``"p65"``: theta is the 65th percentile of the
+        allowed-pair cosine distribution of *this* graph, so the boundary tracks
+        each graph's similarity scale instead of a fixed global value.
+    lambda_causal:
+        Deprecated compatibility argument. The ILP objective is always ``L_atom``;
+        use ``eps_causal`` to constrain causal preservation.
+    eps_causal:
+        Optional hard budget on ``L_causal`` in ``[0, 1]``. When set, the ILP
+        minimises atomicity subject to hiding at most this fraction of retained edge
+        mass inside feature supernodes. Default ``0.05``.
+    max_sn:
+        Complexity budget (C2): a hard cap ``K <= max_sn`` on the number of
+        feature supernodes. Default ``20``. ``None`` leaves K endogenous (driven by
+        ``theta``).
+    max_layer_span:
+        Tractability prior: forbid merging two features more than this many
+        layers apart. The methodology imposes no such constraint; raise it to
+        relax. Combined with transitivity this bounds every cluster's layer span.
+        Default ``7``.
+    normalize_weights:
+        If True, min-max normalise the per-node influence/relevance weights before
+        they scale the role vectors (forwarded to ``compute_phi_vectors``). Default
+        False (raw weights).
+
+    Returns raw member-id clusters: feature clusters plus embedding/logit singletons.
+    """
+    _validate_args(lambda_causal, eps_causal, max_sn)
+
+    kept_ids = prune_graph.node_ids
+    nodes_by_id = _nodes_by_id(prune_graph)
+    if not kept_ids:
+        return []
+
+    mid_idx = [i for i, nid in enumerate(kept_ids) if not node_is_fixed(nodes_by_id[nid])]
+    middle_ids = [kept_ids[i] for i in mid_idx]
+    emb_singletons, logit_singletons = _fixed_singletons(kept_ids, nodes_by_id)
+
+    if not middle_ids:
+        return emb_singletons + logit_singletons
+    if len(middle_ids) == 1:
+        return [[middle_ids[0]]] + emb_singletons + logit_singletons
+
+    n = len(middle_ids)
+    phi = (
+        compute_phi_vectors(prune_graph, normalize_weights=normalize_weights).detach().cpu().numpy()
+    )  # (N, 2N)
+    cos = _cosine_similarity(phi[mid_idx])  # (n, n) signed cosine in [-1, 1]
+    layers = np.array([layer_index_from_node(nodes_by_id[nid]) for nid in middle_ids])
+
+    # Disallowed pairs are structurally x_ij = 0 (cannot share a supernode).
+    pairs = _allowed_pairs(layers, max_layer_span)
+    col_x = {pair: k for k, pair in enumerate(pairs)}
+    n_var_x = len(pairs)
+
+    if n_var_x == 0 and max_sn is None:
+        return [[node_id] for node_id in middle_ids] + emb_singletons + logit_singletons
+
+    theta_val = _resolve_theta(theta, cos, pairs)
+
+    # Representative variables r_i (i is the lowest-index member of its cluster) are
+    # only needed to count K for the complexity budget; skip them when max_sn is None.
+    use_reps = max_sn is not None
+    col_r = {i: n_var_x + i for i in range(n)} if use_reps else {}
+    n_var_r = n if use_reps else 0
+    n_var = n_var_x + n_var_r
+
+    _check_problem_size(n, n_var_x, n_var_r, max_layer_span)
+
+    causal_coeff, w_total = _causal_coefficients(prune_graph, mid_idx, col_x)
+    c = _objective(n_var=n_var, col_x=col_x, cos=cos, theta_val=theta_val)
+    constraints = _build_constraints(
+        n=n,
+        n_var=n_var,
+        pairs=pairs,
+        col_x=col_x,
+        col_r=col_r,
+        max_sn=max_sn,
+        eps_causal=eps_causal,
+        causal_coeff=causal_coeff,
+        has_causal_mass=w_total > 0.0,
+        max_layer_span=max_layer_span,
+    )
+    solution = _solve_ilp(
+        c=c,
+        constraints=constraints,
+        time_limit=time_limit,
+        n_middle=n,
+        max_sn=max_sn,
+        max_layer_span=max_layer_span,
+        eps_causal=eps_causal,
+    )
+    middle_clusters = _recover_clusters(middle_ids, col_x, solution[:n_var_x])
+
+    return middle_clusters + emb_singletons + logit_singletons
 
 
 def cluster(
     prune_graph: PruneGraph,
     *,
-    num_clusters: int | Literal["auto"] = "auto",
-    method: Literal["spectral", "agglomerative", "ilp"] = "spectral",
-    max_layer_span: int = 4,
-    max_sn: int | None = None,
-    mean_method: Literal["geo", "harm", "arith"] = "arith",
-    normalize_weights: bool = False,
-    decay_rate: float | None = 1.0,
-    random_state: int = 42,
-    n_init: int = 20,
-    ilp_time_limit: float = 30.0,
+    method: Literal["ilp"] = "ilp",
+    theta: float | str = DEFAULT_THETA,
     lambda_causal: float = 1.0,
-    eps_causal: float | None = None,
+    eps_causal: float | None = DEFAULT_EPS_CAUSAL,
+    max_sn: int | None = DEFAULT_MAX_SN,
+    max_layer_span: int = DEFAULT_MAX_LAYER_SPAN,
+    normalize_weights: bool = DEFAULT_NORMALIZE_WEIGHTS,
+    time_limit: float = DEFAULT_TIME_LIMIT,
+    ilp_time_limit: float | None = None,
+    **legacy_kwargs: object,
 ) -> list[Supernode]:
     """Stage 2: cluster a ``PruneGraph`` into typed ``Supernode`` rows.
 
-    ``num_clusters="auto"`` picks k by minimizing the closed-form L objective
-    (``find_best_k`` for spectral, ``find_best_k_for_clusterer`` for agglomerative);
-    an int clusters at exactly that k. ``method="ilp"`` solves ``min L_atom`` with
-    signed cosine resolution ``theta=0`` and optional hard constraints
-    ``L_causal <= eps_causal`` and ``K <= max_sn``; it ignores ``num_clusters``.
-    For ``theta`` sweeps, call ``cluster_graph_ilp`` directly.
+    ``summarization.cluster`` is the canonical ILP clustering stage. Legacy
+    spectral/agglomerative baselines live in ``eval.legacy_cluster_baselines``.
     """
-    if method == "ilp":
-        from summarization.ilp_cluster import cluster_graph_ilp  # local: avoids import cycle
-
-        clusters = cluster_graph_ilp(
-            prune_graph,
-            theta=0.0,
-            lambda_causal=lambda_causal,
-            eps_causal=eps_causal,
-            max_sn=max_sn,
-            max_layer_span=max_layer_span,
-            time_limit=ilp_time_limit,
+    if method != "ilp":
+        raise ValueError(
+            "summarization.cluster only supports method='ilp'. "
+            "Use eval.legacy_cluster_baselines for spectral/agglomerative baselines."
         )
-        return clusters_to_supernodes(prune_graph, clusters)
-
-    if num_clusters == "auto":
-        if method == "spectral":
-            k, _ = find_best_k(
-                prune_graph,
-                max_layer_span=max_layer_span,
-                max_sn=max_sn,
-                mean_method=mean_method,
-                decay_rate=decay_rate,
-                random_state=random_state,
-                n_init=n_init,
-                lambda_causal=lambda_causal,
-            )
-        else:
-            def _agg(target_k: int) -> list[list[str]]:
-                return cluster_graph_agglomerative(
-                    prune_graph,
-                    target_k=target_k,
-                    max_layer_span=max_layer_span,
-                    max_sn=max_sn,
-                    mean_method=mean_method,
-                    normalize_weights=normalize_weights,
-                    decay_rate=decay_rate,
-                )
-
-            k, _ = find_best_k_for_clusterer(prune_graph=prune_graph, clusterer=_agg, lambda_causal=lambda_causal)
-    else:
-        k = int(num_clusters)
-
-    if method == "spectral":
-        clusters = cluster_graph_spectral(
-            prune_graph,
-            target_k=k,
-            max_layer_span=max_layer_span,
-            mean_method=mean_method,
-            normalize_weights=normalize_weights,
-            decay_rate=decay_rate,
-            random_state=random_state,
-            n_init=n_init,
-        )
-    elif method == "agglomerative":
-        clusters = cluster_graph_agglomerative(
-            prune_graph,
-            target_k=k,
-            max_layer_span=max_layer_span,
-            max_sn=max_sn,
-            mean_method=mean_method,
-            normalize_weights=normalize_weights,
-            decay_rate=decay_rate,
-        )
-    else:
-        raise ValueError(f"Invalid method: {method}")
-
+    if legacy_kwargs:
+        ignored = ", ".join(sorted(legacy_kwargs))
+        logger.debug("Ignoring legacy clustering kwargs for ILP: %s", ignored)
+    clusters = cluster_graph_ilp(
+        prune_graph,
+        theta=theta,
+        lambda_causal=lambda_causal,
+        eps_causal=eps_causal,
+        max_sn=max_sn,
+        max_layer_span=max_layer_span,
+        normalize_weights=normalize_weights,
+        time_limit=ilp_time_limit if ilp_time_limit is not None else time_limit,
+    )
     return clusters_to_supernodes(prune_graph, clusters)

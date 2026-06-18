@@ -31,20 +31,19 @@ from typing import Any, Callable
 import torch
 
 from summarization.attr_graph import AttrGraph
-from summarization.graph_utils import (
-    compute_influence,
-    compute_relevance,
-    normalize_matrix,
-)
 from summarization.prune import (
     PruneGraph,
+    compute_influence,
+    compute_relevance,
     load_prune_graph,
+    normalize_matrix,
     prune_attr_graph,
 )
 from summarization.utils import _build_index_sets
 
 
 # --- Caches ---------------------------------------------------------------
+
 
 class GraphCache:
     """Caches per-graph artifacts shared across many prune cells."""
@@ -60,7 +59,11 @@ class GraphCache:
 
     def attr_graph(self, path: str) -> AttrGraph:
         if path not in self._attr_graph:
-            ag = AttrGraph.from_graph_file(path) if path.endswith(".json") else AttrGraph.from_graph(path)
+            ag = (
+                AttrGraph.from_graph_file(path)
+                if path.endswith(".json")
+                else AttrGraph.from_graph(path)
+            )
             ag.adj = ag.adj.to(self.device)
             self._attr_graph[path] = ag
             self._idx_sets[path] = _build_index_sets(ag.nodes)
@@ -137,6 +140,7 @@ class GraphCache:
 
 
 # --- Metric implementations ----------------------------------------------
+
 
 def _build_masked_A(
     attr_graph: AttrGraph,
@@ -344,7 +348,9 @@ def compute_clt_graph_scores(attr_graph: AttrGraph, prune_graph: PruneGraph) -> 
         non_error = torch.ones(n_full, dtype=A_norm.dtype, device=A_norm.device)
     out_inf = node_inf + logit_w
     denom_comp = float(out_inf.sum())
-    completeness = float((non_error * out_inf).sum()) / denom_comp if denom_comp > 0 else float("nan")
+    completeness = (
+        float((non_error * out_inf).sum()) / denom_comp if denom_comp > 0 else float("nan")
+    )
 
     return replacement, completeness
 
@@ -445,6 +451,7 @@ def influence_relevance_agreement(prune_graph: PruneGraph) -> float | None:
 
 
 # --- Driver ---------------------------------------------------------------
+
 
 def _evaluate_record(
     rec: dict[str, Any],
@@ -556,7 +563,9 @@ def plot_pareto_frontier(
     m_keys = [m[0] for m in metrics]
 
     # alpha -> (node_threshold, edge_threshold) -> list of (n_nodes, n_edges, *metric_values)
-    grouped: dict[float, dict[tuple, list[tuple[float, ...]]]] = defaultdict(lambda: defaultdict(list))
+    grouped: dict[float, dict[tuple, list[tuple[float, ...]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     for r in rows:
         alpha = r.get("alpha")
         n_nodes = r.get("n_nodes")
@@ -567,7 +576,9 @@ def plot_pareto_frontier(
         if any(isinstance(v, float) and v != v for v in vals):  # NaN check
             continue
         key = (float(r.get("node_threshold", 0.0)), float(r.get("edge_threshold", 0.0)))
-        grouped[float(alpha)][key].append((float(n_nodes), float(n_edges), *[float(v) for v in vals]))
+        grouped[float(alpha)][key].append(
+            (float(n_nodes), float(n_edges), *[float(v) for v in vals])
+        )
 
     if not grouped:
         print("[plot] no usable rows (missing alpha / scores / counts).")
@@ -593,8 +604,10 @@ def plot_pareto_frontier(
             axes[mi, 1].plot(xs_e, ys, marker="o", label=label)
 
     for mi, (_, y_label) in enumerate(metrics):
-        axes[mi, 0].set_xlabel("average node count"); axes[mi, 0].set_ylabel(y_label)
-        axes[mi, 1].set_xlabel("average edges per node"); axes[mi, 1].set_ylabel(y_label)
+        axes[mi, 0].set_xlabel("average node count")
+        axes[mi, 0].set_ylabel(y_label)
+        axes[mi, 1].set_xlabel("average edges per node")
+        axes[mi, 1].set_ylabel(y_label)
     for ax in axes.flat:
         ax.set_xscale("log")
         ax.grid(True, ls="--", alpha=0.5)
@@ -739,7 +752,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--log-every", type=int, default=20)
-    parser.add_argument("--device", default="cpu", help="Torch device for adj/prune_graph tensors (e.g. 'cuda').")
+    parser.add_argument(
+        "--device", default="cpu", help="Torch device for adj/prune_graph tensors (e.g. 'cuda')."
+    )
     parser.add_argument(
         "--skip-relevance-conservation",
         action="store_true",

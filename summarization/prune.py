@@ -1,22 +1,12 @@
-# Unified pruning: Graph/AttrGraph -> PruneGraph (pure tensor math; no Neuronpedia)
+# Unified pruning: Graph/AttrGraph -> PruneGraph.
 import logging
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal
 
 import torch
 
-from summarization.graph_utils import (
-    combine_scores_geometric,
-    combined_scores_arithmetic,
-    combined_scores_harmonic,
-    compute_edge_influence,
-    compute_edge_relevance,
-    compute_node_influence,
-    compute_node_relevance,
-    find_threshold,
-    normalize_matrix,
-)
 from summarization.attr_graph import AttrGraph
+from summarization.feature_source import fetch_feature_info
 from summarization.summarize import Node
 from summarization.utils import _build_index_sets, _node_from_json_dict
 from circuit_tracer.graph import Graph
@@ -28,6 +18,149 @@ CombineMethod = Literal["geometric", "arithmetic", "harmonic"]
 NormalizationMethod = Literal["min_max", "rank"]
 
 
+def normalize_scores_min_max(scores: torch.Tensor, eps: float = 1e-10) -> torch.Tensor:
+    scores = scores.clone()
+    scores = scores - scores.min()
+    scores = scores / (scores.max() + eps)
+    return scores
+
+
+def normalize_scores_rank(scores: torch.Tensor) -> torch.Tensor:
+    ranks = torch.argsort(torch.argsort(scores))
+    return ranks.float() / (len(scores) - 1)
+
+
+def normalize_matrix(matrix: torch.Tensor) -> torch.Tensor:
+    normalized = matrix.abs()
+    return normalized / normalized.sum(dim=1, keepdim=True).clamp(min=1e-10)
+
+
+def compute_influence(
+    A: torch.Tensor,
+    logit_weights: torch.Tensor,
+    max_iter: int = 1000,
+) -> torch.Tensor:
+    current_influence = logit_weights.clone()
+    influence = current_influence
+    iterations = 0
+    while current_influence.any():
+        if iterations >= max_iter:
+            raise RuntimeError(
+                f"Influence computation failed to converge after {iterations} iterations"
+            )
+        current_influence = current_influence @ A
+        influence += current_influence
+        iterations += 1
+    return influence
+
+
+def compute_node_influence(
+    adjacency_matrix: torch.Tensor,
+    logit_weights: torch.Tensor,
+) -> torch.Tensor:
+    return compute_influence(normalize_matrix(adjacency_matrix), logit_weights)
+
+
+def compute_edge_influence(
+    pruned_matrix: torch.Tensor,
+    logit_weights: torch.Tensor,
+) -> torch.Tensor:
+    normalized_pruned = normalize_matrix(pruned_matrix)
+    pruned_influence = compute_influence(normalized_pruned, logit_weights)
+    edge_scores = normalized_pruned * pruned_influence[:, None]
+    return edge_scores
+
+
+def compute_relevance(
+    A: torch.Tensor,
+    emb_weights: torch.Tensor,
+    max_iter: int = 1000,
+) -> torch.Tensor:
+    current_relevance = emb_weights.clone()
+    relevance = current_relevance
+    iterations = 0
+    while current_relevance.any():
+        if iterations >= max_iter:
+            raise RuntimeError(
+                f"Relevance computation failed to converge after {iterations} iterations"
+            )
+        current_relevance = current_relevance @ A
+        relevance += current_relevance
+        iterations += 1
+    return relevance
+
+
+def compute_node_relevance(
+    adjacency_matrix: torch.Tensor,
+    emb_weights: torch.Tensor,
+) -> torch.Tensor:
+    return compute_relevance(normalize_matrix(adjacency_matrix.T), emb_weights)
+
+
+def compute_edge_relevance(
+    pruned_matrix: torch.Tensor,
+    emb_weights: torch.Tensor,
+) -> torch.Tensor:
+    normalized_pruned = normalize_matrix(pruned_matrix.T)  # (N, N)
+    pruned_relevance = compute_relevance(normalized_pruned, emb_weights)  # (N,)
+    edge_scores = normalized_pruned * pruned_relevance[:, None]  # (N, N)
+    return edge_scores.T
+
+
+def find_threshold(scores: torch.Tensor, threshold: float) -> torch.Tensor:
+    sorted_scores = torch.sort(scores, descending=True).values
+    cumulative_score = torch.cumsum(sorted_scores, dim=0) / torch.sum(sorted_scores)
+    threshold_index: int = int(torch.searchsorted(cumulative_score, threshold).item())
+    threshold_index = min(threshold_index, len(cumulative_score) - 1)
+    return sorted_scores[threshold_index]
+
+
+def _normalize_pair(
+    influence: torch.Tensor,
+    relevance: torch.Tensor,
+    normalization: str,
+    eps: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if normalization == "min_max":
+        return normalize_scores_min_max(influence, eps), normalize_scores_min_max(relevance, eps)
+    if normalization == "rank":
+        return normalize_scores_rank(influence), normalize_scores_rank(relevance)
+    raise ValueError(f"Invalid normalization method: {normalization}")
+
+
+def combine_scores_geometric(
+    influence: torch.Tensor,
+    relevance: torch.Tensor,
+    normalization: str = "min_max",
+    alpha: float = 0.5,
+    eps: float = 1e-10,
+) -> torch.Tensor:
+    influence_norm, relevance_norm = _normalize_pair(influence, relevance, normalization, eps)
+    return (influence_norm + eps) ** alpha * (relevance_norm + eps) ** (1 - alpha)
+
+
+def combined_scores_arithmetic(
+    influence: torch.Tensor,
+    relevance: torch.Tensor,
+    normalization: str = "min_max",
+    alpha: float = 0.5,
+    eps: float = 1e-10,
+) -> torch.Tensor:
+    influence_norm, relevance_norm = _normalize_pair(influence, relevance, normalization, eps)
+    return influence_norm * alpha + relevance_norm * (1 - alpha)
+
+
+def combined_scores_harmonic(
+    influence: torch.Tensor,
+    relevance: torch.Tensor,
+    normalization: str = "min_max",
+    alpha: float = 0.5,
+    eps: float = 1e-10,
+) -> torch.Tensor:
+    influence_norm, relevance_norm = _normalize_pair(influence, relevance, normalization, eps)
+    return 1 / ((1 / (influence_norm + eps) + alpha) + (1 / (relevance_norm + eps) + alpha))
+
+
 def _combine_scores(
     method: CombineMethod,
     influence: torch.Tensor,
@@ -37,11 +170,17 @@ def _combine_scores(
     eps: float = 1e-10,
 ) -> torch.Tensor:
     if method == "geometric":
-        return combine_scores_geometric(influence, relevance, normalization=normalization, alpha=alpha, eps=eps)
+        return combine_scores_geometric(
+            influence, relevance, normalization=normalization, alpha=alpha, eps=eps
+        )
     if method == "arithmetic":
-        return combined_scores_arithmetic(influence, relevance, normalization=normalization, alpha=alpha, eps=eps)
+        return combined_scores_arithmetic(
+            influence, relevance, normalization=normalization, alpha=alpha, eps=eps
+        )
     if method == "harmonic":
-        return combined_scores_harmonic(influence, relevance, normalization=normalization, alpha=alpha, eps=eps)
+        return combined_scores_harmonic(
+            influence, relevance, normalization=normalization, alpha=alpha, eps=eps
+        )
     raise ValueError(f"Invalid combine_method: {method}")
 
 
@@ -149,11 +288,17 @@ def compute_combined_prune_graph_scores(
     ni = node_influence.to(dtype=torch.float32)
     nr = node_relevance.to(dtype=torch.float32)
     if method == "geometric":
-        combined = combine_scores_geometric(ni, nr, normalization=normalization, alpha=alpha, eps=eps)
+        combined = combine_scores_geometric(
+            ni, nr, normalization=normalization, alpha=alpha, eps=eps
+        )
     elif method == "arithmetic":
-        combined = combined_scores_arithmetic(ni, nr, normalization=normalization, alpha=alpha, eps=eps)
+        combined = combined_scores_arithmetic(
+            ni, nr, normalization=normalization, alpha=alpha, eps=eps
+        )
     else:
-        combined = combined_scores_harmonic(ni, nr, normalization=normalization, alpha=alpha, eps=eps)
+        combined = combined_scores_harmonic(
+            ni, nr, normalization=normalization, alpha=alpha, eps=eps
+        )
 
     idx = _build_index_sets(prune_graph.nodes)
     error_idx = idx["error"]
@@ -161,7 +306,9 @@ def compute_combined_prune_graph_scores(
     if error_idx:
         non_error_fractions = 1.0 - pruned_norm[:, error_idx].sum(dim=-1)
     else:
-        non_error_fractions = torch.ones(pruned_norm.shape[0], dtype=pruned_norm.dtype, device=pruned_norm.device)
+        non_error_fractions = torch.ones(
+            pruned_norm.shape[0], dtype=pruned_norm.dtype, device=pruned_norm.device
+        )
 
     denom = combined.sum().clamp(min=eps)
     combined_completeness_score = float(((non_error_fractions * combined).sum() / denom).item())
@@ -192,9 +339,7 @@ def _validate_inputs(
         if any(not isinstance(x, (int, float)) for x in token_weights):
             raise ValueError("token_weights must be a list of floats if provided")
     if logits_seed is not None and logits_seed.numel() != adj.shape[0]:
-        raise ValueError(
-            f"logits_seed length {logits_seed.numel()} != num_nodes {adj.shape[0]}"
-        )
+        raise ValueError(f"logits_seed length {logits_seed.numel()} != num_nodes {adj.shape[0]}")
     if emb_weights_seed is not None and emb_weights_seed.numel() != adj.shape[0]:
         raise ValueError(
             f"emb_weights_seed length {emb_weights_seed.numel()} != num_nodes {adj.shape[0]}"
@@ -221,6 +366,81 @@ def remove_dangling_nodes(
         if require_in.numel() > 0:
             node_mask[require_in] &= edge_mask[require_in].any(1)
     return node_mask
+
+
+def _subset_prune_graph(
+    prune_graph: PruneGraph, nodes: list[Node], kept: torch.Tensor
+) -> PruneGraph:
+    """Re-subset a PruneGraph to ``kept`` local indices, carrying over edited nodes."""
+    adj = prune_graph.pruned_adj
+    sub_vec = lambda t: t[kept] if t is not None else None  # noqa: E731
+    sub_mat = lambda t: t[kept][:, kept] if t is not None else None  # noqa: E731
+    kept_nodes = [replace(nodes[int(j)], node_idx=i) for i, j in enumerate(kept.tolist())]
+    return PruneGraph(
+        kept_nodes,
+        adj[kept][:, kept].clone(),
+        prune_graph.metadata,
+        sub_vec(prune_graph.node_influence),
+        sub_vec(prune_graph.node_relevance),
+        sub_mat(prune_graph.edge_influence),
+        sub_mat(prune_graph.edge_relevance),
+    )
+
+
+def filter_act_density(
+    prune_graph: PruneGraph,
+    *,
+    scan: str | None = None,
+    features_dir: str | None = None,
+    act_density_lb: float = 2e-5,
+    act_density_ub: float = 0.1,
+) -> PruneGraph:
+    """Drop CLT features whose activation density is out of band.
+
+    The feature dashboard is used only as evidence for the activation-density
+    pruning filter. Embedding/logit nodes are always kept; dangling feature/error
+    nodes left after dropping are pruned.
+    """
+    scan = scan or prune_graph.metadata.get("scan", "")
+    if not scan:
+        raise ValueError(
+            "filter_act_density requires a transcoder scan. "
+            "Pass scan=... when the graph metadata lacks one."
+        )
+
+    nodes = [replace(n) for n in prune_graph.nodes]
+    adj = prune_graph.pruned_adj
+    node_mask = torch.ones(len(nodes), dtype=torch.bool, device=adj.device)
+    edge_mask = adj != 0
+    prompt_tokens = prune_graph.metadata.get("prompt_tokens", [])
+
+    for i, node in enumerate(nodes):
+        if node.feature_type == "embedding":
+            cidx = int(node.ctx_idx) if str(node.ctx_idx).lstrip("-").isdigit() else 0
+            if cidx < len(prompt_tokens):
+                nodes[i] = replace(node, clerp=f"Emb: {prompt_tokens[cidx]}")
+            continue
+        if node.feature_type != "cross layer transcoder":
+            continue
+        info = fetch_feature_info(scan, node.node_id, features_dir=features_dir)
+        if info is None:
+            continue
+        if info.act_density > act_density_ub or info.act_density < act_density_lb:
+            node_mask[i] = False
+            edge_mask[i, :] = False
+            edge_mask[:, i] = False
+
+    idx = _build_index_sets(nodes)
+    require_in = torch.tensor(idx["feature"] + idx["logit"], dtype=torch.long, device=adj.device)
+    require_out = torch.tensor(
+        idx["feature"] + idx["error"] + idx["embedding"],
+        dtype=torch.long,
+        device=adj.device,
+    )
+    node_mask = remove_dangling_nodes(node_mask, edge_mask, require_in, require_out)
+
+    kept = node_mask.nonzero(as_tuple=True)[0]
+    return _subset_prune_graph(prune_graph, nodes, kept)
 
 
 def prune_combined(
@@ -301,7 +521,9 @@ def prune_combined(
     # require_in: must keep an incoming edge (features + logits); require_out: must keep an
     # outgoing edge (features + errors + embeddings). Boundary nodes are pruned when dangling.
     require_in = torch.tensor(idx["feature"] + idx["logit"], dtype=torch.long, device=adj.device)
-    require_out = torch.tensor(idx["feature"] + idx["error"] + idx["embedding"], dtype=torch.long, device=adj.device)
+    require_out = torch.tensor(
+        idx["feature"] + idx["error"] + idx["embedding"], dtype=torch.long, device=adj.device
+    )
     node_mask = remove_dangling_nodes(node_mask, edge_mask, require_in, require_out)
 
     return node_mask, edge_mask, node_inf, node_rel, edge_inf, edge_rel
@@ -323,7 +545,7 @@ def prune_attr_graph(
     """Prune from a canonical ``AttrGraph`` (pure tensor math).
 
     Neuronpedia-dependent annotation/activation-density filtering lives in
-    ``summarization.classify.filter_act_density`` and runs as a separate stage.
+    ``summarization.prune.filter_act_density`` and runs as a separate pruning substage.
     """
     _validate_threshold("node_threshold", node_threshold)
     _validate_threshold("edge_threshold", edge_threshold)
@@ -362,7 +584,9 @@ def prune_attr_graph(
     kept_edge_rel[~kept_edge_mask] = 0.0
 
     kept_nodes = [replace(nodes[int(j)], node_idx=i) for i, j in enumerate(kept_indices.tolist())]
-    logger.info("Pruned graph: %d nodes, %d edges", len(kept_nodes), int((pruned_adj != 0).sum().item()))
+    logger.info(
+        "Pruned graph: %d nodes, %d edges", len(kept_nodes), int((pruned_adj != 0).sum().item())
+    )
 
     return PruneGraph(
         kept_nodes,

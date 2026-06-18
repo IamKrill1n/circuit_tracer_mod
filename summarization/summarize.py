@@ -15,7 +15,7 @@ SupernodeType = Literal["emb", "feature", "features", "logit"]
 
 
 def cluster_kind_to_supernode_type(kind: str) -> SupernodeType:
-    """Map ``cluster_graph_spectral`` role strings to ``Supernode.type``."""
+    """Map raw cluster role strings to ``Supernode.type``."""
     if kind == "emb":
         return "emb"
     if kind == "logit":

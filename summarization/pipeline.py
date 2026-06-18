@@ -1,10 +1,10 @@
-"""End-to-end summarization pipeline: attribute -> (token_attribution) -> prune -> classify -> cluster -> summarize.
+"""End-to-end pipeline: attribution -> token weights -> prune -> cluster -> summarize.
 
 ``run_pipeline`` produces a ``circuit_tracer.Graph`` by running local attribution on a
 prompt (or loading an existing ``.pt``), optionally computes SHAP token weights, prunes
-the graph directly, optionally annotates/filters by activation density, clusters (auto-k
-or fixed k), and assembles the supernode ``SummaryGraph``. ``summarization/__main__.py``
-is a thin CLI over this.
+the graph directly, optionally filters by activation density, clusters, and assembles
+the supernode ``SummaryGraph``. Legacy spectral/agglomerative clustering is available
+only through eval-owned baseline helpers.
 """
 
 from __future__ import annotations
@@ -18,11 +18,12 @@ from typing import Any
 import numpy as np
 
 from api import save_subgraph
+from eval.legacy_cluster_baselines import cluster as legacy_cluster
+from eval.legacy_cluster_baselines import find_best_k
 from summarization.attr_graph import AttrGraph
-from summarization.classify import filter_act_density
-from summarization.cluster import cluster, find_best_k
+from summarization.cluster import cluster
 from summarization.cluster_viz import supernode_graph_figure
-from summarization.prune import prune_attr_graph
+from summarization.prune import filter_act_density, prune_attr_graph
 from summarization.summarize import summarize
 from summarization.utils import node_is_embedding
 
@@ -184,20 +185,18 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     # Stage 1b (optional): activation-density filter from the feature dashboards.
-    if args.classify_filter:
+    if getattr(args, "filter_act_density", False) or getattr(args, "classify_filter", False):
         prune_graph = filter_act_density(
             prune_graph,
             act_density_lb=args.act_density_lb,
             act_density_ub=args.act_density_ub,
         )
 
-    # Stage 2: cluster (auto-k captures the per-k sweep for reporting).
+    # Stage 2: cluster (ILP canonical; legacy baselines remain eval-owned).
     sweep: dict[int, dict[str, Any]] = {}
     if args.method == "ilp":
-        # ILP picks K endogenously by minimizing L_atom subject to hard constraints.
         rows = cluster(
             prune_graph,
-            method="ilp",
             max_layer_span=args.max_layer_span,
             max_sn=args.max_sn,
             lambda_causal=args.lambda_causal,
@@ -222,7 +221,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         if resolved_k is None:
             resolved_k = 7
 
-        rows = cluster(
+        rows = legacy_cluster(
             prune_graph,
             num_clusters=resolved_k,
             method=args.method,

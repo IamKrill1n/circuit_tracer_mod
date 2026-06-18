@@ -30,13 +30,17 @@ def test_slugify_and_graph_paths(tmp_path: Path) -> None:
     assert slug == "Gemma-graph--Austin"
     assert services.graph_dir(slug, tmp_path) == tmp_path / slug
     assert services.graph_json_path(slug, tmp_path) == tmp_path / slug / f"{slug}.json"
+    assert services.sidecar_pt_path(slug, tmp_path) == tmp_path / f"{slug}.pt"
 
 
 def test_list_graphs_reads_viewer_directories(tmp_path: Path) -> None:
-    graph_dir = tmp_path / "austin"
-    graph_dir.mkdir()
-    (graph_dir / "austin.pt").write_bytes(b"pt")
-    (graph_dir / "austin.sng.pt").write_bytes(b"sng")
+    graph_root = tmp_path / "graph_files"
+    pt_root = tmp_path / "generated_graphs"
+    graph_dir = graph_root / "austin"
+    graph_dir.mkdir(parents=True)
+    pt_root.mkdir()
+    (pt_root / "Austin.pt").write_bytes(b"pt")
+    (pt_root / "austin.sng.pt").write_bytes(b"sng")
     (graph_dir / "austin.json").write_text(
         json.dumps(
             {
@@ -53,7 +57,7 @@ def test_list_graphs_reads_viewer_directories(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    records = services.list_graphs(tmp_path)
+    records = services.list_graphs(graph_root, pt_root)
 
     assert len(records) == 1
     assert records[0].slug == "austin"
@@ -61,6 +65,115 @@ def test_list_graphs_reads_viewer_directories(tmp_path: Path) -> None:
     assert records[0].has_summary is True
     assert records[0].node_count == 1
     assert records[0].link_count == 1
+
+
+def test_summary_request_defaults_match_graph_workflow() -> None:
+    from visualization_app.server import SummaryRequest
+
+    req = SummaryRequest()
+
+    assert req.token_weights_source == "shap"
+    assert req.token_attr_normalize == "entmax"
+    assert req.shap_values_path == "dataset/analogies/shap_values.json"
+    assert req.node_threshold == 0.02
+    assert req.edge_threshold == 0.9
+    assert req.filter_act_density is True
+    assert req.cluster_method == "ilp"
+    assert req.max_layer_span == 7
+    assert req.max_sn == 20
+    assert req.eps_causal == 0.05
+    assert req.theta == 0.0
+    assert req.label_model == "gemma-4-31b-it"
+
+
+def test_token_weights_from_shap_uses_graph_target_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    from summarization.summarize import Node
+
+    captured: dict[str, int | None] = {}
+
+    def fake_get_token_attribution(**kwargs):
+        captured["target_token_id"] = kwargs["target_token_id"]
+        return torch.ones(2), torch.tensor([0.25, 0.75])
+
+    def fake_build_index_sets(_nodes):
+        return {"embedding": [0, 1]}
+
+    monkeypatch.setattr(
+        "summarization.token_attribution.get_token_attribution",
+        fake_get_token_attribution,
+    )
+    monkeypatch.setattr("summarization.utils._build_index_sets", fake_build_index_sets)
+    ag = type(
+        "FakeAttrGraph",
+        (),
+        {
+            "metadata": {"prompt": "A B", "prompt_tokens": ["A", " B"]},
+            "nodes": [
+                Node("E_0_0", 0, 0, "E", 0, "embedding"),
+                Node("E_0_1", 1, 0, "E", 1, "embedding"),
+                Node("L_0", 2, 1234, "L", 1, "logit", is_target_logit=True),
+            ],
+        },
+    )()
+
+    weights = services._token_weights_from_shap(
+        ag,
+        model_name="model",
+        normalize_method="entmax",
+        entmax_alpha=1.25,
+        device="cpu",
+    )
+
+    assert captured["target_token_id"] == 1234
+    assert weights == [0.25, 0.75]
+
+
+def test_token_attribution_passes_explicit_target_to_shap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from summarization import token_attribution
+
+    captured: dict[str, tuple] = {}
+
+    class FakeTokenizer:
+        def decode(self, ids):
+            assert ids == [7]
+            return " target"
+
+        def __call__(self, text, add_special_tokens):
+            assert text == " target"
+            assert add_special_tokens is False
+            return {"input_ids": [7]}
+
+    class FakeExplanation:
+        values = [2.0]
+        feature_names = ["A"]
+
+    class FakeExplainer:
+        def __call__(self, *args, batch_size):
+            captured["args"] = args
+            captured["batch_size"] = batch_size
+            return FakeExplanation()
+
+    monkeypatch.setattr(token_attribution, "_cached_tokenizer", lambda _model_name: FakeTokenizer())
+    monkeypatch.setattr(
+        token_attribution,
+        "_build_shap_lm_explainer",
+        lambda **_kwargs: FakeExplainer(),
+    )
+
+    _raw, normalized = token_attribution.get_token_attribution(
+        prompt="A",
+        prompt_tokens=["A"],
+        model_name="model",
+        normalize_method="softmax",
+        device="cpu",
+        target_token_id=7,
+    )
+
+    assert captured["args"] == (["A"], [" target"])
+    assert captured["batch_size"] == 1
+    assert normalized.tolist() == [1.0]
 
 
 def test_summary_graph_viewer_payload_respects_200_node_limit() -> None:

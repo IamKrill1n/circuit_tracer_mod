@@ -12,24 +12,23 @@ import numpy as np
 import torch
 import networkx as nx
 from sklearn.cluster import KMeans, SpectralClustering
+from sklearn.metrics import silhouette_score
 
 from eval.eval_prune import compute_prune_loss
 from summarization.attr_graph import AttrGraph
 from summarization.cluster import (
-    clusters_to_supernodes,
-    compute_phi_vectors,
-    labels_to_supernodes,
-)
-from summarization.ilp_cluster import (
     DEFAULT_EPS_CAUSAL,
     DEFAULT_MAX_SN,
     DEFAULT_THETA,
     DEFAULT_TIME_LIMIT,
+    _cosine_similarity,
     cluster_graph_ilp,
+    clusters_to_supernodes,
+    compute_phi_vectors,
+    labels_to_supernodes,
 )
-from summarization.scoring import _cosine_similarity, compute_L, silhouette_from_features
 from summarization.prune import PruneGraph, load_prune_graph
-from summarization.summarize import SummaryGraph
+from summarization.summarize import Supernode, SummaryGraph, compute_sn_adj
 from summarization.utils import node_is_fixed
 
 logger = logging.getLogger(__name__)
@@ -62,6 +61,173 @@ SUMMARY_COLUMNS = [
     "supernode_map_path",
     "result_path",
 ]
+
+
+def compute_L_atom(
+    role_vectors_middle: np.ndarray,
+    labels: np.ndarray,
+    theta: float = 0.0,
+) -> dict[str, float]:
+    """Atomicity loss over middle-feature role vectors."""
+    n = role_vectors_middle.shape[0] if role_vectors_middle.size else 0
+    if n < 2 or labels.size == 0:
+        return {"L_atom": 0.0, "L_atom_norm": 0.0}
+
+    cos = _cosine_similarity(role_vectors_middle)
+    iu, ju = np.triu_indices(n, k=1)
+    signed_merge_weight = cos[iu, ju] - theta
+    same = (labels[iu] == labels[ju]) & (labels[iu] >= 0)
+
+    raw = float((-signed_merge_weight[same]).sum())
+    total = float(np.abs(signed_merge_weight).sum())
+    if total <= 1e-12:
+        return {"L_atom": raw, "L_atom_norm": 0.0}
+    disagreement = float(
+        np.abs(signed_merge_weight[(signed_merge_weight < 0.0) & same]).sum()
+        + np.abs(signed_merge_weight[(signed_merge_weight > 0.0) & ~same]).sum()
+    )
+    return {"L_atom": raw, "L_atom_norm": disagreement / total}
+
+
+def compute_L_causal(sng: SummaryGraph) -> float:
+    """Fraction of pruned edge mass absorbed inside feature supernodes."""
+    adj = sng.pruned_adj.detach().cpu().numpy().astype(np.float64)  # adj[target, source]
+    total_mag = float(np.abs(adj).sum())
+    if total_mag <= 0.0:
+        return 0.0
+    internal_mag = 0.0
+    for sn in sng.supernodes:
+        idxs = [n.node_idx for n in sn.features if n.node_idx >= 0]
+        if len(idxs) < 2:
+            continue
+        block = adj[np.ix_(idxs, idxs)]
+        internal_mag += float(np.abs(block).sum())
+    return internal_mag / total_mag
+
+
+def compute_edge_mass_metrics(sng: SummaryGraph) -> dict[str, float | int]:
+    """Mass accounting for summary-graph construction."""
+    total_fine_edge_mass = float(np.abs(sng.pruned_adj.detach().cpu().numpy()).sum())
+    index_lists = [[n.node_idx for n in sn.features if n.node_idx >= 0] for sn in sng.supernodes]
+    raw_adj = compute_sn_adj(index_lists, sng.pruned_adj)
+    raw_superedge_mass = float(np.abs(raw_adj).sum())
+    final_superedge_mass = float(np.abs(sng.adj_matrix).sum())
+    dag_removed_mass = max(raw_superedge_mass - final_superedge_mass, 0.0)
+    dag_removed_mass_fraction = (
+        dag_removed_mass / raw_superedge_mass if raw_superedge_mass > 1e-12 else 0.0
+    )
+    final_retained_mass_fraction = (
+        final_superedge_mass / total_fine_edge_mass if total_fine_edge_mass > 1e-12 else 0.0
+    )
+    return {
+        "total_fine_edge_mass": total_fine_edge_mass,
+        "raw_superedge_mass": raw_superedge_mass,
+        "final_superedge_mass": final_superedge_mass,
+        "dag_removed_mass": dag_removed_mass,
+        "dag_removed_mass_fraction": dag_removed_mass_fraction,
+        "final_retained_mass_fraction": final_retained_mass_fraction,
+        "n_superedges": int(np.count_nonzero(np.abs(sng.adj_matrix) > 0.0)),
+    }
+
+
+def _supernode_labels_for_middle(
+    sng: SummaryGraph,
+    middle_node_id_to_local: dict[str, int],
+    n_middle: int,
+) -> np.ndarray:
+    labels = np.full(n_middle, -1, dtype=np.int64)
+    next_label = 0
+    for sn in sng.supernodes:
+        if sn.type not in ("features", "feature"):
+            continue
+        for node in sn.features:
+            local = middle_node_id_to_local.get(node.node_id)
+            if local is not None:
+                labels[local] = next_label
+        next_label += 1
+    return labels
+
+
+def compute_L(
+    sng: SummaryGraph,
+    role_vectors_middle: np.ndarray,
+    middle_node_id_to_local: dict[str, int],
+    *,
+    prune_loss: float = 0.0,
+    lambda_causal: float = 1.0,
+) -> dict[str, float | int]:
+    """Evaluation objective bundle for one partition."""
+    n_middle = role_vectors_middle.shape[0]
+    labels = _supernode_labels_for_middle(sng, middle_node_id_to_local, n_middle)
+    atom = compute_L_atom(role_vectors_middle, labels)
+    causal = compute_L_causal(sng)
+    edge_mass = compute_edge_mass_metrics(sng)
+    n_feature_sn = sum(1 for sn in sng.supernodes if sn.type in ("features", "feature"))
+    L = (atom["L_atom_norm"] + lambda_causal * causal) / (1.0 + lambda_causal)
+    return {
+        "L": float(L),
+        "L_atom": float(atom["L_atom"]),
+        "L_atom_norm": float(atom["L_atom_norm"]),
+        "L_causal": float(causal),
+        "internalized_mass_fraction": float(causal),
+        **edge_mass,
+        "prune_loss": float(prune_loss),
+        "K": int(n_feature_sn),
+        "n_supernodes": int(len(sng.supernodes)),
+    }
+
+
+def silhouette_from_features(
+    features: np.ndarray,
+    prune_graph: PruneGraph,
+    rows: list[Supernode],
+) -> tuple[float, float]:
+    """Cosine-similarity silhouette over middle nodes for a fixed feature matrix."""
+    sim = _cosine_similarity(features, nonnegative=True)
+    return _silhouette_over_middle(sim, prune_graph, rows)
+
+
+def _silhouette_over_middle(
+    similarity: np.ndarray,
+    prune_graph: PruneGraph,
+    rows: list[Supernode],
+) -> tuple[float, float]:
+    ids = prune_graph.node_ids
+    id_to_idx = {nid: i for i, nid in enumerate(ids)}
+
+    nid_to_label: dict[str, int] = {}
+    label_idx = 0
+    for row in rows:
+        if row.type != "features":
+            continue
+        assigned = False
+        for nid in row.member_node_ids():
+            if nid in id_to_idx:
+                nid_to_label[nid] = label_idx
+                assigned = True
+        if assigned:
+            label_idx += 1
+
+    if not nid_to_label:
+        return 0.0, 0.5
+
+    node_indices = [id_to_idx[nid] for nid in nid_to_label]
+    labels_arr = np.fromiter(
+        (nid_to_label[ids[i]] for i in node_indices),
+        dtype=np.int64,
+        count=len(node_indices),
+    )
+    n_distinct = int(len(set(labels_arr.tolist())))
+    if n_distinct < 2 or n_distinct >= len(labels_arr):
+        return 0.0, 0.5
+
+    s_block = similarity[np.ix_(node_indices, node_indices)]
+    s_block = (s_block + s_block.T) / 2.0
+    s_block = np.clip(s_block, 0.0, 1.0)
+    distance = 1.0 - s_block
+    np.fill_diagonal(distance, 0.0)
+    sil = float(silhouette_score(distance, labels_arr, metric="precomputed"))
+    return sil, float((sil + 1.0) / 2.0)
 
 
 def _to_jsonable(obj: Any) -> Any:
@@ -108,9 +274,7 @@ _RE_NODE_SIMPLE = re.compile(
 )
 
 
-def _path_matches_node_threshold(
-    graph_path: Path, threshold: float, *, eps: float = 1e-5
-) -> bool:
+def _path_matches_node_threshold(graph_path: Path, threshold: float, *, eps: float = 1e-5) -> bool:
     """True if a parent folder encodes this threshold (SHAP or simple layouts)."""
 
     def close(x: float) -> bool:
@@ -144,11 +308,7 @@ def _discover_prune_graphs(
             continue
         if path.is_dir():
             discovered.extend(
-                sorted(
-                    p.resolve()
-                    for p in path.rglob("*_prune_graph.pt")
-                    if p.is_file()
-                )
+                sorted(p.resolve() for p in path.rglob("*_prune_graph.pt") if p.is_file())
             )
     unique = sorted(dict.fromkeys(discovered))
     if not unique:
@@ -217,9 +377,7 @@ def _find_prune_graphs_manifest(graph_path: Path) -> Path | None:
     return None
 
 
-def _lookup_prune_manifest_row(
-    manifest_path: Path, graph_path: Path
-) -> dict[str, Any] | None:
+def _lookup_prune_manifest_row(manifest_path: Path, graph_path: Path) -> dict[str, Any] | None:
     """Find the results.json row whose prune_graph_path matches graph_path."""
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     results_json = Path(manifest.get("results_json", ""))
@@ -243,7 +401,10 @@ def _lookup_prune_manifest_row(
                 candidate = (manifest_path.parent / candidate).resolve()
         else:
             candidate = candidate.resolve()
-        if candidate == target or (candidate.name == target_name and str(candidate).endswith(str(target).split("eval_outputs", 1)[-1])):
+        if candidate == target or (
+            candidate.name == target_name
+            and str(candidate).endswith(str(target).split("eval_outputs", 1)[-1])
+        ):
             return row
     return None
 
@@ -259,15 +420,11 @@ def _compute_prune_loss_for_graph(
     if the manifest can't be found or the wiring fails (with a warning)."""
     manifest = _find_prune_graphs_manifest(graph_path)
     if manifest is None:
-        logger.warning(
-            "Could not find prune_graphs manifest for %s; prune_loss=0.0", graph_path
-        )
+        logger.warning("Could not find prune_graphs manifest for %s; prune_loss=0.0", graph_path)
         return 0.0
     row = _lookup_prune_manifest_row(manifest, graph_path)
     if row is None:
-        logger.warning(
-            "Manifest %s has no row for %s; prune_loss=0.0", manifest, graph_path
-        )
+        logger.warning("Manifest %s has no row for %s; prune_loss=0.0", manifest, graph_path)
         return 0.0
     orig_graph_path = row.get("graph_path")
     token_weights = row.get("token_weights")
@@ -577,9 +734,7 @@ def evaluate_prune_graph(
         time_limit=ilp_time_limit,
     )
     ilp_feature_clusters = [
-        cluster
-        for cluster in ilp_clusters
-        if cluster and cluster[0] in middle_id_to_local
+        cluster for cluster in ilp_clusters if cluster and cluster[0] in middle_id_to_local
     ]
     matched_k = len(ilp_feature_clusters)
     ilp_cluster_sizes = [len(cluster) for cluster in ilp_feature_clusters]
@@ -862,9 +1017,7 @@ def main() -> None:
     args = parser.parse_args()
     if not args.input_path:
         args.input_path = _default_input_paths()
-    logger.info(
-        "=== Clustering evaluation (ILP matched-K baselines; edge-mass metrics) ==="
-    )
+    logger.info("=== Clustering evaluation (ILP matched-K baselines; edge-mass metrics) ===")
     result = run_evaluation(args)
     logger.info("output_dir: %s", result["output_dir"])
     logger.info("summary_csv: %s", result["summary_csv"])
