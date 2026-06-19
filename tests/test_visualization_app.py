@@ -218,6 +218,91 @@ def test_token_attribution_strips_graph_bos_before_pinned_shap(
     assert normalized.tolist() == [0.0, 1.0]
 
 
+def test_format_generation_prompt_formats_qwen_with_chat_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = {}
+
+    def fake_format_qwen_with_tokenizer(
+        messages,
+        *,
+        model_name,
+        add_generation_prompt,
+        enable_thinking,
+    ):
+        captured["messages"] = messages
+        captured["model_name"] = model_name
+        captured["add_generation_prompt"] = add_generation_prompt
+        captured["enable_thinking"] = enable_thinking
+        return "formatted qwen prompt"
+
+    monkeypatch.setattr(
+        "attribute_utils.format_qwen_with_tokenizer",
+        fake_format_qwen_with_tokenizer,
+    )
+
+    formatted = services._format_generation_prompt(
+        prompt="Solve this.",
+        model_name="Qwen/Qwen3-4B",
+        qwen_system="System message.",
+        qwen_enable_thinking=True,
+    )
+
+    assert formatted == "formatted qwen prompt"
+    assert captured == {
+        "messages": [
+            {"role": "system", "content": "System message."},
+            {"role": "user", "content": "Solve this."},
+        ],
+        "model_name": "Qwen/Qwen3-4B",
+        "add_generation_prompt": True,
+        "enable_thinking": True,
+    }
+
+
+def test_format_generation_prompt_uses_existing_qwen_assistant_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = {}
+
+    def fake_format_qwen_with_tokenizer(messages, **kwargs):
+        captured["messages"] = messages
+        captured.update(kwargs)
+        return "formatted qwen prompt"
+
+    monkeypatch.setattr(
+        "attribute_utils.format_qwen_with_tokenizer",
+        fake_format_qwen_with_tokenizer,
+    )
+
+    services._format_generation_prompt(
+        prompt="Question",
+        model_name="qwen-local",
+        qwen_system="",
+        qwen_assistant="Partial answer",
+    )
+
+    assert captured["messages"] == [
+        {"role": "user", "content": "Question"},
+        {"role": "assistant", "content": "Partial answer"},
+    ]
+    assert captured["add_generation_prompt"] is False
+    assert captured["enable_thinking"] is False
+
+
+def test_format_generation_prompt_leaves_non_qwen_prompt_unchanged() -> None:
+    assert (
+        services._format_generation_prompt(
+            prompt="The capital of France is",
+            model_name="google/gemma-2-2b",
+            qwen_system="Ignored",
+            qwen_assistant="Ignored",
+            qwen_enable_thinking=True,
+        )
+        == "The capital of France is"
+    )
+
+
 def test_run_summary_delegates_core_work_to_pipeline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -301,6 +386,65 @@ def test_summary_graph_viewer_payload_respects_200_node_limit() -> None:
     assert [group[0] for group in grouped] == ["SN_0", "SN_1"]
     assert stats["dropped_supernodes"] == 1
     assert stats["dropped_members"] == 90
+
+
+def test_summary_graph_viewer_payload_includes_singleton_logit_supernodes() -> None:
+    feature = Supernode(
+        "SN_0",
+        [_node("0_0_0", 0), _node("0_1_0", 1)],
+        "features",
+        0,
+        0,
+    )
+    emb = Supernode("SN_EMB_0", [_node("E_0_0", 2, "embedding")], "emb", -1, -1)
+    logit = Supernode(
+        "SN_LOGIT_0",
+        [_node("L_0", 3, "logit")],
+        "logit",
+        99,
+        99,
+    )
+    sng = SummaryGraph([feature, emb, logit], torch.zeros((4, 4)))
+
+    pinned_ids, grouped, stats = services.summary_graph_viewer_payload(sng, max_nodes=200)
+
+    assert pinned_ids == ["L_0", "0_0_0", "0_1_0", "E_0_0"]
+    assert grouped == [["SN_0", "0_0_0", "0_1_0"], ["SN_LOGIT_0", "L_0"]]
+    assert stats["supernodes"] == 2
+
+    capped_ids, capped_grouped, capped_stats = services.summary_graph_viewer_payload(
+        sng, max_nodes=2
+    )
+
+    assert "L_0" in capped_ids
+    assert capped_grouped == [["SN_LOGIT_0", "L_0"]]
+    assert capped_stats["dropped_supernodes"] == 1
+
+
+def test_summary_job_reports_progress(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_load_graph_record(_slug):
+        return object()
+
+    def fake_run_summary(*, progress, **_kwargs):
+        progress("Pruning attribution graph", 0.35)
+        return {"ok": True}
+
+    monkeypatch.setattr(services, "load_graph_record", fake_load_graph_record)
+    monkeypatch.setattr(services, "run_summary", fake_run_summary)
+    client = TestClient(app)
+
+    response = client.post("/api/graphs/austin/summary", json={"label_supernodes": False})
+
+    assert response.status_code == 200
+    job_id = response.json()["job"]["id"]
+    for _ in range(20):
+        job = client.get(f"/api/jobs/{job_id}").json()["job"]
+        if job["status"] == "completed":
+            break
+        time.sleep(0.05)
+    assert job["status"] == "completed"
+    assert job["progress"] == 1.0
+    assert job["result"] == {"ok": True}
 
 
 def test_preview_job_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:

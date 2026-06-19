@@ -295,6 +295,28 @@ footer {
   color: #64748b;
 }
 
+.progress-status {
+  display: grid;
+  gap: 6px;
+  margin-right: auto;
+  min-width: min(420px, 100%);
+}
+
+.progress-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+progress {
+  width: 100%;
+  height: 10px;
+  accent-color: #047857;
+}
+
 @media (max-width: 1180px) {
   .layout {
     grid-template-columns: 280px 1fr;

@@ -13,7 +13,7 @@ import argparse
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -150,6 +150,16 @@ def _save_json(path: str | None, payload: Any) -> None:
     out.write_text(json.dumps(_to_jsonable(payload), indent=2), encoding="utf-8")
 
 
+def _report_progress(
+    args: argparse.Namespace,
+    message: str,
+    progress: float | None = None,
+) -> None:
+    callback: Callable[[str, float | None], None] | None = getattr(args, "progress_callback", None)
+    if callback is not None:
+        callback(message, progress)
+
+
 def _supernodes_for_upload(rows: list) -> list[list[str]]:
     """Neuronpedia upload format [label, member_1, ...] for non-singleton supernodes."""
     return [[s.name, *s.member_node_ids()] for s in rows if len(s.features) > 1]
@@ -157,12 +167,15 @@ def _supernodes_for_upload(rows: list) -> list[list[str]]:
 
 def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     # Stage 0: produce a circuit_tracer Graph (local attribution or loaded .pt).
+    _report_progress(args, "Loading attribution graph", 0.05)
     graph = _acquire_graph(args)
+    _report_progress(args, "Building attribution graph view", 0.12)
     ag = AttrGraph.from_graph(graph)
 
     # Stage 0b (optional): SHAP token weights from the graph's prompt.
     token_weights = _parse_token_weights(args.token_weights)
     if args.auto_token_weights and token_weights is None:
+        _report_progress(args, "Computing token attribution weights", 0.22)
         shap_model = (
             args.token_attr_model or getattr(graph.cfg, "tokenizer_name", None) or args.model
         )
@@ -175,6 +188,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     # Stage 1: prune (Graph -> PruneGraph, pure tensor math).
+    _report_progress(args, "Pruning attribution graph", 0.35)
     prune_graph = prune_attr_graph(
         ag,
         logit_weights=args.logit_weights,
@@ -189,6 +203,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
     # Stage 1b (optional): activation-density filter from the feature dashboards.
     if getattr(args, "filter_act_density", False) or getattr(args, "classify_filter", False):
+        _report_progress(args, "Filtering activation density", 0.48)
         prune_graph = filter_act_density(
             prune_graph,
             act_density_lb=args.act_density_lb,
@@ -196,6 +211,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     # Stage 2: cluster (ILP canonical; legacy baselines remain eval-owned).
+    _report_progress(args, "Clustering supernodes", 0.62)
     sweep: dict[int, dict[str, Any]] = {}
     if args.method == "ilp":
         rows = cluster(
@@ -235,9 +251,11 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     supernode_map = {s.name: s.member_node_ids() for s in rows}
 
     # Stage 3: summarize.
+    _report_progress(args, "Assembling summary graph", 0.78)
     sng = summarize(rows, prune_graph.pruned_adj, prune_graph.metadata)
     labelled_supernodes = _supernodes_for_upload(rows)
 
+    _report_progress(args, "Saving summary artifacts", 0.84)
     summary_graph_out = getattr(args, "summary_graph_out", None)
     if summary_graph_out:
         out = Path(summary_graph_out)
@@ -264,6 +282,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
     figure_path = None
     if args.figure_html_out:
+        _report_progress(args, "Rendering summary figure", 0.92)
         fig = supernode_graph_figure(
             sng=sng,
             final_supernodes=supernode_map,
@@ -278,6 +297,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     upload_status = None
     upload_body = None
     if args.upload:
+        _report_progress(args, "Uploading summary graph", 0.96)
         if not args.slug or not args.display_name:
             raise ValueError("--upload requires --slug and --display-name.")
         if not 0.0 <= float(args.upload_pruning_threshold) <= 1.0:
@@ -294,6 +314,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             densityThreshold=args.upload_density_threshold,
         )
 
+    _report_progress(args, "Summary pipeline complete", 1.0)
     return {
         "pruned_nodes": prune_graph.num_nodes,
         "pruned_edges": prune_graph.num_edges,

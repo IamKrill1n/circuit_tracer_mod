@@ -88,6 +88,9 @@
               </select>
             </label>
             <label>Batch Size <input id="genBatch" type="number" min="1" value="256" /></label>
+            <label>Qwen System <textarea id="genQwenSystem" rows="2">You are a helpful assistant.</textarea></label>
+            <label>Qwen Assistant <textarea id="genQwenAssistant" rows="2" placeholder="optional existing assistant message"></textarea></label>
+            <label><input id="genQwenThinking" type="checkbox" /> Qwen thinking</label>
           </div>
         </details>
 
@@ -187,7 +190,13 @@
         </details>
 
         <footer>
-          <span id="summaryStatus" class="status"></span>
+          <div class="progress-status">
+            <span id="summaryStatus" class="status"></span>
+            <div id="summaryProgressRow" class="progress-row" hidden>
+              <progress id="summaryProgress" max="1" value="0"></progress>
+              <span id="summaryProgressText">0%</span>
+            </div>
+          </div>
           <button id="startSummaryBtn" type="button" class="primary">Generate Summary</button>
         </footer>
       </form>

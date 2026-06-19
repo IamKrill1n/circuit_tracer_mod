@@ -7,7 +7,7 @@ import time
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Callable, Literal, cast
 
 from config import HUGGINGFACE_API_KEY
 
@@ -22,6 +22,40 @@ MAX_SUBGRAPH_VIEWER_NODES = 200
 
 def slugify(text: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "-" for c in text).strip("-") or "graph"
+
+
+def _is_qwen(model_name: str) -> bool:
+    return "qwen" in model_name.strip().lower()
+
+
+def _format_generation_prompt(
+    *,
+    prompt: str,
+    model_name: str,
+    qwen_system: str = "You are a helpful assistant.",
+    qwen_assistant: str = "",
+    qwen_enable_thinking: bool = False,
+) -> str:
+    if not _is_qwen(model_name):
+        return prompt
+
+    from attribute_utils import format_qwen_with_tokenizer
+
+    messages: list[dict[str, str]] = []
+    if qwen_system.strip():
+        messages.append({"role": "system", "content": qwen_system})
+    messages.append({"role": "user", "content": prompt})
+    add_generation_prompt = True
+    if qwen_assistant.strip():
+        messages.append({"role": "assistant", "content": qwen_assistant})
+        add_generation_prompt = False
+
+    return format_qwen_with_tokenizer(
+        messages,
+        model_name=model_name,
+        add_generation_prompt=add_generation_prompt,
+        enable_thinking=qwen_enable_thinking,
+    )
 
 
 def graph_dir(slug: str, root: Path = GRAPH_ROOT) -> Path:
@@ -187,6 +221,9 @@ def generate_graph(
     batch_size: int = 256,
     node_threshold: float = 0.8,
     edge_threshold: float = 0.98,
+    qwen_system: str = "You are a helpful assistant.",
+    qwen_assistant: str = "",
+    qwen_enable_thinking: bool = False,
     root: Path = GRAPH_ROOT,
     pt_root: Path = GENERATED_GRAPH_ROOT,
 ) -> GraphRecord:
@@ -199,6 +236,13 @@ def generate_graph(
     viewer_dir = graph_dir(safe_slug, root)
     viewer_dir.mkdir(parents=True, exist_ok=True)
     pt_root.mkdir(parents=True, exist_ok=True)
+    formatted_prompt = _format_generation_prompt(
+        prompt=prompt,
+        model_name=model_name,
+        qwen_system=qwen_system,
+        qwen_assistant=qwen_assistant,
+        qwen_enable_thinking=qwen_enable_thinking,
+    )
 
     dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
     model = ReplacementModel.from_pretrained(
@@ -210,7 +254,7 @@ def generate_graph(
     )
     try:
         graph = attribute(
-            prompt=prompt,
+            prompt=formatted_prompt,
             model=model,
             max_n_logits=max_n_logits,
             desired_logit_prob=desired_logit_prob,
@@ -244,11 +288,21 @@ def preview_prompt(
     dtype: Literal["float32", "float16", "bfloat16"] = "bfloat16",
     backend: Literal["transformerlens", "nnsight"] = "transformerlens",
     top_k: int = 5,
+    qwen_system: str = "You are a helpful assistant.",
+    qwen_assistant: str = "",
+    qwen_enable_thinking: bool = False,
 ) -> dict[str, Any]:
     import torch
     from circuit_tracer import ReplacementModel
     from circuit_tracer.utils.demo_utils import cleanup_cuda
 
+    formatted_prompt = _format_generation_prompt(
+        prompt=prompt,
+        model_name=model_name,
+        qwen_system=qwen_system,
+        qwen_assistant=qwen_assistant,
+        qwen_enable_thinking=qwen_enable_thinking,
+    )
     dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
     model = ReplacementModel.from_pretrained(
         model_name,
@@ -259,7 +313,7 @@ def preview_prompt(
     )
     try:
         tokenizer = model.tokenizer
-        input_ids = model.ensure_tokenized(prompt)
+        input_ids = model.ensure_tokenized(formatted_prompt)
         token_ids = input_ids.reshape(-1).detach().cpu().tolist()
         tokens = [tokenizer.decode([int(token_id)]) for token_id in token_ids]
         with torch.no_grad():
@@ -365,6 +419,7 @@ def run_summary(
     settings: dict[str, Any],
     root: Path = GRAPH_ROOT,
     pt_root: Path = GENERATED_GRAPH_ROOT,
+    progress: Callable[[str, float | None], None] | None = None,
 ) -> dict[str, Any]:
     from argparse import Namespace
 
@@ -383,6 +438,11 @@ def run_summary(
         value = settings.get(name, default)
         return default if value in (None, "") else value
 
+    def report(message: str, value: float | None = None) -> None:
+        if progress is not None:
+            progress(message, value)
+
+    report("Preparing summary settings", 0.02)
     token_weights_source = str(settings.get("token_weights_source") or "uniform")
     normalize_method = str(settings.get("token_attr_normalize") or "entmax")
     entmax_alpha = float(setting("entmax_alpha", 1.25)) if normalize_method == "entmax" else None
@@ -412,6 +472,11 @@ def run_summary(
 
     out = summary_path(safe_slug, pt_root)
     pt_root.mkdir(parents=True, exist_ok=True)
+
+    def pipeline_progress(message: str, value: float | None = None) -> None:
+        scaled = None if value is None else 0.05 + 0.78 * value
+        report(message, scaled)
+
     pipeline_args = Namespace(
         **{
             "prompt": None,
@@ -474,10 +539,12 @@ def run_summary(
             "display_name": None,
             "upload_pruning_threshold": 0.8,
             "upload_density_threshold": 0.99,
+            "progress_callback": pipeline_progress,
         }
     )
     pipeline_result = run_pipeline(pipeline_args)
 
+    report("Loading summary graph", 0.84)
     sng = SummaryGraph.load(str(out))
 
     if settings.get("label_supernodes", True):
@@ -494,6 +561,7 @@ def run_summary(
             if thinking_raw in (None, "", "off", "default")
             else cast(ThinkingEffort, str(thinking_raw))
         )
+        report("Labeling supernodes", 0.88)
         label_supernodes(
             sng,
             str(settings.get("label_model") or "gemini-2.5-flash"),
@@ -506,6 +574,7 @@ def run_summary(
         )
         sng.save(str(out))
 
+    report("Preparing viewer import", 0.96)
     pinned_ids, supernodes, stats = summary_graph_viewer_payload(sng)
     return {
         "slug": safe_slug,
@@ -537,6 +606,22 @@ def summary_graph_viewer_payload(
 
     for supernode in sng.supernodes:
         member_ids = supernode.member_node_ids()
+        if supernode.type != "logit" or not member_ids:
+            continue
+        new_member_ids = [node_id for node_id in member_ids if node_id not in pinned_set]
+        if len(pinned_ids) + len(new_member_ids) > max_nodes:
+            dropped_supernodes += 1
+            dropped_members += len(member_ids)
+            continue
+        pinned_ids.extend(new_member_ids)
+        pinned_set.update(new_member_ids)
+
+    for supernode in sng.supernodes:
+        member_ids = supernode.member_node_ids()
+        if supernode.type == "logit":
+            if member_ids and all(node_id in pinned_set for node_id in member_ids):
+                grouped.append([supernode.name, *member_ids])
+            continue
         if len(member_ids) <= 1:
             continue
 

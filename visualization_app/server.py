@@ -28,6 +28,7 @@ class JobRecord(BaseModel):
     kind: str
     status: str = "queued"
     message: str = "Queued"
+    progress: float = 0.0
     result: dict[str, Any] | None = None
     error: str | None = None
     created_at: float = Field(default_factory=time.time)
@@ -47,6 +48,9 @@ class GenerateGraphRequest(BaseModel):
     batch_size: int = 256
     node_threshold: float = 0.8
     edge_threshold: float = 0.98
+    qwen_system: str = "You are a helpful assistant."
+    qwen_assistant: str = ""
+    qwen_enable_thinking: bool = False
 
 
 class PreviewRequest(BaseModel):
@@ -56,6 +60,9 @@ class PreviewRequest(BaseModel):
     dtype: str = "bfloat16"
     backend: str = "transformerlens"
     top_k: int = 5
+    qwen_system: str = "You are a helpful assistant."
+    qwen_assistant: str = ""
+    qwen_enable_thinking: bool = False
 
 
 class SummaryRequest(BaseModel):
@@ -116,20 +123,29 @@ def _set_job(job_id: str, **updates: Any) -> None:
         job.updated_at = time.time()
 
 
-def _submit_job(kind: str, fn: Callable[[], dict[str, Any]]) -> JobRecord:
+def _submit_job(
+    kind: str,
+    fn: Callable[[Callable[[str, float | None], None]], dict[str, Any]],
+) -> JobRecord:
     job_id = uuid.uuid4().hex
     job = JobRecord(id=job_id, kind=kind)
     with _jobs_lock:
         _jobs[job_id] = job
 
     def run() -> None:
-        _set_job(job_id, status="running", message="Running")
+        def progress(message: str, value: float | None = None) -> None:
+            updates: dict[str, Any] = {"message": message}
+            if value is not None:
+                updates["progress"] = max(0.0, min(1.0, float(value)))
+            _set_job(job_id, **updates)
+
+        _set_job(job_id, status="running", message="Running", progress=0.0)
         try:
-            result = fn()
+            result = fn(progress)
         except Exception as exc:
             _set_job(job_id, status="failed", message="Failed", error=str(exc))
         else:
-            _set_job(job_id, status="completed", message="Completed", result=result)
+            _set_job(job_id, status="completed", message="Completed", progress=1.0, result=result)
 
     future: Future[None] = _executor.submit(run)
     future.add_done_callback(lambda _future: None)
@@ -240,13 +256,19 @@ def upload_graph(
 def preview_graph(req: PreviewRequest) -> dict[str, Any]:
     job = _submit_job(
         "preview",
-        lambda: services.preview_prompt(
-            prompt=req.prompt,
-            model_name=req.model_name,
-            transcoder=req.transcoder,
-            dtype=req.dtype,  # type: ignore[arg-type]
-            backend=req.backend,  # type: ignore[arg-type]
-            top_k=req.top_k,
+        lambda progress: (
+            progress("Loading preview model", 0.15)
+            or services.preview_prompt(
+                prompt=req.prompt,
+                model_name=req.model_name,
+                transcoder=req.transcoder,
+                dtype=req.dtype,  # type: ignore[arg-type]
+                backend=req.backend,  # type: ignore[arg-type]
+                top_k=req.top_k,
+                qwen_system=req.qwen_system,
+                qwen_assistant=req.qwen_assistant,
+                qwen_enable_thinking=req.qwen_enable_thinking,
+            )
         ),
     )
     return {"job": _json_job(job)}
@@ -259,24 +281,30 @@ def generate_graph(req: GenerateGraphRequest) -> dict[str, Any]:
 
     job = _submit_job(
         "generate",
-        lambda: {
-            "graph": asdict(
-                services.generate_graph(
-                    prompt=req.prompt,
-                    slug=req.slug or req.prompt[:40],
-                    model_name=req.model_name,
-                    transcoder=req.transcoder,
-                    dtype=req.dtype,  # type: ignore[arg-type]
-                    backend=req.backend,  # type: ignore[arg-type]
-                    max_n_logits=req.max_n_logits,
-                    desired_logit_prob=req.desired_logit_prob,
-                    max_feature_nodes=req.max_feature_nodes,
-                    batch_size=req.batch_size,
-                    node_threshold=req.node_threshold,
-                    edge_threshold=req.edge_threshold,
+        lambda progress: (
+            progress("Generating attribution graph", 0.15)
+            or {
+                "graph": asdict(
+                    services.generate_graph(
+                        prompt=req.prompt,
+                        slug=req.slug or req.prompt[:40],
+                        model_name=req.model_name,
+                        transcoder=req.transcoder,
+                        dtype=req.dtype,  # type: ignore[arg-type]
+                        backend=req.backend,  # type: ignore[arg-type]
+                        max_n_logits=req.max_n_logits,
+                        desired_logit_prob=req.desired_logit_prob,
+                        max_feature_nodes=req.max_feature_nodes,
+                        batch_size=req.batch_size,
+                        node_threshold=req.node_threshold,
+                        edge_threshold=req.edge_threshold,
+                        qwen_system=req.qwen_system,
+                        qwen_assistant=req.qwen_assistant,
+                        qwen_enable_thinking=req.qwen_enable_thinking,
+                    )
                 )
-            )
-        },
+            }
+        ),
     )
     return {"job": _json_job(job)}
 
@@ -291,7 +319,11 @@ def summarize_graph(slug: str, req: SummaryRequest) -> dict[str, Any]:
 
     job = _submit_job(
         "summary",
-        lambda: services.run_summary(slug=safe_slug, settings=req.model_dump()),
+        lambda progress: services.run_summary(
+            slug=safe_slug,
+            settings=req.model_dump(),
+            progress=progress,
+        ),
     )
     return {"job": _json_job(job)}
 

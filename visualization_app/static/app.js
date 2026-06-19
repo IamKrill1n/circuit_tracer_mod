@@ -93,15 +93,25 @@ function renderSummaryDetails(summaryPayload) {
   });
 }
 
-async function pollJob(job, statusEl, onComplete) {
+function updateProgress(progressEl, textEl, progress) {
+  if (!progressEl || !textEl) return;
+  const value = Math.max(0, Math.min(1, Number(progress) || 0));
+  progressEl.value = value;
+  textEl.textContent = `${Math.round(value * 100)}%`;
+}
+
+async function pollJob(job, statusEl, onComplete, progressEl = null, progressTextEl = null) {
   statusEl.textContent = `${job.kind}: ${job.status}`;
+  updateProgress(progressEl, progressTextEl, job.progress);
   while (true) {
     await new Promise((resolve) => setTimeout(resolve, 1400));
     const payload = await api(`/api/jobs/${job.id}`);
     const current = payload.job;
     statusEl.textContent = `${current.kind}: ${current.message}`;
+    updateProgress(progressEl, progressTextEl, current.progress);
     if (current.status === "completed") {
       statusEl.textContent = "Completed.";
+      updateProgress(progressEl, progressTextEl, 1);
       await onComplete(current.result);
       return current.result;
     }
@@ -136,6 +146,9 @@ function generationPayload() {
     batch_size: numberValue("genBatch"),
     node_threshold: numberValue("genNodeThreshold"),
     edge_threshold: numberValue("genEdgeThreshold"),
+    qwen_system: el("genQwenSystem").value,
+    qwen_assistant: el("genQwenAssistant").value,
+    qwen_enable_thinking: el("genQwenThinking").checked,
   };
 }
 
@@ -191,6 +204,9 @@ el("previewBtn").addEventListener("click", async () => {
     dtype: el("genDtype").value,
     backend: el("genBackend").value,
     top_k: 5,
+    qwen_system: el("genQwenSystem").value,
+    qwen_assistant: el("genQwenAssistant").value,
+    qwen_enable_thinking: el("genQwenThinking").checked,
   };
   const payload = await api("/api/graphs/preview", {
     method: "POST",
@@ -238,17 +254,28 @@ el("startUploadBtn").addEventListener("click", async () => {
 el("startSummaryBtn").addEventListener("click", async () => {
   if (!state.activeSlug) return;
   const status = el("summaryStatus");
+  const progressRow = el("summaryProgressRow");
+  const progressBar = el("summaryProgress");
+  const progressText = el("summaryProgressText");
+  const startButton = el("startSummaryBtn");
+  startButton.disabled = true;
+  progressRow.hidden = false;
+  updateProgress(progressBar, progressText, 0);
   status.textContent = "Starting summary...";
-  const payload = await api(`/api/graphs/${encodeURIComponent(state.activeSlug)}/summary`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(summaryPayload()),
-  });
-  await pollJob(payload.job, status, async () => {
-    await refreshGraphs();
-    el("summaryDialog").close();
-    await selectGraph(state.activeSlug, true);
-  });
+  try {
+    const payload = await api(`/api/graphs/${encodeURIComponent(state.activeSlug)}/summary`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(summaryPayload()),
+    });
+    await pollJob(payload.job, status, async () => {
+      await refreshGraphs();
+      el("summaryDialog").close();
+      await selectGraph(state.activeSlug, true);
+    }, progressBar, progressText);
+  } finally {
+    startButton.disabled = false;
+  }
 });
 
 refreshGraphs().catch((error) => {
