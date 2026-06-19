@@ -1,0 +1,13 @@
+{
+  "eps_grid": "0,0.005,0.01,0.02,0.05,0.1,0.2,0.4,0.7,1.0",
+  "include_unconstrained": true,
+  "max_layer_span": 7,
+  "max_sn": 20,
+  "n_failed_solves": 0,
+  "n_graphs": 100,
+  "n_graphs_with_endpoint": 100,
+  "n_solved_records": 1100,
+  "normalize_weights": false,
+  "theta": "p80",
+  "time_limit": 30.0
+}
