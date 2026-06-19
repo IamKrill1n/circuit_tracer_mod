@@ -277,11 +277,7 @@ def mapping_dict_to_supernodes(
     return out
 
 
-def _validate_args(lambda_causal: float, eps_causal: float | None, max_sn: int | None) -> None:
-    # lambda_causal is kept only so older call sites fail less abruptly; it no longer
-    # contributes to the ILP objective.
-    if lambda_causal < 0:
-        raise ValueError(f"lambda_causal must be non-negative, got {lambda_causal}")
+def _validate_args(eps_causal: float | None, max_sn: int | None) -> None:
     if eps_causal is not None and not 0.0 <= eps_causal <= 1.0:
         raise ValueError(f"eps_causal must be in [0, 1], got {eps_causal}")
     if max_sn is not None and max_sn < 1:
@@ -520,7 +516,6 @@ def cluster_graph_ilp(
     prune_graph: PruneGraph,
     *,
     theta: float | str = DEFAULT_THETA,
-    lambda_causal: float = 1.0,
     eps_causal: float | None = DEFAULT_EPS_CAUSAL,
     max_sn: int | None = DEFAULT_MAX_SN,
     max_layer_span: int = DEFAULT_MAX_LAYER_SPAN,
@@ -535,12 +530,12 @@ def cluster_graph_ilp(
 
         min_f  L_atom(f)
              = sum_{i<j} x_ij (theta - cos(r_i, r_j))
-        s.t.   L_causal(f) <= eps_causal                         (D3, optional)
+        s.t.   C_causal(f) <= eps_causal                         (D3, optional)
                K <= max_sn                                       (C2, optional)
 
     with ``x_ij = 1`` iff middle features ``i, j`` share a supernode, ``|W_ij|`` the
     pruned edge mass between them (both directions), and ``W_total`` the total pruned
-    edge mass (the constant Eq. Lcausal denominator). The atomicity term is the
+    edge mass (the constant causal denominator). The atomicity term is the
     symmetric over/under-merge penalty: a similar pair (``cos > theta``)
     carries a negative coefficient (merging rewarded), a dissimilar/antagonistic pair
     a positive one. Acyclicity (C1) is deferred to Stage 3.
@@ -553,11 +548,8 @@ def cluster_graph_ilp(
         adaptive percentile spec ``"p65"``: theta is the 65th percentile of the
         allowed-pair cosine distribution of *this* graph, so the boundary tracks
         each graph's similarity scale instead of a fixed global value.
-    lambda_causal:
-        Deprecated compatibility argument. The ILP objective is always ``L_atom``;
-        use ``eps_causal`` to constrain causal preservation.
     eps_causal:
-        Optional hard budget on ``L_causal`` in ``[0, 1]``. When set, the ILP
+        Optional hard budget on ``C_causal`` in ``[0, 1]``. When set, the ILP
         minimises atomicity subject to hiding at most this fraction of retained edge
         mass inside feature supernodes. Default ``0.05``.
     max_sn:
@@ -576,7 +568,7 @@ def cluster_graph_ilp(
 
     Returns raw member-id clusters: feature clusters plus embedding/logit singletons.
     """
-    _validate_args(lambda_causal, eps_causal, max_sn)
+    _validate_args(eps_causal, max_sn)
 
     kept_ids = prune_graph.node_ids
     nodes_by_id = _nodes_by_id(prune_graph)
@@ -651,14 +643,12 @@ def cluster(
     *,
     method: Literal["ilp"] = "ilp",
     theta: float | str = DEFAULT_THETA,
-    lambda_causal: float = 1.0,
     eps_causal: float | None = DEFAULT_EPS_CAUSAL,
     max_sn: int | None = DEFAULT_MAX_SN,
     max_layer_span: int = DEFAULT_MAX_LAYER_SPAN,
     normalize_weights: bool = DEFAULT_NORMALIZE_WEIGHTS,
     time_limit: float = DEFAULT_TIME_LIMIT,
     ilp_time_limit: float | None = None,
-    **legacy_kwargs: object,
 ) -> list[Supernode]:
     """Stage 2: cluster a ``PruneGraph`` into typed ``Supernode`` rows.
 
@@ -670,13 +660,9 @@ def cluster(
             "summarization.cluster only supports method='ilp'. "
             "Use eval.legacy_cluster_baselines for spectral/agglomerative baselines."
         )
-    if legacy_kwargs:
-        ignored = ", ".join(sorted(legacy_kwargs))
-        logger.debug("Ignoring legacy clustering kwargs for ILP: %s", ignored)
     clusters = cluster_graph_ilp(
         prune_graph,
         theta=theta,
-        lambda_causal=lambda_causal,
         eps_causal=eps_causal,
         max_sn=max_sn,
         max_layer_span=max_layer_span,

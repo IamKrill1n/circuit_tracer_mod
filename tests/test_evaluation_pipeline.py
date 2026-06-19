@@ -97,7 +97,7 @@ def test_evaluation_pipeline_writes_summary_and_runs_all_solvers(tmp_path) -> No
             "L_atom",
             "L_atom_norm",
             "sil_norm",
-            "L_causal",
+            "C_causal",
             "internalized_mass_fraction",
             "dag_removed_mass_fraction",
             "final_retained_mass_fraction",

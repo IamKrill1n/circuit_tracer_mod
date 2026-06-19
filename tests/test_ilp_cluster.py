@@ -75,13 +75,10 @@ def test_ilp_emb_logit_singletons() -> None:
     assert ["27_0_0"] in clusters
 
 
-def test_ilp_lambda_causal_is_ignored() -> None:
-    # lambda_causal is a deprecated compatibility argument. ILP now minimizes
-    # L_atom only; causal preservation is controlled by eps_causal.
+def test_ilp_rejects_removed_lambda_causal_argument() -> None:
     pg = _build_test_graph()
-    low = cluster_graph_ilp(pg, max_layer_span=4, lambda_causal=0.0)
-    high = cluster_graph_ilp(pg, max_layer_span=4, lambda_causal=100.0)
-    assert _cluster_set(low) == _cluster_set(high)
+    with pytest.raises(TypeError, match="lambda_causal"):
+        cluster_graph_ilp(pg, max_layer_span=4, lambda_causal=0.0)  # type: ignore[call-arg]
 
 
 def test_ilp_eps_causal_zero_forbids_direct_edge_merges() -> None:

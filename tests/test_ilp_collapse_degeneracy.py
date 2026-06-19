@@ -4,8 +4,8 @@ when ``max_layer_span`` is loose, and which knob actually controls granularity.
 Root cause: the ILP objective is ``sum_{same cluster} (theta - cos_ij)``. At
 ``theta=0`` every pair with ``cos > 0`` carries a negative (merge-rewarding)
 coefficient and nothing penalises cluster *size*, so the optimum merges everything
-that span and epsilon constraints allow. ``lambda_causal`` is ignored; ``theta``
-(the resolution threshold) and ``eps_causal`` are the real levers.
+that span and epsilon constraints allow. ``theta`` (the resolution threshold) and
+``eps_causal`` are the real levers.
 """
 
 import numpy as np
@@ -38,9 +38,9 @@ def _make_graph(
     return PruneGraph(nodes=nodes, pruned_adj=adj, metadata={})
 
 
-def _n_feature_clusters(pg: PruneGraph, theta: float, lam: float) -> int:
+def _n_feature_clusters(pg: PruneGraph, theta: float) -> int:
     clusters = cluster_graph_ilp(
-        pg, theta=theta, lambda_causal=lam, max_sn=None, max_layer_span=1000, time_limit=30.0
+        pg, theta=theta, max_sn=None, max_layer_span=1000, time_limit=30.0
     )
     return len([c for c in clusters if c and c[0][0].isdigit()])
 
@@ -57,15 +57,11 @@ def test_ilp_collapse_mechanism(monkeypatch: pytest.MonkeyPatch) -> None:
     pg = _make_graph(monkeypatch, phi, adj)
 
     # theta=0: positive cosines reward merging, nothing penalises size -> full collapse.
-    assert _n_feature_clusters(pg, theta=0.0, lam=0.0) == 1
-
-    # lambda_causal is a deprecated compatibility argument and does not enter the
-    # ILP objective.
-    assert _n_feature_clusters(pg, theta=0.0, lam=1e9) == 1
+    assert _n_feature_clusters(pg, theta=0.0) == 1
 
     # theta is the real lever. Below the 0.5 cosine it still merges; above it, splits.
-    assert _n_feature_clusters(pg, theta=0.45, lam=0.0) == 1
-    assert _n_feature_clusters(pg, theta=0.55, lam=0.0) == n
+    assert _n_feature_clusters(pg, theta=0.45) == 1
+    assert _n_feature_clusters(pg, theta=0.55) == n
 
 
 def test_adaptive_theta_resolves_to_percentile(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,10 +79,8 @@ def test_adaptive_theta_resolves_to_percentile(monkeypatch: pytest.MonkeyPatch) 
     def norm(clusters: list[list[str]]) -> list[list[str]]:
         return sorted(sorted(c) for c in clusters)
 
-    adaptive = cluster_graph_ilp(
-        pg, theta="p65", lambda_causal=0.0, max_sn=None, max_layer_span=1000
-    )
-    fixed = cluster_graph_ilp(pg, theta=thr, lambda_causal=0.0, max_sn=None, max_layer_span=1000)
+    adaptive = cluster_graph_ilp(pg, theta="p65", max_sn=None, max_layer_span=1000)
+    fixed = cluster_graph_ilp(pg, theta=thr, max_sn=None, max_layer_span=1000)
     assert norm(adaptive) == norm(fixed)
 
 

@@ -176,6 +176,111 @@ def test_token_attribution_passes_explicit_target_to_shap(
     assert normalized.tolist() == [1.0]
 
 
+def test_token_attribution_strips_graph_bos_before_pinned_shap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from summarization import token_attribution
+
+    captured: dict[str, tuple] = {}
+
+    class FakeTokenizer:
+        bos_token = "<bos>"
+
+    class FakeExplanation:
+        values = [0.0, 2.0]
+        feature_names = ["", "A"]
+
+    class FakeExplainer:
+        def __call__(self, *args, batch_size):
+            captured["args"] = args
+            captured["batch_size"] = batch_size
+            return FakeExplanation()
+
+    monkeypatch.setattr(token_attribution, "_cached_tokenizer", lambda _model_name: FakeTokenizer())
+    monkeypatch.setattr(
+        token_attribution,
+        "_build_shap_lm_explainer",
+        lambda **_kwargs: FakeExplainer(),
+    )
+
+    raw, normalized = token_attribution.get_token_attribution(
+        prompt="<bos>A",
+        prompt_tokens=["<bos>", "A"],
+        model_name="model",
+        normalize_method="softmax",
+        device="cpu",
+        pin_special_tokens=True,
+    )
+
+    assert captured["args"] == (["A"],)
+    assert captured["batch_size"] == 1
+    assert raw.tolist() == [0.0, 2.0]
+    assert normalized.tolist() == [0.0, 1.0]
+
+
+def test_run_summary_delegates_core_work_to_pipeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pt_root = tmp_path / "generated_graphs"
+    pt_root.mkdir()
+    pt_path = services.sidecar_pt_path("austin", pt_root)
+    pt_path.write_bytes(b"placeholder")
+    captured = {}
+
+    def fake_run_pipeline(args):
+        captured["graph_pt"] = args.graph_pt
+        captured["method"] = args.method
+        captured["auto_token_weights"] = args.auto_token_weights
+        captured["summary_graph_out"] = args.summary_graph_out
+        sng = SummaryGraph(
+            [
+                Supernode(
+                    "SN_0",
+                    [_node("0_0_0", 0), _node("0_1_0", 1)],
+                    "features",
+                    0,
+                    0,
+                )
+            ],
+            torch.zeros((2, 2)),
+        )
+        sng.save(args.summary_graph_out)
+        return {
+            "pruned_nodes": 2,
+            "pruned_edges": 1,
+            "resolved_k": 1,
+            "auto_k_candidates": 0,
+            "supernodes": [["SN_0", "0_0_0", "0_1_0"]],
+            "supernode_map": {"SN_0": ["0_0_0", "0_1_0"]},
+            "figure_html_out": None,
+            "upload_status": None,
+            "upload_body": None,
+        }
+
+    monkeypatch.setattr("summarization.pipeline.run_pipeline", fake_run_pipeline)
+
+    result = services.run_summary(
+        slug="austin",
+        settings={
+            "token_weights_source": "shap",
+            "cluster_method": "ilp",
+            "label_supernodes": False,
+        },
+        pt_root=pt_root,
+    )
+
+    assert captured == {
+        "graph_pt": str(pt_path),
+        "method": "ilp",
+        "auto_token_weights": True,
+        "summary_graph_out": str(services.summary_path("austin", pt_root)),
+    }
+    assert result["summary_path"] == str(services.summary_path("austin", pt_root))
+    assert result["pruned_nodes"] == 2
+    assert result["viewer"]["supernodes"] == [["SN_0", "0_0_0", "0_1_0"]]
+
+
 def test_summary_graph_viewer_payload_respects_200_node_limit() -> None:
     supernodes = []
     node_idx = 0

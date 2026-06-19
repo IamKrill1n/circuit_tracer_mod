@@ -1,26 +1,26 @@
 from __future__ import annotations
 
+import json
 import shutil
 import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-
-from circuit_tracer.frontend.local_server import serve
 
 from visualization_app import services
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
-VIEWER_PORT = 8032
+VIEWER_FRONTEND_DIR = Path(str(files("circuit_tracer") / "frontend/assets"))
 
 
 class JobRecord(BaseModel):
@@ -85,7 +85,6 @@ class SummaryRequest(BaseModel):
     decay_rate: float | None = 1.0
     random_state: int = 42
     n_init: int = 20
-    lambda_causal: float = 1.0
     eps_causal: float | None = 0.05
     theta: float | str = 0.0
     ilp_time_limit: float = 30.0
@@ -102,7 +101,6 @@ _executor = ThreadPoolExecutor(max_workers=1)
 _jobs: dict[str, JobRecord] = {}
 _jobs_lock = threading.Lock()
 _viewer_lock = threading.Lock()
-_viewer_server = None
 _viewer_dir: str | None = None
 
 
@@ -138,20 +136,59 @@ def _submit_job(kind: str, fn: Callable[[], dict[str, Any]]) -> JobRecord:
     return job
 
 
-def _ensure_viewer_server(viewer_dir: Path) -> str:
-    global _viewer_server, _viewer_dir
-
-    viewer_dir_str = str(viewer_dir)
+def _set_viewer_dir(viewer_dir: Path) -> str:
+    global _viewer_dir
     with _viewer_lock:
-        if _viewer_server is not None and _viewer_dir == viewer_dir_str:
-            return f"http://localhost:{VIEWER_PORT}"
+        _viewer_dir = str(viewer_dir)
+    return "/viewer"
 
-        if _viewer_server is not None:
-            _viewer_server.stop()
 
-        _viewer_server = serve(data_dir=viewer_dir_str, port=VIEWER_PORT)
-        _viewer_dir = viewer_dir_str
-        return f"http://localhost:{VIEWER_PORT}"
+def _active_viewer_dir() -> Path:
+    with _viewer_lock:
+        viewer_dir = _viewer_dir
+    if viewer_dir is None:
+        raise HTTPException(status_code=404, detail="No viewer graph has been selected.")
+    return Path(viewer_dir)
+
+
+def _viewer_file_response(base_dir: Path, relative_path: str) -> FileResponse:
+    path = (base_dir / relative_path).resolve()
+    base = base_dir.resolve()
+    if not path.is_file() or base not in path.parents and path != base:
+        raise HTTPException(status_code=404, detail="Viewer file not found.")
+    return FileResponse(path)
+
+
+@app.get("/viewer/data/{relative_path:path}")
+def viewer_data(relative_path: str) -> FileResponse:
+    return _viewer_file_response(_active_viewer_dir(), relative_path)
+
+
+@app.get("/viewer/graph_data/{relative_path:path}")
+def viewer_graph_data(relative_path: str) -> FileResponse:
+    return _viewer_file_response(_active_viewer_dir(), relative_path)
+
+
+@app.get("/viewer/{relative_path:path}")
+def viewer_static(relative_path: str = "index.html") -> FileResponse:
+    path = relative_path or "index.html"
+    return _viewer_file_response(VIEWER_FRONTEND_DIR, path)
+
+
+@app.post("/save_graph/{slug}")
+async def save_viewer_graph(slug: str, request: Request) -> dict[str, bool]:
+    # The stock viewer writes qParams here. Keep the endpoint available when
+    # serving the viewer through the FastAPI app instead of local_server.
+    graph_path = (_active_viewer_dir() / f"{services.slugify(slug)}.json").resolve()
+    viewer_dir = _active_viewer_dir().resolve()
+    if not graph_path.is_file() or viewer_dir not in graph_path.parents:
+        raise HTTPException(status_code=404, detail="Viewer graph not found.")
+
+    payload = await request.json()
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    graph["qParams"] = payload["qParams"]
+    graph_path.write_text(json.dumps(graph, indent=2), encoding="utf-8")
+    return {"ok": True}
 
 
 @app.get("/")
@@ -272,7 +309,7 @@ def get_job(job_id: str) -> dict[str, Any]:
 def get_viewer_url(slug: str, summary: bool = False) -> dict[str, Any]:
     safe_slug = services.slugify(slug)
     record = services.load_graph_record(safe_slug)
-    base_url = _ensure_viewer_server(Path(record.directory))
+    base_url = _set_viewer_dir(Path(record.directory))
 
     extra_params = None
     summary_data = None

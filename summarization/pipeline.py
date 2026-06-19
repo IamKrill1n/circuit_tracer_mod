@@ -181,6 +181,9 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         token_weights=token_weights,
         node_threshold=args.node_threshold,
         edge_threshold=args.edge_threshold,
+        combine_method=getattr(args, "combine_method", "geometric"),
+        normalization=getattr(args, "normalization", "rank"),
+        alpha=getattr(args, "alpha", 0.5),
         keep_all_tokens_and_logits=args.keep_all_tokens_and_logits,
     )
 
@@ -199,7 +202,6 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             prune_graph,
             max_layer_span=args.max_layer_span,
             max_sn=args.max_sn,
-            lambda_causal=args.lambda_causal,
             eps_causal=args.eps_causal,
             ilp_time_limit=args.ilp_time_limit,
         )
@@ -216,7 +218,6 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 mean_method=args.mean_method,
                 random_state=args.random_state,
                 n_init=args.n_init,
-                lambda_causal=args.lambda_causal,
             )
         if resolved_k is None:
             resolved_k = 7
@@ -236,6 +237,12 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     # Stage 3: summarize.
     sng = summarize(rows, prune_graph.pruned_adj, prune_graph.metadata)
     labelled_supernodes = _supernodes_for_upload(rows)
+
+    summary_graph_out = getattr(args, "summary_graph_out", None)
+    if summary_graph_out:
+        out = Path(summary_graph_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        sng.save(str(out))
 
     _save_json(args.supernodes_out, labelled_supernodes)
     _save_json(args.supernode_map_out, supernode_map)

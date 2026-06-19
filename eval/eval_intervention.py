@@ -301,7 +301,6 @@ def _build_sngs(
     methods: list[str],
     random_state: int = 42,
     n_init: int = 20,
-    ilp_lambda_causal: float = 1.0,
     ilp_max_sn: int | None = None,
     ilp_max_layer_span: int = 4,
     ilp_time_limit: float = 30.0,
@@ -324,7 +323,6 @@ def _build_sngs(
         clusters = cluster_graph_ilp(
             prune_graph,
             theta=0.0,
-            lambda_causal=ilp_lambda_causal,
             max_sn=ilp_max_sn,
             max_layer_span=ilp_max_layer_span,
             time_limit=ilp_time_limit,
@@ -721,12 +719,6 @@ def main() -> None:
         help="Skip Exp D (per-node ablation cohesion); run only Exp B (edge/target steering).",
     )
     parser.add_argument(
-        "--ilp-lambda-causal",
-        type=float,
-        default=1.0,
-        help="ILP causal-preservation weight (only used when 'ilp' is in --methods).",
-    )
-    parser.add_argument(
         "--ilp-max-sn", type=int, default=None, help="ILP complexity budget K<=max_sn."
     )
     parser.add_argument(
@@ -753,7 +745,6 @@ def main() -> None:
         if unknown:
             parser.error(f"unknown --methods {sorted(unknown)}; choose from {list(ALL_METHODS)}")
     ilp_kwargs = {
-        "ilp_lambda_causal": args.ilp_lambda_causal,
         "ilp_max_sn": args.ilp_max_sn,
         "ilp_max_layer_span": args.ilp_max_layer_span,
         "ilp_time_limit": args.ilp_time_limit,

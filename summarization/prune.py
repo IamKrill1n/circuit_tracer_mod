@@ -450,12 +450,12 @@ def prune_combined(
     token_weights: list[float] | None = None,
     logits_seed: torch.Tensor | None = None,
     emb_weights_seed: torch.Tensor | None = None,
-    node_threshold: float = 0.8,
-    edge_threshold: float = 0.98,
+    node_threshold: float = 0.02,
+    edge_threshold: float = 0.9,
     combine_method: CombineMethod = "geometric",
     normalization: NormalizationMethod = "rank",
     alpha: float = 0.5,
-    keep_all_tokens_and_logits: bool = True,
+    keep_all_tokens_and_logits: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     n = adj.shape[0]
     idx = _build_index_sets(nodes)
@@ -535,12 +535,12 @@ def prune_attr_graph(
     token_weights: list[float] | None = None,
     logits_seed: torch.Tensor | None = None,
     emb_weights_seed: torch.Tensor | None = None,
-    node_threshold: float = 0.8,
-    edge_threshold: float = 0.98,
+    node_threshold: float = 0.02,
+    edge_threshold: float = 0.9,
     combine_method: CombineMethod = "geometric",
     normalization: NormalizationMethod = "rank",
     alpha: float = 0.5,
-    keep_all_tokens_and_logits: bool = True,
+    keep_all_tokens_and_logits: bool = False,
 ) -> PruneGraph:
     """Prune from a canonical ``AttrGraph`` (pure tensor math).
 
@@ -603,12 +603,12 @@ def prune_from_json(
     json_path: str,
     logit_weights: LogitWeightMode = "target",
     token_weights: list[float] | None = None,
-    node_threshold: float = 0.8,
-    edge_threshold: float = 0.98,
+    node_threshold: float = 0.02,
+    edge_threshold: float = 0.9,
     combine_method: CombineMethod = "geometric",
     normalization: NormalizationMethod = "rank",
     alpha: float = 0.5,
-    keep_all_tokens_and_logits: bool = True,
+    keep_all_tokens_and_logits: bool = False,
 ) -> PruneGraph:
     """Prune from a Neuronpedia frontend graph JSON file."""
     ag = AttrGraph.from_graph_file(json_path)
@@ -630,14 +630,14 @@ def prune_masks_from_attr_graph(
     *,
     token_weights: torch.Tensor | None = None,
     logit_weights: torch.Tensor | None = None,
-    logit_weights_mode: LogitWeightMode | None = "probs",
+    logit_weights_mode: LogitWeightMode | None = "target",
     token_weights_list: list[float] | None = None,
-    node_threshold: float = 0.8,
-    edge_threshold: float = 0.98,
+    node_threshold: float = 0.02,
+    edge_threshold: float = 0.9,
     combine_method: CombineMethod = "geometric",
     normalization: NormalizationMethod = "rank",
     alpha: float = 0.5,
-    keep_all_tokens_and_logits: bool = True,
+    keep_all_tokens_and_logits: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Shared pruning step returning masks and score tensors (used by ``circuit_tracer.graph.prune_graph``)."""
     adj = attr_graph.adj
@@ -670,12 +670,12 @@ def prune(
     graph: Graph,
     logit_weights: LogitWeightMode = "target",
     token_weights: list[float] | None = None,
-    node_threshold: float = 0.8,
-    edge_threshold: float = 0.98,
+    node_threshold: float = 0.02,
+    edge_threshold: float = 0.9,
     combine_method: CombineMethod = "geometric",
     normalization: NormalizationMethod = "rank",
     alpha: float = 0.5,
-    keep_all_tokens_and_logits: bool = True,
+    keep_all_tokens_and_logits: bool = False,
 ) -> PruneGraph:
     """Stage 1: prune a ``circuit_tracer.Graph`` directly to a ``PruneGraph``."""
     attr_graph = AttrGraph.from_graph(graph)

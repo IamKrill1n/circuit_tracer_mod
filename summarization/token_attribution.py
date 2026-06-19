@@ -14,7 +14,7 @@ from summarization.utils import get_data_from_json
 NormalizeMethod = Literal["softmax", "sparsemax", "entmax15", "entmax"]
 SPECIAL_TOKEN_RE = re.compile(r"<[^>]+>")
 SPARSEMAX_MASK_VALUE = -1e9
-DEFAULT_ENTMAX_ALPHA = 1.3
+DEFAULT_ENTMAX_ALPHA = 1.25
 
 
 def _special_token_mask(prompt_tokens: list[str]) -> torch.Tensor:
@@ -283,7 +283,7 @@ def get_token_attribution(
     prompt: str,
     prompt_tokens: list[str],
     model_name: str,
-    normalize_method: NormalizeMethod = "softmax",
+    normalize_method: NormalizeMethod = "entmax",
     device: str | torch.device = "cpu",
     *,
     masker_keep_prefix: int | None = None,
@@ -315,15 +315,9 @@ def get_token_attribution(
     """
     device_str = str(device)
     tokenizer = _cached_tokenizer(model_name)
-    if pin_special_tokens:
-        # Chat-aware masker pins BOS itself; no need to strip it pre-SHAP.
-        work_prompt = prompt
-        work_tokens = list(prompt_tokens)
-        n_prefix_tokens_dropped = 0
-    else:
-        work_prompt, work_tokens, n_prefix_tokens_dropped = _strip_leading_bos_for_shap(
-            prompt, list(prompt_tokens), tokenizer
-        )
+    work_prompt, work_tokens, n_prefix_tokens_dropped = _strip_leading_bos_for_shap(
+        prompt, list(prompt_tokens), tokenizer
+    )
     target_text: str | None = None
     if target_token_id is not None:
         target_text = tokenizer.decode([int(target_token_id)])
@@ -396,7 +390,7 @@ def get_token_attribution(
 def get_token_attribution_from_graph(
     graph_path: str | Path,
     model_name: str,
-    normalize_method: NormalizeMethod = "softmax",
+    normalize_method: NormalizeMethod = "entmax",
     device: str | torch.device = "cpu",
     masker_keep_prefix: int | None = None,
     entmax_alpha: float | None = None,
@@ -443,7 +437,7 @@ if __name__ == "__main__":
         prompt_tokens=list(_ptok),
         model_name=_model,
         normalize_method="entmax",
-        entmax_alpha=1.3,
+        entmax_alpha=DEFAULT_ENTMAX_ALPHA,
         device="cuda",
         pin_special_tokens=True,
     )

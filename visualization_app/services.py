@@ -366,17 +366,10 @@ def run_summary(
     root: Path = GRAPH_ROOT,
     pt_root: Path = GENERATED_GRAPH_ROOT,
 ) -> dict[str, Any]:
-    from dataclasses import asdict
+    from argparse import Namespace
 
-    from eval.legacy_cluster_baselines import (
-        cluster_graph_agglomerative,
-        cluster_graph_spectral,
-    )
     from summarization.attr_graph import AttrGraph
-    from summarization.cluster import (
-        clusters_to_supernodes,
-    )
-    from summarization.prune import filter_act_density, prune_attr_graph
+    from summarization.pipeline import run_pipeline
     from summarization.summarize import SummaryGraph
 
     safe_slug = slugify(slug)
@@ -386,26 +379,17 @@ def run_summary(
             f"No generated .pt file exists for graph {safe_slug!r} in {pt_root}"
         )
 
-    ag = AttrGraph.from_graph(str(pt_path))
-    token_weights = None
-    token_weights_source = str(settings.get("token_weights_source") or "uniform")
-    normalize_method = str(settings.get("token_attr_normalize") or "softmax")
-    entmax_alpha = (
-        float(settings["entmax_alpha"]) if normalize_method == "entmax" else None
-    )
-    if token_weights_source in {"shap", "generate shap"}:
-        import torch
+    def setting(name: str, default: Any) -> Any:
+        value = settings.get(name, default)
+        return default if value in (None, "") else value
 
-        token_attr_model = str(settings.get("token_attr_model") or "")
-        if not token_attr_model:
-            token_attr_model = infer_graph_model_and_scan(pt_path)[0]
-        token_weights = _token_weights_from_shap(
-            ag,
-            model_name=token_attr_model,
-            normalize_method=normalize_method,
-            entmax_alpha=entmax_alpha,
-            device=str(settings.get("device") or ("cuda" if torch.cuda.is_available() else "cpu")),
-        )
+    token_weights_source = str(settings.get("token_weights_source") or "uniform")
+    normalize_method = str(settings.get("token_attr_normalize") or "entmax")
+    entmax_alpha = float(setting("entmax_alpha", 1.25)) if normalize_method == "entmax" else None
+    token_weights_json = None
+    auto_token_weights = token_weights_source in {"shap", "generate shap"}
+    if auto_token_weights:
+        pass
     elif token_weights_source in {"shap_file", "load shap file"}:
         shap_path_raw = str(settings.get("shap_values_path") or "").strip()
         if not shap_path_raw:
@@ -415,87 +399,86 @@ def run_summary(
             shap_path = REPO / shap_path
         if not shap_path.exists():
             raise FileNotFoundError(f"SHAP file does not exist: {shap_path}")
+        ag = AttrGraph.from_graph(str(pt_path))
         token_weights = _token_weights_from_shap_file(
             ag,
             shap_json_path=shap_path,
             normalize_method=normalize_method,
             entmax_alpha=entmax_alpha,
         )
+        token_weights_json = json.dumps(token_weights)
     elif token_weights_source != "uniform":
         raise ValueError(f"Unknown token_weights_source: {token_weights_source!r}")
 
-    prune_graph = prune_attr_graph(
-        ag,
-        logit_weights=str(settings.get("logit_weights") or "target"),
-        token_weights=token_weights,
-        node_threshold=float(settings.get("node_threshold", 0.8)),
-        edge_threshold=float(settings.get("edge_threshold", 0.98)),
-        combine_method=str(settings.get("combine_method") or "geometric"),
-        normalization=str(settings.get("normalization") or "rank"),
-        alpha=float(settings.get("alpha", 0.5)),
-        keep_all_tokens_and_logits=bool(settings.get("keep_all_tokens_and_logits", False)),
+    out = summary_path(safe_slug, pt_root)
+    pt_root.mkdir(parents=True, exist_ok=True)
+    pipeline_args = Namespace(
+        **{
+            "prompt": None,
+            "graph_pt": str(pt_path),
+            "graph_pt_out": None,
+            "model": str(setting("model_name", "google/gemma-2-2b")),
+            "transcoder": str(setting("transcoder", "mntss/clt-gemma-2-2b-2.5M")),
+            "dtype": str(setting("dtype", "bfloat16")),
+            "backend": str(setting("backend", "transformerlens")),
+            "max_n_logits": int(setting("max_n_logits", 15)),
+            "desired_logit_prob": float(setting("desired_logit_prob", 0.99)),
+            "max_feature_nodes": int(setting("max_feature_nodes", 8192)),
+            "batch_size": int(setting("batch_size", 256)),
+            "token_weights": token_weights_json,
+            "auto_token_weights": auto_token_weights,
+            "token_attr_model": str(setting("token_attr_model", "")) or None,
+            "token_attr_normalize": normalize_method,
+            "entmax_alpha": float(setting("entmax_alpha", 1.25)),
+            "device": str(setting("device", "cuda")),
+            "logit_weights": str(setting("logit_weights", "target")),
+            "combine_method": str(setting("combine_method", "geometric")),
+            "normalization": str(setting("normalization", "rank")),
+            "alpha": float(setting("alpha", 0.5)),
+            "node_threshold": float(setting("node_threshold", 0.02)),
+            "edge_threshold": float(setting("edge_threshold", 0.9)),
+            "keep_all_tokens_and_logits": bool(setting("keep_all_tokens_and_logits", False)),
+            "filter_act_density": bool(setting("filter_act_density", True)),
+            "classify_filter": False,
+            "model_id": str(setting("model_id", "gemma-2-2b")),
+            "act_density_lb": float(setting("act_density_lb", 2e-5)),
+            "act_density_ub": float(setting("act_density_ub", 0.1)),
+            "method": str(setting("cluster_method", "ilp")),
+            "target_k": int(setting("target_k", 7)),
+            "auto_k": bool(setting("auto_k", False)),
+            "k_min": setting("k_min", None),
+            "k_max": setting("k_max", None),
+            "max_layer_span": int(setting("max_layer_span", 4)),
+            "max_sn": (
+                int(settings["max_sn"]) if settings.get("max_sn") not in (None, "") else None
+            ),
+            "ilp_time_limit": float(setting("ilp_time_limit", 30.0)),
+            "mean_method": str(setting("mean_method", "arith")),
+            "random_state": int(setting("random_state", 42)),
+            "n_init": int(setting("n_init", 20)),
+            "eps_causal": (
+                float(settings["eps_causal"])
+                if settings.get("eps_causal") not in (None, "")
+                else None
+            ),
+            "supernodes_out": str(pt_root / f"{safe_slug}.supernodes.json"),
+            "supernode_map_out": str(pt_root / f"{safe_slug}.supernode_map.json"),
+            "supernode_flow_out": str(pt_root / f"{safe_slug}.supernode_flow.json"),
+            "auto_k_sweep_out": (
+                str(pt_root / f"{safe_slug}.auto_k_sweep.json") if settings.get("auto_k") else None
+            ),
+            "summary_graph_out": str(out),
+            "figure_html_out": None,
+            "upload": False,
+            "slug": None,
+            "display_name": None,
+            "upload_pruning_threshold": 0.8,
+            "upload_density_threshold": 0.99,
+        }
     )
+    pipeline_result = run_pipeline(pipeline_args)
 
-    if settings.get("filter_act_density"):
-        prune_graph = filter_act_density(
-            prune_graph,
-            act_density_lb=float(settings.get("act_density_lb", 2e-5)),
-            act_density_ub=float(settings.get("act_density_ub", 0.1)),
-        )
-
-    method = str(settings.get("cluster_method") or "spectral")
-    if method == "spectral":
-        clusters = cluster_graph_spectral(
-            prune_graph,
-            target_k=int(settings.get("target_k", 7)),
-            max_layer_span=int(settings.get("max_layer_span", 4)),
-            mean_method=settings.get("mean_method", "arith"),
-            normalize_weights=bool(settings.get("normalize_weights", False)),
-            decay_rate=(
-                float(settings["decay_rate"]) if settings.get("decay_rate") not in (None, 0, 0.0) else None
-            ),
-            random_state=int(settings.get("random_state", 42)),
-            n_init=int(settings.get("n_init", 20)),
-        )
-        rows = clusters_to_supernodes(prune_graph, clusters)
-    elif method == "agglomerative":
-        max_sn = int(settings["max_sn"]) if settings.get("max_sn") else None
-        clusters = cluster_graph_agglomerative(
-            prune_graph,
-            target_k=int(settings.get("target_k", 7)),
-            max_layer_span=int(settings.get("max_layer_span", 4)),
-            max_sn=max_sn,
-            mean_method=settings.get("mean_method", "arith"),
-            normalize_weights=bool(settings.get("normalize_weights", False)),
-            decay_rate=(
-                float(settings["decay_rate"]) if settings.get("decay_rate") not in (None, 0, 0.0) else None
-            ),
-        )
-        rows = clusters_to_supernodes(prune_graph, clusters)
-    elif method == "ilp":
-        from summarization.cluster import cluster_graph_ilp
-
-        clusters = cluster_graph_ilp(
-            prune_graph,
-            theta=settings.get("theta", 0.0),
-            max_layer_span=int(settings.get("max_layer_span", 4)),
-            max_sn=int(settings["max_sn"]) if settings.get("max_sn") else None,
-            normalize_weights=bool(settings.get("normalize_weights", False)),
-            lambda_causal=float(settings.get("lambda_causal", 1.0)),
-            eps_causal=(
-                float(settings["eps_causal"]) if settings.get("eps_causal") not in ("", None) else None
-            ),
-            time_limit=float(settings.get("ilp_time_limit", 30.0)),
-        )
-        rows = clusters_to_supernodes(prune_graph, clusters)
-    else:
-        raise ValueError(f"Unknown cluster_method: {method}")
-
-    sng = SummaryGraph(
-        supernodes=rows,
-        pruned_adj=prune_graph.pruned_adj,
-        metadata=prune_graph.metadata,
-    )
+    sng = SummaryGraph.load(str(out))
 
     if settings.get("label_supernodes", True):
         from summarization.label import (
@@ -521,17 +504,15 @@ def run_summary(
             ),
             scheme=LabelScheme(scheme="one_pass"),
         )
-
-    out = summary_path(safe_slug, pt_root)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    sng.save(str(out))
+        sng.save(str(out))
 
     pinned_ids, supernodes, stats = summary_graph_viewer_payload(sng)
     return {
         "slug": safe_slug,
         "summary_path": str(out),
-        "pruned_nodes": prune_graph.num_nodes,
-        "pruned_edges": prune_graph.num_edges,
+        "pruned_nodes": pipeline_result["pruned_nodes"],
+        "pruned_edges": pipeline_result["pruned_edges"],
+        "resolved_k": pipeline_result["resolved_k"],
         "supernode_count": len(sng.supernodes),
         "feature_supernode_count": sum(1 for sn in sng.supernodes if sn.type == "features"),
         "viewer": {
@@ -541,7 +522,6 @@ def run_summary(
             "query": summary_query_params(pinned_ids, supernodes),
         },
         "summary": summary_metadata(sng),
-        "attr": {n.node_id: asdict(n) for n in prune_graph.nodes},
     }
 
 

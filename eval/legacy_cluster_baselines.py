@@ -840,7 +840,7 @@ def cluster(
     (``find_best_k`` for spectral, ``find_best_k_for_clusterer`` for agglomerative);
     an int clusters at exactly that k. ``method="ilp"`` solves ``min L_atom`` with
     signed cosine resolution ``theta=0`` and optional hard constraints
-    ``L_causal <= eps_causal`` and ``K <= max_sn``; it ignores ``num_clusters``.
+    ``C_causal <= eps_causal`` and ``K <= max_sn``; it ignores ``num_clusters``.
     For ``theta`` sweeps, call ``cluster_graph_ilp`` directly.
     """
     if method == "ilp":
@@ -849,7 +849,6 @@ def cluster(
         clusters = cluster_graph_ilp(
             prune_graph,
             theta=0.0,
-            lambda_causal=lambda_causal,
             eps_causal=eps_causal,
             max_sn=max_sn,
             max_layer_span=max_layer_span,

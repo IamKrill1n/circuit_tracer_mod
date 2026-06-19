@@ -70,7 +70,7 @@ def test_find_best_k_returns_L_metrics_and_picks_argmin() -> None:
     assert best_k in results
     # Each entry should carry the Stage-2 objective terms and the partition.
     for v in results.values():
-        assert {"L", "L_atom", "L_atom_norm", "L_causal", "prune_loss"} <= set(v.keys())
+        assert {"L", "L_atom", "L_atom_norm", "C_causal", "prune_loss"} <= set(v.keys())
         assert "final_supernodes" in v
         assert 0.0 <= float(v["L"]) <= 1.0
     # best_k must minimize L.

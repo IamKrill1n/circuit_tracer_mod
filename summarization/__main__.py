@@ -58,23 +58,41 @@ def build_parser() -> argparse.ArgumentParser:
         "--token-attr-normalize",
         type=str,
         choices=["softmax", "sparsemax", "entmax15", "entmax"],
-        default="softmax",
+        default="entmax",
     )
     parser.add_argument("--entmax-alpha", type=float, default=1.25)
     parser.add_argument("--device", type=str, default="cuda")
 
     # Prune.
     parser.add_argument("--logit-weights", type=str, choices=["probs", "target"], default="target")
-    parser.add_argument("--node-threshold", type=float, default=0.8)
-    parser.add_argument("--edge-threshold", type=float, default=0.98)
+    parser.add_argument(
+        "--combine-method",
+        type=str,
+        choices=["geometric", "arithmetic", "harmonic"],
+        default="geometric",
+    )
+    parser.add_argument(
+        "--normalization",
+        type=str,
+        choices=["rank", "min_max"],
+        default="rank",
+        help="Score normalization method for influence/relevance pruning.",
+    )
+    parser.add_argument("--alpha", type=float, default=0.5)
+    parser.add_argument("--node-threshold", type=float, default=0.02)
+    parser.add_argument("--edge-threshold", type=float, default=0.9)
     parser.add_argument("--keep-all-tokens-and-logits", action="store_true")
 
     # Optional pruning substage: activation-density filter from the feature dashboards.
     parser.add_argument(
         "--filter-act-density",
         dest="filter_act_density",
-        action="store_true",
-        help="Drop out-of-band activation-density features using the feature dashboards.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Drop out-of-band activation-density features using the feature dashboards. "
+            "Use --no-filter-act-density to disable."
+        ),
     )
     parser.add_argument(
         "--classify-filter",
@@ -119,9 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n-init", type=int, default=20)
 
     # Stage-2 causal control. ILP always minimizes L_atom; --eps-causal adds
-    # the hard constraint L_causal <= eps_causal. --lambda-causal is retained
-    # for non-ILP scoring and old scripts.
-    parser.add_argument("--lambda-causal", type=float, default=1.0)
+    # the hard constraint C_causal <= eps_causal.
     parser.add_argument("--eps-causal", type=float, default=None)
 
     # Outputs.

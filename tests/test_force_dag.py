@@ -203,12 +203,12 @@ def test_pi_is_dag_on_complex_input() -> None:
     assert _is_dag(sng.adj_matrix)
 
 
-# --- compute_L_causal integration -------------------------------------------
+# --- compute_C_causal integration -------------------------------------------
 
 
-def test_compute_L_causal_is_internal_mass_fraction() -> None:
-    # Eq. Lcausal: fraction of pruned edge mass absorbed *inside* a supernode.
-    from eval.eval_cluster import compute_L_causal
+def test_compute_C_causal_is_internal_mass_fraction() -> None:
+    # C_causal: fraction of pruned edge mass absorbed inside a supernode.
+    from eval.eval_cluster import compute_C_causal
 
     a = _feat_node("a", 0, layer=1)
     b = _feat_node("b", 1, layer=2)
@@ -227,17 +227,17 @@ def test_compute_L_causal_is_internal_mass_fraction() -> None:
 
     internal = 2.0  # only a->b lives inside a supernode
     total = 2.0 + 1.0 + 3.0  # all pruned edge mass
-    assert compute_L_causal(sng) == pytest.approx(internal / total)
+    assert compute_C_causal(sng) == pytest.approx(internal / total)
 
 
-def test_compute_L_causal_zero_for_all_singletons() -> None:
-    from eval.eval_cluster import compute_L_causal
+def test_compute_C_causal_zero_for_all_singletons() -> None:
+    from eval.eval_cluster import compute_C_causal
 
     a = Supernode("A", [_feat_node("a", 0, layer=1)], "features", 1, 1)
     b = Supernode("B", [_feat_node("b", 1, layer=2)], "features", 2, 2)
     block = np.array([[0.0, 1.0], [3.0, 0.0]])  # no two nodes share a supernode
     sng = _sng_from_blocks([a, b], block)
-    assert compute_L_causal(sng) == pytest.approx(0.0)
+    assert compute_C_causal(sng) == pytest.approx(0.0)
 
 
 def test_edge_mass_metrics_report_dag_loss_for_cycle() -> None:
