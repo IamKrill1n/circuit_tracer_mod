@@ -3,12 +3,12 @@
 The current ILP in ``summarization.cluster`` always solves
 
     min L_atom
-    subject to L_causal <= eps_causal
+    subject to C_causal <= eps_causal
     subject to K <= max_sn
 
-where ``L_atom`` is the signed-cosine atomicity objective and ``L_causal`` is the
+where ``L_atom`` is the signed-cosine atomicity objective and ``C_causal`` is the
 fraction of retained edge mass absorbed inside feature supernodes. This script
-varies ``eps_causal`` and records the actual solved point ``(L_causal, L_atom)``.
+varies ``eps_causal`` and records the actual solved point ``(C_causal, L_atom)``.
 The actual causal loss is the x-coordinate; the requested epsilon is only the
 budget that produced the partition.
 
@@ -233,16 +233,16 @@ def _partition_id(signature: tuple[tuple[str, ...], ...]) -> str:
 
 
 def pareto_mask(points: list[dict[str, Any]], tol: float = PARETO_TOL) -> list[bool]:
-    """Non-dominated mask for minimising ``(L_atom, L_causal)``."""
+    """Non-dominated mask for minimising ``(L_atom, C_causal)``."""
     on_front = [True] * len(points)
     for i, point_i in enumerate(points):
         atom_i = float(point_i["L_atom"])
-        causal_i = float(point_i["L_causal"])
+        causal_i = float(point_i["C_causal"])
         for j, point_j in enumerate(points):
             if i == j:
                 continue
             atom_j = float(point_j["L_atom"])
-            causal_j = float(point_j["L_causal"])
+            causal_j = float(point_j["C_causal"])
             no_worse = atom_j <= atom_i + tol and causal_j <= causal_i + tol
             strictly_better = atom_j < atom_i - tol or causal_j < causal_i - tol
             if no_worse and strictly_better:
@@ -278,7 +278,7 @@ def _score_clusters(
     metrics["L_atom"] = float(atom["L_atom"])
     metrics["L_atom_norm"] = float(atom["L_atom_norm"])
     metrics["L"] = float(
-        (metrics["L_atom_norm"] + report_lambda * metrics["L_causal"]) / (1.0 + report_lambda)
+        (metrics["L_atom_norm"] + report_lambda * metrics["C_causal"]) / (1.0 + report_lambda)
     )
 
     signature = _cluster_signature(clusters)
@@ -314,7 +314,6 @@ def _solve_at_epsilon(
         clusters = cluster_graph_ilp(
             prune_graph,
             theta=ctx.theta,
-            lambda_causal=0.0,
             eps_causal=eps_causal,
             max_sn=max_sn,
             max_layer_span=ctx.max_layer_span,
@@ -335,9 +334,9 @@ def _solve_at_epsilon(
         report_lambda=report_lambda,
     )
     logger.info(
-        "eps=%s -> actual L_causal=%.4f L_atom=%.4f K=%d partition=%s",
+        "eps=%s -> actual C_causal=%.4f L_atom=%.4f K=%d partition=%s",
         _format_eps(eps_causal),
-        rec["L_causal"],
+        rec["C_causal"],
         rec["L_atom"],
         rec["K"],
         rec["partition_id"],
@@ -359,7 +358,7 @@ def _dedupe_partitions(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduped = list(by_signature.values())
     deduped.sort(
         key=lambda p: (
-            float(p["L_causal"]),
+            float(p["C_causal"]),
             float(p["L_atom"]),
             _eps_sort_value(p["eps_causal"]),
         )
@@ -424,7 +423,7 @@ def trace_epsilon_front(
             if left_rec["cluster_signature"] == right_rec["cluster_signature"]:
                 continue
             atom_delta = abs(float(left_rec["L_atom"]) - float(right_rec["L_atom"]))
-            causal_delta = abs(float(left_rec["L_causal"]) - float(right_rec["L_causal"]))
+            causal_delta = abs(float(left_rec["C_causal"]) - float(right_rec["C_causal"]))
             if atom_delta >= adaptive_min_delta_atom or causal_delta >= adaptive_min_delta_causal:
                 additions.append((left + right) / 2.0)
 
@@ -456,7 +455,7 @@ FIELDNAMES = [
     "L",
     "L_atom",
     "L_atom_norm",
-    "L_causal",
+    "C_causal",
     "internalized_mass_fraction",
     "K",
     "n_supernodes",
@@ -511,7 +510,7 @@ def plot_curve(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    causal = np.array([float(point["L_causal"]) for point in points])
+    causal = np.array([float(point["C_causal"]) for point in points])
     atom = np.array([float(point["L_atom"]) for point in points])
     front = np.array(frontier, dtype=bool)
 
@@ -528,13 +527,13 @@ def plot_curve(
             continue
         ax.annotate(
             f"eps={point['eps_label']}",
-            (float(point["L_causal"]), float(point["L_atom"])),
+            (float(point["C_causal"]), float(point["L_atom"])),
             fontsize=6.5,
             xytext=(4, 3),
             textcoords="offset points",
         )
 
-    ax.set_xlabel("L_causal (internal edge mass fraction)")
+    ax.set_xlabel("C_causal (internal edge mass fraction)")
     ax.set_ylabel("L_atom (ILP atomicity objective)")
     ax.set_title(title)
     ax.grid(True, ls="--", alpha=0.4)
@@ -673,7 +672,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--adaptive-min-delta-causal",
         type=float,
         default=1e-4,
-        help="Minimum L_causal gap that triggers adaptive midpoint refinement.",
+        help="Minimum C_causal gap that triggers adaptive midpoint refinement.",
     )
     parser.add_argument(
         "--normalize-weights",
@@ -696,7 +695,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--report-lambda",
         type=float,
         default=1.0,
-        help="Only used to report scalar L from L_atom_norm and L_causal; not passed to the ILP.",
+        help="Only used to report scalar L from L_atom_norm and C_causal; not passed to the ILP.",
     )
     parser.add_argument("--map-location", type=str, default="cpu")
     parser.add_argument("--output-dir", type=str, default="eval_outputs/pareto")

@@ -50,7 +50,7 @@ SUMMARY_COLUMNS = [
     "L_atom_norm",
     "sil_raw",
     "sil_norm",
-    "L_causal",
+    "C_causal",
     "internalized_mass_fraction",
     "dag_removed_mass_fraction",
     "final_retained_mass_fraction",
@@ -89,7 +89,7 @@ def compute_L_atom(
     return {"L_atom": raw, "L_atom_norm": disagreement / total}
 
 
-def compute_L_causal(sng: SummaryGraph) -> float:
+def compute_C_causal(sng: SummaryGraph) -> float:
     """Fraction of pruned edge mass absorbed inside feature supernodes."""
     adj = sng.pruned_adj.detach().cpu().numpy().astype(np.float64)  # adj[target, source]
     total_mag = float(np.abs(adj).sum())
@@ -160,7 +160,7 @@ def compute_L(
     n_middle = role_vectors_middle.shape[0]
     labels = _supernode_labels_for_middle(sng, middle_node_id_to_local, n_middle)
     atom = compute_L_atom(role_vectors_middle, labels)
-    causal = compute_L_causal(sng)
+    causal = compute_C_causal(sng)
     edge_mass = compute_edge_mass_metrics(sng)
     n_feature_sn = sum(1 for sn in sng.supernodes if sn.type in ("features", "feature"))
     L = (atom["L_atom_norm"] + lambda_causal * causal) / (1.0 + lambda_causal)
@@ -168,7 +168,7 @@ def compute_L(
         "L": float(L),
         "L_atom": float(atom["L_atom"]),
         "L_atom_norm": float(atom["L_atom_norm"]),
-        "L_causal": float(causal),
+        "C_causal": float(causal),
         "internalized_mass_fraction": float(causal),
         **edge_mass,
         "prune_loss": float(prune_loss),
@@ -876,7 +876,7 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             "output_dir": str(output_dir),
             "objective": (
                 "Matched-K ILP cluster evaluation. L = (L_atom_norm + lambda_causal "
-                "* L_causal) / (1 + lambda_causal), where L_causal is the fraction "
+                "* C_causal) / (1 + lambda_causal), where C_causal is the fraction "
                 "of fine edge mass internalized inside feature supernodes. Additional "
                 "mass metrics report raw external superedge mass, final DAG-retained "
                 "mass, and mass removed by π DAG construction."
@@ -1000,7 +1000,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--lambda-causal",
         type=float,
         default=1.0,
-        help="Trade-off weight (>= 0) on L_causal in L = L_atom + lambda_causal * L_causal "
+        help="Trade-off weight (>= 0) on C_causal in L = L_atom + lambda_causal * C_causal "
         "(default 1.0). 0 = pure atomicity.",
     )
     return parser
