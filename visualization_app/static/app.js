@@ -3,6 +3,8 @@ const state = {
   activeSlug: null,
   summary: null,
   steeringOptions: null,
+  storageRecords: [],
+  selectedStoredSupernodes: [],
 };
 
 const el = (id) => document.getElementById(id);
@@ -195,10 +197,12 @@ async function openSteeringDialog() {
   const status = el("steeringStatus");
   const list = el("steeringNodeList");
   const result = el("steeringResult");
+  state.selectedStoredSupernodes = [];
   status.textContent = "Loading steering options...";
   result.className = "steering-result muted";
   result.textContent = "Steering output appears here.";
   el("steeringProgressRow").hidden = true;
+  el("supernodeStoragePanel").hidden = true;
   el("steeringDialog").showModal();
   try {
     const payload = await api(`/api/graphs/${encodeURIComponent(state.activeSlug)}/steering-options`);
@@ -214,10 +218,16 @@ async function openSteeringDialog() {
   }
 }
 
+function defaultStoredTargetPos() {
+  const tokens = state.steeringOptions?.prompt_tokens || [];
+  return Math.max(0, tokens.length - 1);
+}
+
 function renderSteeringNodes(supernodes) {
   const list = el("steeringNodeList");
   list.innerHTML = "";
-  if (!supernodes.length) {
+  const stored = state.selectedStoredSupernodes || [];
+  if (!supernodes.length && !stored.length) {
     list.className = "steering-node-list muted";
     list.textContent = "No feature supernodes are available to steer.";
     return;
@@ -256,6 +266,59 @@ function renderSteeringNodes(supernodes) {
     row.appendChild(factor);
     list.appendChild(row);
   });
+
+  stored.forEach((record) => {
+    const row = document.createElement("div");
+    row.className = "steering-node stored";
+
+    const main = document.createElement("div");
+    main.className = "steering-node-main";
+    const marker = document.createElement("span");
+    marker.className = "pill";
+    marker.textContent = "Stored";
+    main.appendChild(marker);
+
+    const text = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = record.label;
+    const meta = document.createElement("small");
+    meta.textContent = `${record.feature_count} feature(s) · L${record.layer_min}-${record.layer_max} · ${record.source_slug}${record.role ? ` · ${record.role}` : ""}`;
+    text.appendChild(title);
+    text.appendChild(meta);
+    main.appendChild(text);
+
+    const factor = document.createElement("input");
+    factor.type = "number";
+    factor.step = "0.5";
+    factor.value = record.factor;
+    factor.dataset.storedFactor = record.record_id;
+    factor.setAttribute("aria-label", `factor for stored ${record.label}`);
+
+    const target = document.createElement("input");
+    target.type = "number";
+    target.min = "0";
+    target.step = "1";
+    target.value = record.target_pos;
+    target.dataset.storedTargetPos = record.record_id;
+    target.setAttribute("aria-label", `target token position for stored ${record.label}`);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "secondary steering-node-remove";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () => {
+      state.selectedStoredSupernodes = state.selectedStoredSupernodes.filter(
+        (item) => item.record_id !== record.record_id,
+      );
+      renderSteeringNodes(state.steeringOptions?.supernodes || []);
+    });
+
+    row.appendChild(main);
+    row.appendChild(factor);
+    row.appendChild(target);
+    row.appendChild(remove);
+    list.appendChild(row);
+  });
 }
 
 function setAllSteeringNodes(checked) {
@@ -264,6 +327,88 @@ function setAllSteeringNodes(checked) {
     .forEach((input) => {
       input.checked = checked;
     });
+}
+
+async function loadSupernodeStorage() {
+  const params = new URLSearchParams();
+  const label = el("storageLabelFilter").value.trim();
+  const role = el("storageRoleFilter").value.trim();
+  const description = el("storageDescriptionFilter").value.trim();
+  const source = el("storageSourceFilter").value.trim();
+  if (label) params.set("label", label);
+  if (role) params.set("role", role);
+  if (description) params.set("description", description);
+  if (source) params.set("source_slug", source);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const payload = await api(`/api/supernode-storage${suffix}`);
+  state.storageRecords = payload.records || [];
+  renderSupernodeStorage(state.storageRecords);
+}
+
+function renderSupernodeStorage(records) {
+  const container = el("supernodeStorageList");
+  container.innerHTML = "";
+  if (!records.length) {
+    container.className = "storage-list muted";
+    container.textContent = "No stored supernodes match the filters.";
+    return;
+  }
+
+  container.className = "storage-list";
+  const table = document.createElement("table");
+  table.className = "storage-table";
+  const thead = document.createElement("thead");
+  const header = document.createElement("tr");
+  ["Label", "Role", "Description", "Source", "Layers", "Features", ""].forEach((label) => {
+    const th = document.createElement("th");
+    th.textContent = label;
+    header.appendChild(th);
+  });
+  thead.appendChild(header);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  records.forEach((record) => {
+    const row = document.createElement("tr");
+    const fields = [
+      record.label,
+      record.role || "",
+      record.description || "",
+      record.source_slug,
+      `L${record.layer_min}-${record.layer_max}`,
+      String(record.feature_count),
+    ];
+    fields.forEach((value) => {
+      const td = document.createElement("td");
+      td.textContent = value;
+      row.appendChild(td);
+    });
+
+    const action = document.createElement("td");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = "Add";
+    button.addEventListener("click", () => addStoredSupernode(record));
+    action.appendChild(button);
+    row.appendChild(action);
+    tbody.appendChild(row);
+  });
+  table.appendChild(tbody);
+  container.appendChild(table);
+}
+
+function addStoredSupernode(record) {
+  const exists = state.selectedStoredSupernodes.some(
+    (item) => item.record_id === record.record_id,
+  );
+  if (exists) return;
+  state.selectedStoredSupernodes.push({
+    ...record,
+    factor: -1,
+    target_pos: defaultStoredTargetPos(),
+  });
+  renderSteeringNodes(state.steeringOptions?.supernodes || []);
 }
 
 function steeringPayload() {
@@ -284,8 +429,28 @@ function steeringPayload() {
       factors[name] = Number(factorInput.value);
     });
 
+  const targetInputs = new Map();
+  el("steeringNodeList")
+    .querySelectorAll("input[data-stored-target-pos]")
+    .forEach((input) => {
+      targetInputs.set(input.dataset.storedTargetPos, input);
+    });
+  const storedSupernodes = [];
+  el("steeringNodeList")
+    .querySelectorAll("input[data-stored-factor]")
+    .forEach((input) => {
+      const recordId = input.dataset.storedFactor;
+      const targetInput = targetInputs.get(recordId);
+      storedSupernodes.push({
+        record_id: recordId,
+        factor: Number(input.value),
+        target_pos: Number(targetInput.value),
+      });
+    });
+
   return {
     factors,
+    stored_supernodes: storedSupernodes,
     model_name: el("steerModel").value,
     transcoder: el("steerTranscoder").value,
     dtype: el("steerDtype").value,
@@ -329,6 +494,26 @@ el("steerBtn").addEventListener("click", openSteeringDialog);
 el("showRawBtn").addEventListener("click", () => openViewer(false));
 el("steerAllBtn").addEventListener("click", () => setAllSteeringNodes(true));
 el("unsteerAllBtn").addEventListener("click", () => setAllSteeringNodes(false));
+el("addStoredSupernodeBtn").addEventListener("click", async () => {
+  const panel = el("supernodeStoragePanel");
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) {
+    try {
+      await loadSupernodeStorage();
+    } catch (error) {
+      el("supernodeStorageList").className = "storage-list muted";
+      el("supernodeStorageList").textContent = error.message;
+    }
+  }
+});
+el("storageSearchBtn").addEventListener("click", async () => {
+  try {
+    await loadSupernodeStorage();
+  } catch (error) {
+    el("supernodeStorageList").className = "storage-list muted";
+    el("supernodeStorageList").textContent = error.message;
+  }
+});
 
 el("previewBtn").addEventListener("click", async () => {
   const out = el("previewOut");
@@ -422,7 +607,7 @@ el("startSteeringBtn").addEventListener("click", async () => {
   const progressText = el("steeringProgressText");
   const startButton = el("startSteeringBtn");
   const req = steeringPayload();
-  if (!Object.keys(req.factors).length) {
+  if (!Object.keys(req.factors).length && !req.stored_supernodes.length) {
     status.textContent = "Select at least one feature supernode.";
     return;
   }

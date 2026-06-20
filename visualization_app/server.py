@@ -101,8 +101,15 @@ class SummaryRequest(BaseModel):
     thinking_effort: str = "off"
 
 
+class StoredSupernodeRequest(BaseModel):
+    record_id: str
+    factor: float = -1.0
+    target_pos: int
+
+
 class SteeringRequest(BaseModel):
-    factors: dict[str, float]
+    factors: dict[str, float] = Field(default_factory=dict)
+    stored_supernodes: list[StoredSupernodeRequest] = Field(default_factory=list)
     model_name: str = ""
     transcoder: str = ""
     dtype: str = "bfloat16"
@@ -228,6 +235,21 @@ def index() -> FileResponse:
 @app.get("/api/graphs")
 def graphs() -> dict[str, Any]:
     return {"graphs": [asdict(record) for record in services.list_graphs()]}
+
+
+@app.get("/api/supernode-storage")
+def supernode_storage(
+    label: str = "",
+    role: str = "",
+    description: str = "",
+    source_slug: str = "",
+) -> dict[str, Any]:
+    return services.list_supernode_storage(
+        label=label,
+        role=role,
+        description=description,
+        source_slug=source_slug,
+    )
 
 
 @app.post("/api/graphs/upload")
@@ -363,6 +385,7 @@ def steer_graph(slug: str, req: SteeringRequest) -> dict[str, Any]:
         lambda progress: services.run_steering(
             slug=safe_slug,
             factors=req.factors,
+            stored_supernodes=[item.model_dump() for item in req.stored_supernodes],
             model_name=req.model_name,
             transcoder=req.transcoder,
             dtype=req.dtype,  # type: ignore[arg-type]

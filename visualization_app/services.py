@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import pickle
 import shutil
 import time
 import urllib.parse
@@ -21,6 +22,8 @@ REPO = Path(__file__).resolve().parents[1]
 GRAPH_ROOT = REPO / "graph_files"
 GENERATED_GRAPH_ROOT = REPO / "generated_graphs"
 MAX_SUBGRAPH_VIEWER_NODES = 200
+SUPERNODE_STORAGE_FILENAME = "supernode_storage.json"
+SUPERNODE_STORAGE_VERSION = 1
 
 
 def slugify(text: str) -> str:
@@ -164,6 +167,10 @@ def sidecar_pt_path(slug: str, root: Path = GENERATED_GRAPH_ROOT) -> Path:
 def summary_path(slug: str, root: Path = GENERATED_GRAPH_ROOT) -> Path:
     safe_slug = slugify(slug)
     return root / f"{safe_slug}.sng.pt"
+
+
+def supernode_storage_path(root: Path = GENERATED_GRAPH_ROOT) -> Path:
+    return root / SUPERNODE_STORAGE_FILENAME
 
 
 def infer_graph_model_and_scan(pt_path: Path) -> tuple[str, str]:
@@ -577,6 +584,9 @@ def run_summary(
         )
         sng.save(str(out))
 
+    report("Updating supernode storage", 0.93)
+    rebuild_supernode_storage(root, pt_root)
+
     report("Preparing viewer import", 0.96)
     pinned_ids, supernodes, stats = summary_graph_viewer_payload(sng)
     return {
@@ -691,6 +701,183 @@ def summary_metadata(sng) -> list[dict[str, Any]]:
     ]
 
 
+def _summary_slug_from_path(path: Path) -> str:
+    name = path.name
+    if name.endswith(".sng.pt"):
+        return slugify(name[: -len(".sng.pt")])
+    return slugify(path.stem)
+
+
+def _summary_source_metadata(
+    slug: str,
+    sng,
+    root: Path,
+    pt_root: Path,
+) -> tuple[str, str, str]:
+    prompt = str(sng.metadata.get("prompt") or "")
+    model_name = ""
+    transcoder = str(sng.metadata.get("scan") or "")
+
+    try:
+        record = load_graph_record(slug, root, pt_root)
+    except FileNotFoundError:
+        record = None
+    if record is not None:
+        prompt = prompt or record.prompt
+        transcoder = transcoder or record.scan
+
+    pt_path = find_pt_path(slug, pt_root)
+    if pt_path is not None:
+        try:
+            model_name, inferred_transcoder = infer_graph_model_and_scan(pt_path)
+        except (OSError, KeyError, RuntimeError, ValueError, EOFError, pickle.UnpicklingError):
+            inferred_transcoder = ""
+        transcoder = inferred_transcoder or transcoder
+
+    return model_name, transcoder, prompt
+
+
+def _storage_record_for_supernode(
+    *,
+    slug: str,
+    source_path: Path,
+    source_mtime: float,
+    supernode_index: int,
+    supernode,
+    model_name: str,
+    transcoder: str,
+    prompt: str,
+) -> dict[str, Any] | None:
+    feature_count = sum(
+        1 for node in supernode.features if node.feature_type == "cross layer transcoder"
+    )
+    if supernode.type != "features" or feature_count == 0:
+        return None
+    return {
+        "record_id": f"{slug}:{supernode_index}",
+        "source_slug": slug,
+        "source_path": str(source_path),
+        "source_mtime": source_mtime,
+        "supernode_index": supernode_index,
+        "label": supernode.name,
+        "name": supernode.name,
+        "role": supernode.role,
+        "description": supernode.description,
+        "layer_min": supernode.layer_min,
+        "layer_max": supernode.layer_max,
+        "feature_count": feature_count,
+        "model_name": model_name,
+        "transcoder": transcoder,
+        "prompt": prompt,
+    }
+
+
+def rebuild_supernode_storage(
+    root: Path = GRAPH_ROOT,
+    pt_root: Path = GENERATED_GRAPH_ROOT,
+) -> dict[str, Any]:
+    from summarization.summarize import SummaryGraph
+
+    records: list[dict[str, Any]] = []
+    if pt_root.exists():
+        for path in sorted(pt_root.glob("*.sng.pt")):
+            slug = _summary_slug_from_path(path)
+            sng = SummaryGraph.load(str(path))
+            model_name, transcoder, prompt = _summary_source_metadata(slug, sng, root, pt_root)
+            source_mtime = path.stat().st_mtime
+            for supernode_index, supernode in enumerate(sng.supernodes):
+                record = _storage_record_for_supernode(
+                    slug=slug,
+                    source_path=path,
+                    source_mtime=source_mtime,
+                    supernode_index=supernode_index,
+                    supernode=supernode,
+                    model_name=model_name,
+                    transcoder=transcoder,
+                    prompt=prompt,
+                )
+                if record is not None:
+                    records.append(record)
+
+    payload = {
+        "version": SUPERNODE_STORAGE_VERSION,
+        "records": records,
+        "updated_at": time.time(),
+    }
+    pt_root.mkdir(parents=True, exist_ok=True)
+    supernode_storage_path(pt_root).write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return payload
+
+
+def load_supernode_storage(
+    root: Path = GRAPH_ROOT,
+    pt_root: Path = GENERATED_GRAPH_ROOT,
+) -> dict[str, Any]:
+    path = supernode_storage_path(pt_root)
+    if not path.exists():
+        return rebuild_supernode_storage(root, pt_root)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("version") != SUPERNODE_STORAGE_VERSION:
+        return rebuild_supernode_storage(root, pt_root)
+    return payload
+
+
+def list_supernode_storage(
+    *,
+    label: str = "",
+    role: str = "",
+    description: str = "",
+    source_slug: str = "",
+    root: Path = GRAPH_ROOT,
+    pt_root: Path = GENERATED_GRAPH_ROOT,
+) -> dict[str, Any]:
+    payload = load_supernode_storage(root, pt_root)
+    records = list(payload.get("records") or [])
+
+    label_key = label.strip().casefold()
+    role_key = role.strip().casefold()
+    description_key = description.strip().casefold()
+    source_key = source_slug.strip().casefold()
+    if label_key:
+        records = [
+            record
+            for record in records
+            if label_key in str(record.get("label") or "").casefold()
+            or label_key in str(record.get("description") or "").casefold()
+        ]
+    if role_key:
+        records = [
+            record for record in records if role_key in str(record.get("role") or "").casefold()
+        ]
+    if description_key:
+        records = [
+            record
+            for record in records
+            if description_key in str(record.get("description") or "").casefold()
+        ]
+    if source_key:
+        records = [
+            record
+            for record in records
+            if source_key in str(record.get("source_slug") or "").casefold()
+        ]
+    return {
+        "version": payload.get("version", SUPERNODE_STORAGE_VERSION),
+        "records": records,
+        "count": len(records),
+    }
+
+
+def _storage_records_by_id(
+    root: Path = GRAPH_ROOT,
+    pt_root: Path = GENERATED_GRAPH_ROOT,
+) -> dict[str, dict[str, Any]]:
+    payload = load_supernode_storage(root, pt_root)
+    return {str(record["record_id"]): record for record in payload.get("records") or []}
+
+
 def steering_options(
     slug: str,
     root: Path = GRAPH_ROOT,
@@ -706,6 +893,9 @@ def steering_options(
 
     sng = SummaryGraph.load(str(summary_file))
     prompt = str(sng.metadata.get("prompt", "") or record.prompt or "")
+    prompt_tokens = [str(token) for token in (sng.metadata.get("prompt_tokens") or [])]
+    if not prompt_tokens:
+        prompt_tokens = record.prompt_tokens
     pt_path = find_pt_path(safe_slug, pt_root)
     inferred_model = ""
     inferred_transcoder = record.scan
@@ -733,6 +923,7 @@ def steering_options(
     return {
         "slug": safe_slug,
         "prompt": prompt,
+        "prompt_tokens": prompt_tokens,
         "model_name": inferred_model,
         "transcoder": inferred_transcoder,
         "supernodes": supernodes,
@@ -757,6 +948,97 @@ def _load_steering_model(
         lazy_encoder=True,
         backend=backend,
     )
+
+
+def _stored_supernode_intervention_groups(
+    stored_supernodes: list[dict[str, Any]],
+    *,
+    n_pos: int,
+    n_layers: int,
+    d_transcoder: int,
+    layers_below: int,
+    layers_above: int,
+    root: Path = GRAPH_ROOT,
+    pt_root: Path = GENERATED_GRAPH_ROOT,
+) -> tuple[list[tuple[range, list[tuple[int, int, int, float]]]], list[dict[str, Any]]]:
+    from summarization.summarize import SummaryGraph, constrained_window
+
+    if not stored_supernodes:
+        return [], []
+
+    records = _storage_records_by_id(root, pt_root)
+    by_layer: dict[int, list[tuple[int, int, int, float]]] = {}
+    selected: list[dict[str, Any]] = []
+
+    for selection in stored_supernodes:
+        record_id = str(selection.get("record_id") or "")
+        if record_id not in records:
+            raise ValueError(f"Unknown stored supernode record_id: {record_id}")
+        try:
+            target_pos = int(selection["target_pos"])
+        except KeyError as exc:
+            raise ValueError(f"Stored supernode {record_id} is missing target_pos.") from exc
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Stored supernode {record_id} has invalid target_pos.") from exc
+        if target_pos < 0 or target_pos >= n_pos:
+            raise ValueError(
+                f"Stored supernode {record_id} target_pos={target_pos} is outside "
+                f"recipient prompt positions 0..{n_pos - 1}."
+            )
+
+        factor = float(selection.get("factor", -1.0))
+        record = records[record_id]
+        source_path = Path(str(record["source_path"]))
+        if not source_path.exists():
+            raise FileNotFoundError(f"Stored supernode source graph not found: {source_path}")
+
+        sng = SummaryGraph.load(str(source_path))
+        supernode_index = int(record["supernode_index"])
+        if supernode_index < 0 or supernode_index >= len(sng.supernodes):
+            raise ValueError(
+                f"Stored supernode {record_id} points outside source graph supernodes."
+            )
+        supernode = sng.supernodes[supernode_index]
+
+        donor_by_feature: dict[tuple[int, int], float] = {}
+        for node in supernode.features:
+            if node.feature_type != "cross layer transcoder" or node.activation is None:
+                continue
+            parts = node.node_id.split("_")
+            layer, feature = int(parts[0]), int(parts[1])
+            if layer >= n_layers or feature >= d_transcoder:
+                continue
+            activation = float(node.activation)
+            previous = donor_by_feature.get((layer, feature))
+            if previous is None or abs(activation) > abs(previous):
+                donor_by_feature[(layer, feature)] = activation
+
+        if not donor_by_feature:
+            raise ValueError(
+                f"Stored supernode {record_id} has no usable CLT activation values "
+                "for this recipient model."
+            )
+
+        for (layer, feature), activation in donor_by_feature.items():
+            value = factor * activation
+            by_layer.setdefault(layer, []).append((layer, target_pos, feature, value))
+
+        selected.append(
+            {
+                "record_id": record_id,
+                "label": record["label"],
+                "source_slug": record["source_slug"],
+                "factor": factor,
+                "target_pos": target_pos,
+                "n_features": len(donor_by_feature),
+            }
+        )
+
+    groups = [
+        (constrained_window(layer, n_layers, layers_below, layers_above), interventions)
+        for layer, interventions in sorted(by_layer.items())
+    ]
+    return groups, selected
 
 
 def _steering_intervention_graph(
@@ -829,6 +1111,7 @@ def run_steering(
     *,
     slug: str,
     factors: dict[str, float],
+    stored_supernodes: list[dict[str, Any]] | None = None,
     model_name: str = "",
     transcoder: str = "",
     dtype: Literal["float32", "float16", "bfloat16"] = "bfloat16",
@@ -846,7 +1129,8 @@ def run_steering(
     from summarization.summarize import SummaryGraph, steer_interventions_constrained
 
     safe_slug = slugify(slug)
-    if not factors:
+    stored_supernodes = stored_supernodes or []
+    if not factors and not stored_supernodes:
         raise ValueError("Select at least one feature supernode to steer.")
 
     options = steering_options(safe_slug, root, pt_root)
@@ -886,6 +1170,17 @@ def run_steering(
         layers_below=int(layers_below),
         layers_above=int(layers_above),
     )
+    stored_groups, selected_stored = _stored_supernode_intervention_groups(
+        stored_supernodes,
+        n_pos=int(orig_activations.shape[1]),
+        n_layers=int(orig_activations.shape[0]),
+        d_transcoder=int(orig_activations.shape[2]),
+        layers_below=int(layers_below),
+        layers_above=int(layers_above),
+        root=root,
+        pt_root=pt_root,
+    )
+    groups.extend(stored_groups)
 
     report("Running steering passes", 0.45)
     base_logits, _ = model.feature_intervention(steer_tokens, [], return_activations=False)
@@ -927,6 +1222,7 @@ def run_steering(
         "model_name": resolved_model,
         "transcoder": resolved_transcoder,
         "steered": factors,
+        "stored_supernodes": selected_stored,
         "top_outputs": top_outputs,
         "svg": svg.data,
     }

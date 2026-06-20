@@ -346,6 +346,14 @@ progress {
   padding: 9px 10px;
 }
 
+.steering-node.stored {
+  grid-template-columns: minmax(0, 1fr) 76px 76px auto;
+}
+
+.steering-node-remove {
+  padding: 6px 9px;
+}
+
 .steering-node-main {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -369,6 +377,46 @@ progress {
   color: #64748b;
   font-size: 12px;
   font-weight: 600;
+}
+
+.storage-panel {
+  margin-top: 12px;
+  border: 1px solid #d8e0ea;
+  border-radius: 7px;
+  padding: 10px;
+  background: #f8fafc;
+}
+
+.storage-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 10px;
+}
+
+.storage-list {
+  max-height: 240px;
+  overflow: auto;
+}
+
+.storage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.storage-table th,
+.storage-table td {
+  border-bottom: 1px solid #d8e0ea;
+  padding: 7px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.storage-table th {
+  color: #475569;
+  font-weight: 700;
 }
 
 .steering-settings {
@@ -421,7 +469,8 @@ progress {
 
   .layout,
   .two-col,
-  .steering-grid {
+  .steering-grid,
+  .storage-filters {
     grid-template-columns: 1fr;
   }
 
