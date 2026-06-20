@@ -86,6 +86,85 @@ def test_summary_request_defaults_match_graph_workflow() -> None:
     assert req.label_model == "gemma-4-31b-it"
 
 
+def test_steering_request_defaults_match_streamlit_workflow() -> None:
+    from visualization_app.server import SteeringRequest
+
+    req = SteeringRequest(factors={"SN 1": -1.0})
+
+    assert req.factors == {"SN 1": -1.0}
+    assert req.model_name == ""
+    assert req.transcoder == ""
+    assert req.dtype == "bfloat16"
+    assert req.backend == "transformerlens"
+    assert req.freeze_attention is True
+    assert req.layers_below == 0
+    assert req.layers_above == 1
+    assert req.edge_threshold == 0.1
+    assert req.top_k == 5
+
+
+def test_steering_options_reads_feature_supernodes(tmp_path: Path) -> None:
+    graph_root = tmp_path / "graph_files"
+    pt_root = tmp_path / "generated_graphs"
+    graph_dir = graph_root / "austin"
+    graph_dir.mkdir(parents=True)
+    pt_root.mkdir()
+    (graph_dir / "austin.json").write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "slug": "austin",
+                    "scan": "CLT-HP",
+                    "prompt": "viewer prompt",
+                    "prompt_tokens": ["viewer"],
+                },
+                "nodes": [],
+                "links": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    sng = SummaryGraph(
+        supernodes=[
+            Supernode(
+                name="State feature",
+                features=[_node("1_10", 0), _node("2_20", 1, feature_type="embedding")],
+                type="features",
+                layer_min=1,
+                layer_max=2,
+                role="Abstract",
+                description="Tracks the state.",
+            ),
+            Supernode(
+                name="Target logit",
+                features=[_node("L_0", 2, feature_type="logit")],
+                type="logit",
+                layer_min=99,
+                layer_max=99,
+            ),
+        ],
+        pruned_adj=torch.zeros((3, 3)),
+        metadata={"prompt": "summary prompt"},
+    )
+    sng.save(str(pt_root / "austin.sng.pt"))
+
+    options = services.steering_options("austin", graph_root, pt_root)
+
+    assert options["prompt"] == "summary prompt"
+    assert options["transcoder"] == "CLT-HP"
+    assert options["model_name"] == ""
+    assert options["supernodes"] == [
+        {
+            "name": "State feature",
+            "role": "Abstract",
+            "description": "Tracks the state.",
+            "layer_min": 1,
+            "layer_max": 2,
+            "feature_count": 1,
+        }
+    ]
+
+
 def test_token_weights_from_shap_uses_graph_target_token(monkeypatch: pytest.MonkeyPatch) -> None:
     from summarization.summarize import Node
 

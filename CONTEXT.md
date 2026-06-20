@@ -60,6 +60,11 @@ The local evidence used to interpret a feature within the current computation. F
 evidence identifies where the feature appears in the computation and gives activation/logit
 signals, but it is distinct from the supernode's final display label.
 
+## Steering intervention
+
+A causal probe that scales the activations of selected feature supernodes in the original
+prompt computation and observes the resulting change in next-token outputs.
+
 ## Model registry
 
 The catalogue mapping a **model name** to its **provider**, endpoint, credential source, and

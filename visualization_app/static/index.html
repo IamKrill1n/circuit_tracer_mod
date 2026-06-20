@@ -34,6 +34,7 @@
           <div class="actions">
             <button id="summaryBtn" class="primary" disabled>Generate Summary</button>
             <button id="showSummaryBtn" class="secondary" disabled>Show Summary</button>
+            <button id="steerBtn" class="secondary" disabled>Steer</button>
             <button id="showRawBtn" class="secondary" disabled>Show Raw</button>
           </div>
         </div>
@@ -198,6 +199,65 @@
             </div>
           </div>
           <button id="startSummaryBtn" type="button" class="primary">Generate Summary</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="steeringDialog">
+      <form method="dialog" class="modal">
+        <button class="close" value="cancel" aria-label="Close">&times;</button>
+        <h2>Steering Intervention</h2>
+
+        <div class="two-col">
+          <label>Model <input id="steerModel" placeholder="inferred from graph .pt" /></label>
+          <label>Source Set <input id="steerTranscoder" placeholder="inferred from graph .pt" /></label>
+          <label>Dtype
+            <select id="steerDtype">
+              <option>bfloat16</option>
+              <option>float16</option>
+              <option>float32</option>
+            </select>
+          </label>
+          <label>Backend
+            <select id="steerBackend">
+              <option>transformerlens</option>
+              <option>nnsight</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="steering-grid">
+          <section>
+            <div class="section-title">Feature Supernodes</div>
+            <div class="actions steering-actions">
+              <button id="steerAllBtn" type="button" class="secondary">Steer All</button>
+              <button id="unsteerAllBtn" type="button" class="secondary">Unsteer All</button>
+            </div>
+            <div id="steeringNodeList" class="steering-node-list muted">Load a summary first.</div>
+          </section>
+
+          <section>
+            <div class="section-title">Settings</div>
+            <div class="two-col steering-settings">
+              <label><input id="steerFreezeAttention" type="checkbox" checked /> Freeze Attention</label>
+              <label>Top K <input id="steerTopK" type="number" min="1" max="20" value="5" /></label>
+              <label>Layers Below <input id="steerLayersBelow" type="number" min="0" max="64" value="0" /></label>
+              <label>Layers Above <input id="steerLayersAbove" type="number" min="0" max="64" value="1" /></label>
+              <label>Edge Threshold <input id="steerEdgeThreshold" type="number" min="0" max="1" step="0.05" value="0.1" /></label>
+            </div>
+            <div id="steeringResult" class="steering-result muted">Steering output appears here.</div>
+          </section>
+        </div>
+
+        <footer>
+          <div class="progress-status">
+            <span id="steeringStatus" class="status"></span>
+            <div id="steeringProgressRow" class="progress-row" hidden>
+              <progress id="steeringProgress" max="1" value="0"></progress>
+              <span id="steeringProgressText">0%</span>
+            </div>
+          </div>
+          <button id="startSteeringBtn" type="button" class="primary">Steer</button>
         </footer>
       </form>
     </dialog>

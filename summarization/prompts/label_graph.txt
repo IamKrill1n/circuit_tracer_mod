@@ -48,7 +48,7 @@ Output:
 
 Trash:
 - No consistent pattern exists.
-- Evidence is contradictory, noisy, or insufficient.
+- Evidence is noisy, unrelated to the computation.
 - Use only when no meaningful interpretation can be supported.
 
 --------------------------------------------------

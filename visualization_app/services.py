@@ -6,8 +6,11 @@ import shutil
 import time
 import urllib.parse
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Literal, cast
+
+import numpy as np
 
 from config import HUGGINGFACE_API_KEY
 
@@ -680,7 +683,250 @@ def summary_metadata(sng) -> list[dict[str, Any]]:
             "role": supernode.role,
             "description": supernode.description,
             "type": supernode.type,
+            "layer_min": supernode.layer_min,
+            "layer_max": supernode.layer_max,
             "members": supernode.member_node_ids(),
         }
         for supernode in sng.supernodes
     ]
+
+
+def steering_options(
+    slug: str,
+    root: Path = GRAPH_ROOT,
+    pt_root: Path = GENERATED_GRAPH_ROOT,
+) -> dict[str, Any]:
+    from summarization.summarize import SummaryGraph
+
+    safe_slug = slugify(slug)
+    record = load_graph_record(safe_slug, root, pt_root)
+    summary_file = summary_path(safe_slug, pt_root)
+    if not summary_file.exists():
+        raise FileNotFoundError(f"Summary has not been generated for graph {safe_slug!r}.")
+
+    sng = SummaryGraph.load(str(summary_file))
+    prompt = str(sng.metadata.get("prompt", "") or record.prompt or "")
+    pt_path = find_pt_path(safe_slug, pt_root)
+    inferred_model = ""
+    inferred_transcoder = record.scan
+    if pt_path is not None:
+        inferred_model, inferred_transcoder = infer_graph_model_and_scan(pt_path)
+
+    supernodes = [
+        {
+            "name": supernode.name,
+            "role": supernode.role,
+            "description": supernode.description,
+            "layer_min": supernode.layer_min,
+            "layer_max": supernode.layer_max,
+            "feature_count": len(
+                [
+                    node
+                    for node in supernode.features
+                    if node.feature_type == "cross layer transcoder"
+                ]
+            ),
+        }
+        for supernode in sng.supernodes
+        if supernode.type == "features"
+    ]
+    return {
+        "slug": safe_slug,
+        "prompt": prompt,
+        "model_name": inferred_model,
+        "transcoder": inferred_transcoder,
+        "supernodes": supernodes,
+    }
+
+
+@lru_cache(maxsize=1)
+def _load_steering_model(
+    model_name: str,
+    transcoder: str,
+    dtype: Literal["float32", "float16", "bfloat16"],
+    backend: Literal["transformerlens", "nnsight"],
+):
+    import torch
+    from circuit_tracer import ReplacementModel
+
+    dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
+    return ReplacementModel.from_pretrained(
+        model_name,
+        transcoder,
+        dtype=dtype_map[dtype],
+        lazy_encoder=True,
+        backend=backend,
+    )
+
+
+def _steering_intervention_graph(
+    sng,
+    factors: dict[str, float],
+    prompt: str,
+    orig_activations,
+    new_activations,
+    edge_threshold: float,
+):
+    from graph_visualization import Feature, InterventionGraph
+    from graph_visualization import Supernode as VizSupernode
+
+    drawn = [supernode for supernode in sng.supernodes if supernode.type != "logit"]
+    viz_by_name: dict[str, VizSupernode] = {}
+    for supernode in drawn:
+        features = [
+            Feature(int(node.node_id.split("_")[0]), node.ctx_idx, int(node.node_id.split("_")[1]))
+            for node in supernode.features
+            if node.feature_type == "cross layer transcoder"
+        ]
+        viz_by_name[supernode.name] = VizSupernode(
+            name=supernode.name,
+            features=features or None,
+            children=[],
+        )
+
+    layer_of = {supernode.name: supernode.layer_min for supernode in drawn}
+    ordered_layers = sorted(set(layer_of.values()))
+    layer_row = {layer: i for i, layer in enumerate(ordered_layers)}
+    rows: list[list[VizSupernode]] = [[] for _layer in ordered_layers]
+    for supernode in drawn:
+        rows[layer_row[layer_of[supernode.name]]].append(viz_by_name[supernode.name])
+
+    sn_adj = np.asarray(sng.adj_matrix, dtype=np.float64)
+    idx = {supernode.name: i for i, supernode in enumerate(sng.supernodes)}
+    max_abs = float(np.max(np.abs(sn_adj))) if sn_adj.size else 1.0
+    for source in drawn:
+        for target in drawn:
+            if target.name == source.name:
+                continue
+            if layer_row[layer_of[target.name]] <= layer_row[layer_of[source.name]]:
+                continue
+            weight = float(sn_adj[idx[target.name], idx[source.name]])
+            if abs(weight) >= edge_threshold * max_abs:
+                viz_by_name[source.name].children.append(viz_by_name[target.name])
+
+    intervention_graph = InterventionGraph(ordered_nodes=rows, prompt=prompt)
+    for supernode in drawn:
+        node = viz_by_name[supernode.name]
+        intervention_graph.initialize_node(node, orig_activations)
+        if supernode.name in factors:
+            node.activation = None
+            node.intervention = f"{factors[supernode.name]:g}x"
+        elif node.features:
+            pairs = [
+                (orig_activations[feature].item(), new_activations[feature].item())
+                for feature in node.features
+            ]
+            active = [(orig, new) for orig, new in pairs if abs(orig) > 1e-6]
+            node.activation = (
+                float(np.mean([new / orig for orig, new in active])) if active else None
+            )
+        else:
+            node.activation = None
+    return intervention_graph
+
+
+def run_steering(
+    *,
+    slug: str,
+    factors: dict[str, float],
+    model_name: str = "",
+    transcoder: str = "",
+    dtype: Literal["float32", "float16", "bfloat16"] = "bfloat16",
+    backend: Literal["transformerlens", "nnsight"] = "transformerlens",
+    freeze_attention: bool = True,
+    layers_below: int = 0,
+    layers_above: int = 1,
+    edge_threshold: float = 0.1,
+    top_k: int = 5,
+    root: Path = GRAPH_ROOT,
+    pt_root: Path = GENERATED_GRAPH_ROOT,
+    progress: Callable[[str, float | None], None] | None = None,
+) -> dict[str, Any]:
+    from graph_visualization import create_graph_visualization
+    from summarization.summarize import SummaryGraph, steer_interventions_constrained
+
+    safe_slug = slugify(slug)
+    if not factors:
+        raise ValueError("Select at least one feature supernode to steer.")
+
+    options = steering_options(safe_slug, root, pt_root)
+    prompt = str(options["prompt"])
+    if not prompt:
+        raise ValueError("Summary graph metadata lacks a prompt; cannot run steering.")
+
+    resolved_model = model_name.strip() or str(options["model_name"])
+    resolved_transcoder = transcoder.strip() or str(options["transcoder"])
+    if not resolved_model or not resolved_transcoder:
+        raise ValueError("model_name and transcoder are required for steering.")
+
+    summary_file = summary_path(safe_slug, pt_root)
+    sng = SummaryGraph.load(str(summary_file))
+    valid_names = {supernode.name for supernode in sng.supernodes if supernode.type == "features"}
+    unknown = sorted(set(factors) - valid_names)
+    if unknown:
+        raise ValueError(f"Unknown feature supernode(s): {', '.join(unknown)}")
+
+    def report(message: str, value: float | None = None) -> None:
+        if progress is not None:
+            progress(message, value)
+
+    report("Loading steering model", 0.1)
+    model = _load_steering_model(resolved_model, resolved_transcoder, dtype, backend)
+
+    report("Reading clean activations", 0.25)
+    steer_tokens = model.ensure_tokenized(prompt)
+    _, orig_activations = model.get_activations(steer_tokens)
+    steered = [supernode for supernode in sng.supernodes if supernode.name in factors]
+
+    report("Building constrained interventions", 0.35)
+    groups = steer_interventions_constrained(
+        steered,
+        orig_activations,
+        factors,
+        layers_below=int(layers_below),
+        layers_above=int(layers_above),
+    )
+
+    report("Running steering passes", 0.45)
+    base_logits, _ = model.feature_intervention(steer_tokens, [], return_activations=False)
+    new_logits = base_logits.clone()
+    new_activations = orig_activations.clone()
+    for window, interventions in groups:
+        group_logits, _ = model.feature_intervention(
+            steer_tokens,
+            interventions,
+            constrained_layers=window,
+            freeze_attention=freeze_attention,
+            return_activations=False,
+        )
+        new_logits += group_logits - base_logits
+        for layer, pos, feature, value in interventions:
+            new_activations[layer, pos, feature] = value
+
+    report("Rendering intervention graph", 0.85)
+    intervention_graph = _steering_intervention_graph(
+        sng,
+        factors,
+        prompt,
+        orig_activations,
+        new_activations,
+        edge_threshold,
+    )
+    top_probs, top_ids = new_logits.squeeze(0)[-1].softmax(-1).topk(int(top_k))
+    top_outputs = [
+        {"token": model.tokenizer.decode([int(token_id)]), "probability": float(probability)}
+        for token_id, probability in zip(top_ids.tolist(), top_probs.tolist())
+    ]
+    svg = create_graph_visualization(
+        intervention_graph,
+        [(item["token"], item["probability"]) for item in top_outputs],
+    )
+    return {
+        "slug": safe_slug,
+        "prompt": prompt,
+        "model_name": resolved_model,
+        "transcoder": resolved_transcoder,
+        "steered": factors,
+        "top_outputs": top_outputs,
+        "svg": svg.data,
+    }

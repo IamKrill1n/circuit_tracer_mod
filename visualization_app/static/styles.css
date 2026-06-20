@@ -317,6 +317,91 @@ progress {
   accent-color: #047857;
 }
 
+.steering-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.9fr) minmax(360px, 1.1fr);
+  gap: 18px;
+  min-height: 360px;
+}
+
+.steering-actions {
+  margin-bottom: 10px;
+}
+
+.steering-node-list {
+  display: grid;
+  gap: 8px;
+  max-height: 430px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.steering-node {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #d8e0ea;
+  border-radius: 7px;
+  padding: 9px 10px;
+}
+
+.steering-node-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.steering-node-main input {
+  width: auto;
+}
+
+.steering-node-main strong,
+.steering-node-main small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.steering-node-main small {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.steering-settings {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.steering-settings label:first-child {
+  align-items: center;
+  grid-template-columns: auto 1fr;
+}
+
+.steering-settings label:first-child input {
+  width: auto;
+}
+
+.steering-result {
+  margin-top: 14px;
+  min-height: 220px;
+  border: 1px solid #d8e0ea;
+  border-radius: 7px;
+  padding: 10px;
+  background: #f8fafc;
+  overflow: auto;
+}
+
+.steering-outputs {
+  margin-bottom: 10px;
+}
+
+.steering-svg {
+  min-width: 700px;
+}
+
 @media (max-width: 1180px) {
   .layout {
     grid-template-columns: 280px 1fr;
@@ -335,7 +420,8 @@ progress {
   }
 
   .layout,
-  .two-col {
+  .two-col,
+  .steering-grid {
     grid-template-columns: 1fr;
   }
 

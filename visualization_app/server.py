@@ -101,6 +101,19 @@ class SummaryRequest(BaseModel):
     thinking_effort: str = "off"
 
 
+class SteeringRequest(BaseModel):
+    factors: dict[str, float]
+    model_name: str = ""
+    transcoder: str = ""
+    dtype: str = "bfloat16"
+    backend: str = "transformerlens"
+    freeze_attention: bool = True
+    layers_below: int = 0
+    layers_above: int = 1
+    edge_threshold: float = 0.1
+    top_k: int = 5
+
+
 app = FastAPI(title="Circuit Tracer Visualization App")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -322,6 +335,43 @@ def summarize_graph(slug: str, req: SummaryRequest) -> dict[str, Any]:
         lambda progress: services.run_summary(
             slug=safe_slug,
             settings=req.model_dump(),
+            progress=progress,
+        ),
+    )
+    return {"job": _json_job(job)}
+
+
+@app.get("/api/graphs/{slug}/steering-options")
+def steering_options(slug: str) -> dict[str, Any]:
+    safe_slug = services.slugify(slug)
+    try:
+        return services.steering_options(safe_slug)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/graphs/{slug}/steer")
+def steer_graph(slug: str, req: SteeringRequest) -> dict[str, Any]:
+    safe_slug = services.slugify(slug)
+    try:
+        services.load_graph_record(safe_slug)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    job = _submit_job(
+        "steering",
+        lambda progress: services.run_steering(
+            slug=safe_slug,
+            factors=req.factors,
+            model_name=req.model_name,
+            transcoder=req.transcoder,
+            dtype=req.dtype,  # type: ignore[arg-type]
+            backend=req.backend,  # type: ignore[arg-type]
+            freeze_attention=req.freeze_attention,
+            layers_below=req.layers_below,
+            layers_above=req.layers_above,
+            edge_threshold=req.edge_threshold,
+            top_k=req.top_k,
             progress=progress,
         ),
     )

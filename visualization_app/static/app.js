@@ -2,6 +2,7 @@ const state = {
   graphs: [],
   activeSlug: null,
   summary: null,
+  steeringOptions: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -59,7 +60,9 @@ async function selectGraph(slug, useSummary = false) {
   el("activeMeta").textContent = graph ? `${graph.scan || "unknown scan"} - ${graph.prompt || "no prompt metadata"}` : "";
   el("summaryBtn").disabled = !graph?.has_pt;
   el("showSummaryBtn").disabled = !graph?.has_summary;
+  el("steerBtn").disabled = !graph?.has_summary;
   el("showRawBtn").disabled = false;
+  state.steeringOptions = null;
   await openViewer(useSummary);
 }
 
@@ -187,12 +190,145 @@ function summaryPayload() {
   };
 }
 
+async function openSteeringDialog() {
+  if (!state.activeSlug) return;
+  const status = el("steeringStatus");
+  const list = el("steeringNodeList");
+  const result = el("steeringResult");
+  status.textContent = "Loading steering options...";
+  result.className = "steering-result muted";
+  result.textContent = "Steering output appears here.";
+  el("steeringProgressRow").hidden = true;
+  el("steeringDialog").showModal();
+  try {
+    const payload = await api(`/api/graphs/${encodeURIComponent(state.activeSlug)}/steering-options`);
+    state.steeringOptions = payload;
+    el("steerModel").value = payload.model_name || "";
+    el("steerTranscoder").value = payload.transcoder || "";
+    renderSteeringNodes(payload.supernodes || []);
+    status.textContent = `${payload.supernodes.length} feature supernode(s) available.`;
+  } catch (error) {
+    list.className = "steering-node-list muted";
+    list.textContent = error.message;
+    status.textContent = error.message;
+  }
+}
+
+function renderSteeringNodes(supernodes) {
+  const list = el("steeringNodeList");
+  list.innerHTML = "";
+  if (!supernodes.length) {
+    list.className = "steering-node-list muted";
+    list.textContent = "No feature supernodes are available to steer.";
+    return;
+  }
+
+  list.className = "steering-node-list";
+  supernodes.forEach((supernode, index) => {
+    const row = document.createElement("div");
+    row.className = "steering-node";
+
+    const checkboxLabel = document.createElement("label");
+    checkboxLabel.className = "steering-node-main";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.dataset.steerName = supernode.name;
+    checkbox.checked = index === 0;
+    checkboxLabel.appendChild(checkbox);
+
+    const text = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = supernode.name;
+    const meta = document.createElement("small");
+    meta.textContent = `${supernode.feature_count} feature(s) · L${supernode.layer_min}-${supernode.layer_max}${supernode.role ? ` · ${supernode.role}` : ""}`;
+    text.appendChild(title);
+    text.appendChild(meta);
+    checkboxLabel.appendChild(text);
+
+    const factor = document.createElement("input");
+    factor.type = "number";
+    factor.step = "0.5";
+    factor.value = "-1";
+    factor.dataset.steerFactor = supernode.name;
+    factor.setAttribute("aria-label", `factor for ${supernode.name}`);
+
+    row.appendChild(checkboxLabel);
+    row.appendChild(factor);
+    list.appendChild(row);
+  });
+}
+
+function setAllSteeringNodes(checked) {
+  el("steeringNodeList")
+    .querySelectorAll("input[type='checkbox'][data-steer-name]")
+    .forEach((input) => {
+      input.checked = checked;
+    });
+}
+
+function steeringPayload() {
+  const factors = {};
+  const factorInputs = new Map();
+  el("steeringNodeList")
+    .querySelectorAll("input[data-steer-factor]")
+    .forEach((input) => {
+      factorInputs.set(input.dataset.steerFactor, input);
+    });
+
+  el("steeringNodeList")
+    .querySelectorAll("input[type='checkbox'][data-steer-name]")
+    .forEach((checkbox) => {
+      if (!checkbox.checked) return;
+      const name = checkbox.dataset.steerName;
+      const factorInput = factorInputs.get(name);
+      factors[name] = Number(factorInput.value);
+    });
+
+  return {
+    factors,
+    model_name: el("steerModel").value,
+    transcoder: el("steerTranscoder").value,
+    dtype: el("steerDtype").value,
+    backend: el("steerBackend").value,
+    freeze_attention: el("steerFreezeAttention").checked,
+    layers_below: numberValue("steerLayersBelow"),
+    layers_above: numberValue("steerLayersAbove"),
+    edge_threshold: numberValue("steerEdgeThreshold"),
+    top_k: numberValue("steerTopK"),
+  };
+}
+
+function renderSteeringResult(result) {
+  const container = el("steeringResult");
+  container.className = "steering-result";
+  container.innerHTML = "";
+
+  const outputs = document.createElement("div");
+  outputs.className = "steering-outputs";
+  (result.top_outputs || []).forEach((item) => {
+    const pill = document.createElement("span");
+    pill.className = "pill";
+    pill.textContent = `${item.token} ${Number(item.probability).toFixed(3)}`;
+    outputs.appendChild(pill);
+  });
+
+  const svg = document.createElement("div");
+  svg.className = "steering-svg";
+  svg.innerHTML = result.svg || "";
+
+  container.appendChild(outputs);
+  container.appendChild(svg);
+}
+
 el("refreshBtn").addEventListener("click", refreshGraphs);
 el("newGraphBtn").addEventListener("click", () => el("generateDialog").showModal());
 el("uploadBtn").addEventListener("click", () => el("uploadDialog").showModal());
 el("summaryBtn").addEventListener("click", () => el("summaryDialog").showModal());
 el("showSummaryBtn").addEventListener("click", () => openViewer(true));
+el("steerBtn").addEventListener("click", openSteeringDialog);
 el("showRawBtn").addEventListener("click", () => openViewer(false));
+el("steerAllBtn").addEventListener("click", () => setAllSteeringNodes(true));
+el("unsteerAllBtn").addEventListener("click", () => setAllSteeringNodes(false));
 
 el("previewBtn").addEventListener("click", async () => {
   const out = el("previewOut");
@@ -272,6 +408,37 @@ el("startSummaryBtn").addEventListener("click", async () => {
       await refreshGraphs();
       el("summaryDialog").close();
       await selectGraph(state.activeSlug, true);
+    }, progressBar, progressText);
+  } finally {
+    startButton.disabled = false;
+  }
+});
+
+el("startSteeringBtn").addEventListener("click", async () => {
+  if (!state.activeSlug) return;
+  const status = el("steeringStatus");
+  const progressRow = el("steeringProgressRow");
+  const progressBar = el("steeringProgress");
+  const progressText = el("steeringProgressText");
+  const startButton = el("startSteeringBtn");
+  const req = steeringPayload();
+  if (!Object.keys(req.factors).length) {
+    status.textContent = "Select at least one feature supernode.";
+    return;
+  }
+
+  startButton.disabled = true;
+  progressRow.hidden = false;
+  updateProgress(progressBar, progressText, 0);
+  status.textContent = "Starting steering...";
+  try {
+    const payload = await api(`/api/graphs/${encodeURIComponent(state.activeSlug)}/steer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    await pollJob(payload.job, status, async (result) => {
+      renderSteeringResult(result);
     }, progressBar, progressText);
   } finally {
     startButton.disabled = false;
