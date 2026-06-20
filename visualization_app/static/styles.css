@@ -184,7 +184,8 @@ iframe {
 }
 
 dialog {
-  width: min(960px, calc(100vw - 32px));
+  width: min(1180px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
   border: 1px solid #cbd5e1;
   border-radius: 16px;
   padding: 0;
@@ -198,6 +199,8 @@ dialog::backdrop {
   position: relative;
   display: grid;
   gap: 18px;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
   padding: 28px 36px 24px;
 }
 
@@ -319,7 +322,7 @@ progress {
 
 .steering-grid {
   display: grid;
-  grid-template-columns: minmax(300px, 0.9fr) minmax(360px, 1.1fr);
+  grid-template-columns: minmax(420px, 0.95fr) minmax(380px, 1.05fr);
   gap: 18px;
   min-height: 360px;
 }
@@ -347,7 +350,15 @@ progress {
 }
 
 .steering-node.stored {
-  grid-template-columns: minmax(0, 1fr) 76px 76px auto;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.steering-node-controls {
+  display: grid;
+  grid-template-columns: minmax(76px, 96px) minmax(76px, 96px) auto;
+  gap: 10px;
+  justify-content: end;
+  align-items: center;
 }
 
 .steering-node-remove {
@@ -389,34 +400,51 @@ progress {
 
 .storage-filters {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 8px;
   align-items: end;
   margin-bottom: 10px;
 }
 
 .storage-list {
+  display: grid;
+  gap: 8px;
   max-height: 240px;
   overflow: auto;
 }
 
-.storage-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
+.storage-record {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #d8e0ea;
+  border-radius: 7px;
+  padding: 8px;
+  background: #ffffff;
 }
 
-.storage-table th,
-.storage-table td {
-  border-bottom: 1px solid #d8e0ea;
-  padding: 7px 6px;
-  text-align: left;
-  vertical-align: top;
+.storage-record-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
-.storage-table th {
+.storage-record-main strong,
+.storage-record-main span,
+.storage-record-main small {
+  overflow-wrap: anywhere;
+}
+
+.storage-record-main small {
   color: #475569;
+  font-size: 12px;
   font-weight: 700;
+}
+
+.storage-record-main span {
+  color: #64748b;
+  font-size: 12px;
 }
 
 .steering-settings {
@@ -469,9 +497,26 @@ progress {
 
   .layout,
   .two-col,
-  .steering-grid,
-  .storage-filters {
+  .steering-grid {
     grid-template-columns: 1fr;
+  }
+
+  .modal {
+    padding: 24px 18px 20px;
+  }
+
+  .steering-node,
+  .storage-record {
+    grid-template-columns: 1fr;
+  }
+
+  .steering-node-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+
+  .steering-node-remove {
+    grid-column: 1 / -1;
   }
 
   .layout {

@@ -313,10 +313,14 @@ function renderSteeringNodes(supernodes) {
       renderSteeringNodes(state.steeringOptions?.supernodes || []);
     });
 
+    const controls = document.createElement("div");
+    controls.className = "steering-node-controls";
+    controls.appendChild(factor);
+    controls.appendChild(target);
+    controls.appendChild(remove);
+
     row.appendChild(main);
-    row.appendChild(factor);
-    row.appendChild(target);
-    row.appendChild(remove);
+    row.appendChild(controls);
     list.appendChild(row);
   });
 }
@@ -329,16 +333,25 @@ function setAllSteeringNodes(checked) {
     });
 }
 
-async function loadSupernodeStorage() {
+async function loadSupernodeStorage({ rebuild = false } = {}) {
+  el("supernodeStorageList").className = "storage-list muted";
+  el("supernodeStorageList").textContent = rebuild
+    ? "Rebuilding storage index from saved summaries..."
+    : "Loading stored supernodes...";
   const params = new URLSearchParams();
   const label = el("storageLabelFilter").value.trim();
   const role = el("storageRoleFilter").value.trim();
   const description = el("storageDescriptionFilter").value.trim();
   const source = el("storageSourceFilter").value.trim();
+  const modelName = el("steerModel").value.trim();
+  const transcoder = el("steerTranscoder").value.trim();
   if (label) params.set("label", label);
   if (role) params.set("role", role);
   if (description) params.set("description", description);
   if (source) params.set("source_slug", source);
+  if (modelName) params.set("model_name", modelName);
+  if (transcoder) params.set("transcoder", transcoder);
+  if (rebuild) params.set("rebuild", "true");
   const suffix = params.toString() ? `?${params.toString()}` : "";
   const payload = await api(`/api/supernode-storage${suffix}`);
   state.storageRecords = payload.records || [];
@@ -350,52 +363,38 @@ function renderSupernodeStorage(records) {
   container.innerHTML = "";
   if (!records.length) {
     container.className = "storage-list muted";
-    container.textContent = "No stored supernodes match the filters.";
+    container.textContent = "No stored supernodes are indexed yet. Generate a summary or rebuild the index.";
     return;
   }
 
   container.className = "storage-list";
-  const table = document.createElement("table");
-  table.className = "storage-table";
-  const thead = document.createElement("thead");
-  const header = document.createElement("tr");
-  ["Label", "Role", "Description", "Source", "Layers", "Features", ""].forEach((label) => {
-    const th = document.createElement("th");
-    th.textContent = label;
-    header.appendChild(th);
-  });
-  thead.appendChild(header);
-  table.appendChild(thead);
-
-  const tbody = document.createElement("tbody");
   records.forEach((record) => {
-    const row = document.createElement("tr");
-    const fields = [
-      record.label,
-      record.role || "",
-      record.description || "",
-      record.source_slug,
-      `L${record.layer_min}-${record.layer_max}`,
-      String(record.feature_count),
-    ];
-    fields.forEach((value) => {
-      const td = document.createElement("td");
-      td.textContent = value;
-      row.appendChild(td);
-    });
+    const row = document.createElement("div");
+    row.className = "storage-record";
 
-    const action = document.createElement("td");
+    const main = document.createElement("div");
+    main.className = "storage-record-main";
+    const title = document.createElement("strong");
+    title.textContent = record.label;
+    const meta = document.createElement("small");
+    meta.textContent = `${record.role || "Feature"} · L${record.layer_min}-${record.layer_max} · ${record.feature_count} feature(s) · ${record.source_slug}`;
+    const description = document.createElement("span");
+    description.textContent = record.description || "";
+    main.appendChild(title);
+    main.appendChild(meta);
+    if (description.textContent) {
+      main.appendChild(description);
+    }
+
     const button = document.createElement("button");
     button.type = "button";
     button.className = "secondary";
     button.textContent = "Add";
     button.addEventListener("click", () => addStoredSupernode(record));
-    action.appendChild(button);
-    row.appendChild(action);
-    tbody.appendChild(row);
+    row.appendChild(main);
+    row.appendChild(button);
+    container.appendChild(row);
   });
-  table.appendChild(tbody);
-  container.appendChild(table);
 }
 
 function addStoredSupernode(record) {
@@ -498,6 +497,8 @@ el("addStoredSupernodeBtn").addEventListener("click", async () => {
   const panel = el("supernodeStoragePanel");
   panel.hidden = !panel.hidden;
   if (!panel.hidden) {
+    el("supernodeStorageList").className = "storage-list muted";
+    el("supernodeStorageList").textContent = "Loading stored supernodes...";
     try {
       await loadSupernodeStorage();
     } catch (error) {
@@ -509,6 +510,14 @@ el("addStoredSupernodeBtn").addEventListener("click", async () => {
 el("storageSearchBtn").addEventListener("click", async () => {
   try {
     await loadSupernodeStorage();
+  } catch (error) {
+    el("supernodeStorageList").className = "storage-list muted";
+    el("supernodeStorageList").textContent = error.message;
+  }
+});
+el("storageRebuildBtn").addEventListener("click", async () => {
+  try {
+    await loadSupernodeStorage({ rebuild: true });
   } catch (error) {
     el("supernodeStorageList").className = "storage-list muted";
     el("supernodeStorageList").textContent = error.message;

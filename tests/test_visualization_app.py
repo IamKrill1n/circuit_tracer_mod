@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -116,6 +117,50 @@ def test_steering_request_defaults_match_streamlit_workflow() -> None:
     assert stored_req.stored_supernodes[0].record_id == "austin:0"
     assert stored_req.stored_supernodes[0].factor == 2.0
     assert stored_req.stored_supernodes[0].target_pos == 3
+
+
+def test_load_steering_model_suppresses_dependency_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenWriter:
+        def write(self, _text: str) -> int:
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def flush(self) -> None:
+            raise BrokenPipeError(32, "Broken pipe")
+
+    expected_model = object()
+    captured_args: tuple[object, ...] | None = None
+    captured_kwargs: dict[str, object] | None = None
+
+    def fake_from_pretrained(*args, **kwargs):
+        nonlocal captured_args, captured_kwargs
+        print("dependency stdout")
+        print("dependency stderr", file=sys.stderr)
+        captured_args = args
+        captured_kwargs = kwargs
+        return expected_model
+
+    services._load_steering_model.cache_clear()
+    monkeypatch.setattr("circuit_tracer.ReplacementModel.from_pretrained", fake_from_pretrained)
+    monkeypatch.setattr(sys, "stdout", BrokenWriter())
+    monkeypatch.setattr(sys, "stderr", BrokenWriter())
+
+    try:
+        model = services._load_steering_model(
+            "model",
+            "transcoder",
+            "float32",
+            "transformerlens",
+        )
+    finally:
+        services._load_steering_model.cache_clear()
+
+    assert model is expected_model
+    assert captured_args == ("model", "transcoder")
+    assert captured_kwargs is not None
+    assert captured_kwargs["lazy_encoder"] is True
+    assert captured_kwargs["backend"] == "transformerlens"
 
 
 def test_steering_options_reads_feature_supernodes(tmp_path: Path) -> None:
@@ -237,6 +282,8 @@ def test_supernode_storage_filters_by_label_role_and_description(tmp_path: Path)
                 "role": "Input",
                 "description": "Tracks the source entity.",
                 "source_slug": "austin",
+                "model_name": "google/gemma-2-2b",
+                "transcoder": "mntss/clt-gemma-2-2b-2.5M",
             },
             {
                 "record_id": "b:0",
@@ -244,6 +291,8 @@ def test_supernode_storage_filters_by_label_role_and_description(tmp_path: Path)
                 "role": "Abstract",
                 "description": "Combines relation evidence.",
                 "source_slug": "boston",
+                "model_name": "Qwen/Qwen3-4B",
+                "transcoder": "mwhanna/qwen3-4b-transcoders",
             },
         ],
     }
@@ -252,10 +301,16 @@ def test_supernode_storage_filters_by_label_role_and_description(tmp_path: Path)
     by_label = services.list_supernode_storage(label="entity", pt_root=pt_root)
     by_role = services.list_supernode_storage(role="abstract", pt_root=pt_root)
     by_description = services.list_supernode_storage(description="source", pt_root=pt_root)
+    by_model = services.list_supernode_storage(model_name="google/gemma-2-2b", pt_root=pt_root)
+    by_transcoder = services.list_supernode_storage(
+        transcoder="mwhanna/qwen3-4b-transcoders", pt_root=pt_root
+    )
 
     assert [record["record_id"] for record in by_label["records"]] == ["a:0"]
     assert [record["record_id"] for record in by_role["records"]] == ["b:0"]
     assert [record["record_id"] for record in by_description["records"]] == ["a:0"]
+    assert [record["record_id"] for record in by_model["records"]] == ["a:0"]
+    assert [record["record_id"] for record in by_transcoder["records"]] == ["b:0"]
 
 
 def test_supernode_storage_endpoint_forwards_filters(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -284,7 +339,9 @@ def test_supernode_storage_endpoint_forwards_filters(monkeypatch: pytest.MonkeyP
     client = TestClient(app)
 
     response = client.get(
-        "/api/supernode-storage?label=Entity&role=Input&description=source&source_slug=austin"
+        "/api/supernode-storage?label=Entity&role=Input&description=source"
+        "&source_slug=austin&model_name=google%2Fgemma-2-2b"
+        "&transcoder=mntss%2Fclt-gemma-2-2b-2.5M"
     )
 
     assert response.status_code == 200
@@ -293,8 +350,43 @@ def test_supernode_storage_endpoint_forwards_filters(monkeypatch: pytest.MonkeyP
         "role": "Input",
         "description": "source",
         "source_slug": "austin",
+        "model_name": "google/gemma-2-2b",
+        "transcoder": "mntss/clt-gemma-2-2b-2.5M",
     }
     assert response.json()["records"][0]["label"] == "Entity label"
+
+
+def test_stored_supernode_intervention_rejects_model_mismatch(tmp_path: Path) -> None:
+    pt_root = tmp_path / "generated_graphs"
+    pt_root.mkdir()
+    payload = {
+        "version": 1,
+        "records": [
+            {
+                "record_id": "donor:0",
+                "source_slug": "donor",
+                "source_path": str(pt_root / "donor.sng.pt"),
+                "supernode_index": 0,
+                "label": "Stored donor",
+                "model_name": "model-a",
+                "transcoder": "tc-a",
+            }
+        ],
+    }
+    services.supernode_storage_path(pt_root).write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="indexed for model"):
+        services._stored_supernode_intervention_groups(
+            [{"record_id": "donor:0", "factor": 1.0, "target_pos": 0}],
+            n_pos=1,
+            n_layers=1,
+            d_transcoder=1,
+            model_name="model-b",
+            transcoder="tc-a",
+            layers_below=0,
+            layers_above=1,
+            pt_root=pt_root,
+        )
 
 
 def test_token_weights_from_shap_uses_graph_target_token(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -243,12 +243,19 @@ def supernode_storage(
     role: str = "",
     description: str = "",
     source_slug: str = "",
+    model_name: str = "",
+    transcoder: str = "",
+    rebuild: bool = False,
 ) -> dict[str, Any]:
+    if rebuild:
+        services.rebuild_supernode_storage()
     return services.list_supernode_storage(
         label=label,
         role=role,
         description=description,
         source_slug=source_slug,
+        model_name=model_name,
+        transcoder=transcoder,
     )
 
 

@@ -6,6 +6,8 @@ import pickle
 import shutil
 import time
 import urllib.parse
+from collections.abc import Iterator
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -24,6 +26,13 @@ GENERATED_GRAPH_ROOT = REPO / "generated_graphs"
 MAX_SUBGRAPH_VIEWER_NODES = 200
 SUPERNODE_STORAGE_FILENAME = "supernode_storage.json"
 SUPERNODE_STORAGE_VERSION = 1
+
+
+@contextmanager
+def _quiet_dependency_output() -> Iterator[None]:
+    with open(os.devnull, "w", encoding="utf-8") as sink:
+        with redirect_stdout(sink), redirect_stderr(sink):
+            yield
 
 
 def slugify(text: str) -> str:
@@ -255,13 +264,14 @@ def generate_graph(
     )
 
     dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
-    model = ReplacementModel.from_pretrained(
-        model_name,
-        transcoder,
-        dtype=dtype_map[dtype],
-        lazy_encoder=True,
-        backend=backend,
-    )
+    with _quiet_dependency_output():
+        model = ReplacementModel.from_pretrained(
+            model_name,
+            transcoder,
+            dtype=dtype_map[dtype],
+            lazy_encoder=True,
+            backend=backend,
+        )
     try:
         graph = attribute(
             prompt=formatted_prompt,
@@ -314,13 +324,14 @@ def preview_prompt(
         qwen_enable_thinking=qwen_enable_thinking,
     )
     dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
-    model = ReplacementModel.from_pretrained(
-        model_name,
-        transcoder,
-        dtype=dtype_map[dtype],
-        lazy_encoder=True,
-        backend=backend,
-    )
+    with _quiet_dependency_output():
+        model = ReplacementModel.from_pretrained(
+            model_name,
+            transcoder,
+            dtype=dtype_map[dtype],
+            lazy_encoder=True,
+            backend=backend,
+        )
     try:
         tokenizer = model.tokenizer
         input_ids = model.ensure_tokenized(formatted_prompt)
@@ -585,7 +596,7 @@ def run_summary(
         sng.save(str(out))
 
     report("Updating supernode storage", 0.93)
-    rebuild_supernode_storage(root, pt_root)
+    upsert_summary_supernode_storage(safe_slug, out, root, pt_root)
 
     report("Preparing viewer import", 0.96)
     pinned_ids, supernodes, stats = summary_graph_viewer_payload(sng)
@@ -811,16 +822,69 @@ def rebuild_supernode_storage(
     return payload
 
 
+def _empty_supernode_storage() -> dict[str, Any]:
+    return {
+        "version": SUPERNODE_STORAGE_VERSION,
+        "records": [],
+        "updated_at": None,
+    }
+
+
 def load_supernode_storage(
     root: Path = GRAPH_ROOT,
     pt_root: Path = GENERATED_GRAPH_ROOT,
 ) -> dict[str, Any]:
     path = supernode_storage_path(pt_root)
     if not path.exists():
-        return rebuild_supernode_storage(root, pt_root)
+        return _empty_supernode_storage()
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("version") != SUPERNODE_STORAGE_VERSION:
-        return rebuild_supernode_storage(root, pt_root)
+        return _empty_supernode_storage()
+    return payload
+
+
+def upsert_summary_supernode_storage(
+    slug: str,
+    summary_file: Path,
+    root: Path = GRAPH_ROOT,
+    pt_root: Path = GENERATED_GRAPH_ROOT,
+) -> dict[str, Any]:
+    from summarization.summarize import SummaryGraph
+
+    safe_slug = slugify(slug)
+    existing = load_supernode_storage(root, pt_root)
+    records = [
+        record
+        for record in existing.get("records") or []
+        if str(record.get("source_slug") or "") != safe_slug
+    ]
+
+    sng = SummaryGraph.load(str(summary_file))
+    model_name, transcoder, prompt = _summary_source_metadata(safe_slug, sng, root, pt_root)
+    source_mtime = summary_file.stat().st_mtime
+    for supernode_index, supernode in enumerate(sng.supernodes):
+        record = _storage_record_for_supernode(
+            slug=safe_slug,
+            source_path=summary_file,
+            source_mtime=source_mtime,
+            supernode_index=supernode_index,
+            supernode=supernode,
+            model_name=model_name,
+            transcoder=transcoder,
+            prompt=prompt,
+        )
+        if record is not None:
+            records.append(record)
+
+    payload = {
+        "version": SUPERNODE_STORAGE_VERSION,
+        "records": records,
+        "updated_at": time.time(),
+    }
+    pt_root.mkdir(parents=True, exist_ok=True)
+    supernode_storage_path(pt_root).write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     return payload
 
 
@@ -830,6 +894,8 @@ def list_supernode_storage(
     role: str = "",
     description: str = "",
     source_slug: str = "",
+    model_name: str = "",
+    transcoder: str = "",
     root: Path = GRAPH_ROOT,
     pt_root: Path = GENERATED_GRAPH_ROOT,
 ) -> dict[str, Any]:
@@ -840,6 +906,8 @@ def list_supernode_storage(
     role_key = role.strip().casefold()
     description_key = description.strip().casefold()
     source_key = source_slug.strip().casefold()
+    model_key = model_name.strip()
+    transcoder_key = transcoder.strip()
     if label_key:
         records = [
             record
@@ -862,6 +930,14 @@ def list_supernode_storage(
             record
             for record in records
             if source_key in str(record.get("source_slug") or "").casefold()
+        ]
+    if model_key:
+        records = [
+            record for record in records if str(record.get("model_name") or "") == model_key
+        ]
+    if transcoder_key:
+        records = [
+            record for record in records if str(record.get("transcoder") or "") == transcoder_key
         ]
     return {
         "version": payload.get("version", SUPERNODE_STORAGE_VERSION),
@@ -941,13 +1017,14 @@ def _load_steering_model(
     from circuit_tracer import ReplacementModel
 
     dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
-    return ReplacementModel.from_pretrained(
-        model_name,
-        transcoder,
-        dtype=dtype_map[dtype],
-        lazy_encoder=True,
-        backend=backend,
-    )
+    with _quiet_dependency_output():
+        return ReplacementModel.from_pretrained(
+            model_name,
+            transcoder,
+            dtype=dtype_map[dtype],
+            lazy_encoder=True,
+            backend=backend,
+        )
 
 
 def _stored_supernode_intervention_groups(
@@ -956,6 +1033,8 @@ def _stored_supernode_intervention_groups(
     n_pos: int,
     n_layers: int,
     d_transcoder: int,
+    model_name: str,
+    transcoder: str,
     layers_below: int,
     layers_above: int,
     root: Path = GRAPH_ROOT,
@@ -988,6 +1067,18 @@ def _stored_supernode_intervention_groups(
 
         factor = float(selection.get("factor", -1.0))
         record = records[record_id]
+        record_model = str(record.get("model_name") or "")
+        record_transcoder = str(record.get("transcoder") or "")
+        if record_model and record_model != model_name:
+            raise ValueError(
+                f"Stored supernode {record_id} was indexed for model {record_model!r}, "
+                f"but the active graph uses {model_name!r}."
+            )
+        if record_transcoder and record_transcoder != transcoder:
+            raise ValueError(
+                f"Stored supernode {record_id} was indexed for transcoder "
+                f"{record_transcoder!r}, but the active graph uses {transcoder!r}."
+            )
         source_path = Path(str(record["source_path"]))
         if not source_path.exists():
             raise FileNotFoundError(f"Stored supernode source graph not found: {source_path}")
@@ -1175,6 +1266,8 @@ def run_steering(
         n_pos=int(orig_activations.shape[1]),
         n_layers=int(orig_activations.shape[0]),
         d_transcoder=int(orig_activations.shape[2]),
+        model_name=resolved_model,
+        transcoder=resolved_transcoder,
         layers_below=int(layers_below),
         layers_above=int(layers_above),
         root=root,
