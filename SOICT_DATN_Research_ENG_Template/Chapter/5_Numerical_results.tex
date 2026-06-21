@@ -393,9 +393,9 @@ preservation of visible causal structure.}
 \toprule
 Solver & Sil. raw $\uparrow$ & Down. gap $\uparrow$ & Signed down. gap $\uparrow$ & Internalized mass $\downarrow$ & DAG loss $\downarrow$ \\
 \midrule
-\textbf{Ours ILP} & 0.0409 & 0.0979 & 0.2907 & 0.0491 & 0.0984 \\
+Ours ILP & 0.0409 & \textbf{0.0979} & \textbf{0.2907} & \textbf{0.0491} & \textbf{0.0984} \\
 Spectral on role vectors & -0.0347 & 0.0272 & 0.1399 & 0.1081 & 0.1257 \\
-K-means on role vectors & 0.5058 & 0.0382 & 0.2824 & 0.0862 & 0.1423 \\
+K-means on role vectors & \textbf{0.5058} & 0.0382 & 0.2824 & 0.0862 & 0.1423 \\
 Spectral on adjacency & -0.4263 & 0.0434 & 0.0132 & 0.1590 & 0.1818 \\
 Random same-size clusters & -0.5908 & 0.0136 & 0.0050 & 0.0762 & 0.2058 \\
 \bottomrule
@@ -410,24 +410,29 @@ explicitly constrained by the ILP, the most independent evidence for coherent
 supernodes is the downstream-effect gap; the mass metrics show that this
 coherence is achieved while preserving visible causal structure.
 
-\subsection{Supernode labeling results}
-Figure~\ref{fig:our-summary} shows one summary graph produced by the proposed
-pipeline for an analogy prompt. The visualization keeps the prompt tokens and
-output logit visible while replacing many individual feature nodes with labeled
-supernodes, so the main signed pathways can be inspected at the level used by
-the steering evaluation.
+\subsection{Validating supernodes with entity swap steering}
 
-\begin{figure}[ht]
-\centering
-\includegraphics[width=\linewidth]{Figure/our_summary.png}
-\caption{Example summary graph for the prompt ``The saying goes: celery is to
-green as cherry is to''. The graph groups retained features into labeled
-supernodes and displays the signed pathways leading to the predicted output
-token.}
-\label{fig:our-summary}
-\end{figure}
+Entity-swap steering tests whether an Output-role supernode carries transferable
+answer-entity information, rather than only receiving a plausible post-hoc
+label. Within each BATS relation type, we form ordered source--donor pairs of
+prompts that share the same relation but have different target answers. The
+source prompt is first run without intervention to obtain its clean feature
+activations. We then suppress the source summary's Output CLT features by
+writing $-c$ times their clean activations, and inject the donor summary's
+Output CLT features at the source final-token position by writing $c$ times the
+donor activations. The coefficient $c$ controls the strength of the swap.
 
-\subsection{Steering results}
+This intervention asks whether replacing the answer-related Output state changes
+the source model prediction toward the donor answer. Pairs are skipped when the
+source and donor have the same target token, or when either summary lacks usable
+Output-role CLT features. The primary success criterion is strict: the clean
+source prediction must be the source target, and the steered top-1 prediction
+must become the donor target. We also record the unconditional donor top-1 rate
+and the source and donor target probabilities before and after steering. These
+probability measurements show partial transfer even when the top-1 token does
+not flip.
+
+\subsection{Validating edges results with intervention}
 Table~\ref{tab:steering-entmax-summary} summarizes the steering evaluation on
 the final entmax summary graphs. The result is averaged over 100 summary graphs
 from the $\alpha=0.5$, node-threshold $0.02$ condition and covers 13,881
@@ -463,9 +468,10 @@ and multi-hop prompts as a qualitative stress test. Pruning is measured by
 replacement score and graph completeness, with syntactic-feature counts used as
 a semantic check; clustering is measured by role-vector compactness,
 downstream-effect coherence, internalized edge mass, and DAG loss; steering is
-measured by sign consistency, edge-effect rank correlation, and probability
-changes. The results show that influence--relevance pruning preserves
-graph-level faithfulness while allowing more semantic selection, that the ILP
+measured by entity-swap transfer, sign consistency, edge-effect rank
+correlation, and probability changes. The results show that
+influence--relevance pruning preserves graph-level faithfulness while allowing
+more semantic selection, that the ILP
 clusterer yields the strongest downstream-effect coherence and lowest structural
 loss among the clustering baselines, and that both ILP and K-means summaries
 produce intervention-faithful signed edges. Chapter 6 discusses the limitations
