@@ -65,6 +65,12 @@ signals, but it is distinct from the supernode's final display label.
 A causal probe that scales the activations of selected feature supernodes in the original
 prompt computation and observes the resulting change in next-token outputs.
 
+## Entity-swap pair
+
+An ordered source→donor pair drawn from the same relation block for an entity-swap
+steering intervention. A sampled entity-swap pair is eligible: it is not a self-pair,
+does not share the same target token, and both graphs have usable Output role features.
+
 ## Model registry
 
 The catalogue mapping a **model name** to its **provider**, endpoint, credential source, and

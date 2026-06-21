@@ -13,6 +13,7 @@ import argparse
 import csv
 import logging
 import math
+import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -200,6 +201,13 @@ def _parse_relations(raw: str | None) -> list[int]:
     return list(dict.fromkeys(relations))
 
 
+def _nonnegative_int(raw: str) -> int:
+    value = int(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return value
+
+
 def _is_clt_node(node: Node) -> bool:
     return node.feature_type == "cross layer transcoder"
 
@@ -384,6 +392,29 @@ def _skip_pair_reason(source: GraphRecord, donor: GraphRecord) -> str | None:
     if donor.donor_status != "ok":
         return f"donor_{donor.donor_status}"
     return None
+
+
+def _eligible_ordered_pairs(records: list[GraphRecord]) -> list[tuple[GraphRecord, GraphRecord]]:
+    return [
+        (source, donor)
+        for source in records
+        for donor in records
+        if source.idx != donor.idx and _skip_pair_reason(source, donor) is None
+    ]
+
+
+def _sample_ordered_pairs(
+    pairs: list[tuple[GraphRecord, GraphRecord]],
+    sample_pairs_per_relation: int | None,
+    random_state: int,
+    relation_idx: int,
+) -> list[tuple[GraphRecord, GraphRecord]]:
+    if sample_pairs_per_relation is None or sample_pairs_per_relation >= len(pairs):
+        return pairs
+    if sample_pairs_per_relation < 0:
+        raise ValueError("--sample-pairs-per-relation must be non-negative")
+    rng = random.Random(random_state + relation_idx)
+    return rng.sample(pairs, sample_pairs_per_relation)
 
 
 def _skip_row(
@@ -607,16 +638,26 @@ def run_entity_swap(model: ReplacementModel, args: argparse.Namespace) -> None:
     records = [r for r in _load_graph_records(Path(args.graph_dir), Path(args.analogies_file))]
     layers_below = int(args.layers_below)
     layers_above = int(args.layers_above)
+    sample_pairs_per_relation = getattr(args, "sample_pairs_per_relation", None)
+    random_state = int(getattr(args, "random_state", 42))
 
     result_rows: list[dict] = []
     skip_rows: list[dict] = []
     for relation_idx in relations:
         relation_records = [r for r in records if r.relation_idx == relation_idx]
+        pairs = _sample_ordered_pairs(
+            _eligible_ordered_pairs(relation_records),
+            sample_pairs_per_relation,
+            random_state,
+            relation_idx,
+        )
+        sampled_pair_keys = {(source.idx, donor.idx) for source, donor in pairs}
         logger.info(
-            "processing relation %d (%s), %d graphs",
+            "processing relation %d (%s), %d graphs, %d sampled pairs",
             relation_idx,
             RELATION_NAMES[relation_idx],
             len(relation_records),
+            len(pairs),
         )
         for source in relation_records:
             source_inputs: torch.Tensor | None = None
@@ -638,6 +679,8 @@ def run_entity_swap(model: ReplacementModel, args: argparse.Namespace) -> None:
                             skip_rows.append(
                                 _skip_row(source, donor, source_factor, donor_factor, skip_reason)
                             )
+                    continue
+                if (source.idx, donor.idx) not in sampled_pair_keys:
                     continue
 
                 if clean_logits is None:
@@ -743,6 +786,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Comma-separated relation indices 0..9. Default: all relations.",
     )
+    parser.add_argument(
+        "--sample-pairs-per-relation",
+        type=_nonnegative_int,
+        default=None,
+        help="Randomly sample up to this many eligible ordered source->donor pairs per relation.",
+    )
+    parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--output-dir", type=Path, default=Path("eval_outputs/entity_swap"))
     parser.add_argument("--model-name", default="google/gemma-2-2b")
     parser.add_argument("--transcoder-set", default="mntss/clt-gemma-2-2b-2.5M")

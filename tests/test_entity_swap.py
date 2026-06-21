@@ -14,8 +14,10 @@ from eval.eval_entity_swap import (
     build_parser,
     _dedup_donor_features,
     _donor_interventions,
+    _eligible_ordered_pairs,
     _numeric_summary_paths,
     _relation_idx,
+    _sample_ordered_pairs,
     _select_output_clt_nodes,
     _skip_pair_reason,
     _source_interventions,
@@ -169,6 +171,33 @@ def test_default_factor_grid_excludes_plus_minus_one() -> None:
 
     assert args.negation_coefficients == "-2"
     assert args.addition_coefficients == "2,4,8"
+    assert args.sample_pairs_per_relation is None
+    assert args.random_state == 42
+
+
+def test_sample_ordered_pairs_uses_only_eligible_pairs_and_is_stable_by_relation() -> None:
+    records = [
+        _record(30, target_id=10, donor_features={(1, 10): 1.0}),
+        _record(31, target_id=11, donor_features={(1, 11): 1.0}),
+        _record(32, target_id=11, donor_features={(1, 12): 1.0}),
+        _record(33, target_id=13, output_status="missing_output_role"),
+    ]
+
+    pairs = _eligible_ordered_pairs(records)
+
+    assert [(source.idx, donor.idx) for source, donor in pairs] == [
+        (30, 31),
+        (30, 32),
+        (31, 30),
+        (32, 30),
+    ]
+    assert _sample_ordered_pairs(pairs, None, random_state=42, relation_idx=3) == pairs
+    assert _sample_ordered_pairs(pairs, 20, random_state=42, relation_idx=3) == pairs
+    sample = _sample_ordered_pairs(pairs, 2, random_state=42, relation_idx=3)
+
+    assert len(sample) == 2
+    assert sample == _sample_ordered_pairs(pairs, 2, random_state=42, relation_idx=3)
+    assert sample != _sample_ordered_pairs(pairs, 2, random_state=42, relation_idx=4)
 
 
 def test_summary_rows_group_by_relation_and_coefficient() -> None:
@@ -371,3 +400,83 @@ def test_run_entity_swap_uses_tokenized_inputs_for_model_calls(
     assert all(isinstance(inputs, torch.Tensor) for inputs in model.intervention_inputs)
     assert model.constrained_layers
     assert all(window for window in model.constrained_layers)
+
+
+def test_run_entity_swap_samples_eligible_pairs_before_interventions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = [
+        _record(
+            0,
+            target_id=4,
+            output_clt_nodes=[_node("0_1_1", 0)],
+            donor_features={(0, 1): 1.0},
+        ),
+        _record(
+            1,
+            target_id=5,
+            output_clt_nodes=[_node("0_2_1", 1)],
+            donor_features={(0, 2): 1.0},
+        ),
+        _record(
+            2,
+            target_id=6,
+            output_clt_nodes=[_node("0_3_1", 2)],
+            donor_features={(0, 3): 1.0},
+        ),
+    ]
+    monkeypatch.setattr(entity_swap, "_load_graph_records", lambda *_args: records)
+
+    class FakeModel:
+        def __init__(self) -> None:
+            self.tokenizer = self
+            self.intervention_count = 0
+            self.activations = torch.ones((1, 2, 8))
+
+        def ensure_tokenized(self, prompt: str) -> torch.Tensor:
+            idx = int(prompt.split()[-1])
+            return torch.tensor([0, idx])
+
+        def decode(self, token_ids: list[int]) -> str:
+            return f" tok{token_ids[0]}"
+
+        def get_activations(
+            self, inputs: torch.Tensor, sparse: bool = False
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            logits = torch.zeros((1, 2, 8))
+            logits[0, -1, int(inputs[-1]) + 4] = 5.0
+            return logits, self.activations.clone()
+
+        def feature_intervention(
+            self,
+            inputs: torch.Tensor,
+            interventions: list[tuple[int, int, int, float]],
+            constrained_layers: range | None = None,
+            freeze_attention: bool = True,
+            return_activations: bool = False,
+        ) -> tuple[torch.Tensor, None]:
+            self.intervention_count += 1
+            logits = torch.zeros((1, 2, 8))
+            logits[0, -1, 5] = 6.0
+            return logits, None
+
+    model = FakeModel()
+    args = argparse.Namespace(
+        negation_coefficients="-2",
+        addition_coefficients="2",
+        relations="0",
+        graph_dir=tmp_path,
+        analogies_file=tmp_path / "bats.txt",
+        output_dir=tmp_path / "out",
+        layers_below=0,
+        layers_above=1,
+        sample_pairs_per_relation=1,
+        random_state=42,
+    )
+
+    entity_swap.run_entity_swap(model, args)  # type: ignore[arg-type]
+
+    result_lines = (tmp_path / "out" / "swap_results.csv").read_text(encoding="utf-8").splitlines()
+    assert len(result_lines) == 2
+    assert model.intervention_count == 1
