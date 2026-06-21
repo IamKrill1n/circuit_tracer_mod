@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import html
 import math
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import plotly.graph_objects as go
@@ -164,6 +164,66 @@ def _edge_style(weight: float, max_abs_w: float) -> tuple[float, str]:
     else:
         color = f"rgba(203,24,29,{alpha:.3f})"
     return width, color
+
+
+def _format_factor(factor: float) -> str:
+    return f"{factor:g}x"
+
+
+def _format_ratio(ratio: float) -> str:
+    return f"{ratio * 100:.0f}%" if 0.0 <= ratio <= 2.0 else f"{ratio:.2g}x"
+
+
+def _steering_ratio_color(ratio: float) -> tuple[str, str]:
+    if ratio <= 0.25:
+        return "#F1F3F5", "#8A8F98"
+    if ratio < 0.80:
+        return "#FFF3CD", "#B7791F"
+    if ratio > 1.20:
+        return "#E6F4EA", "#2E7D32"
+    return "#FFFFFF", "#6B7280"
+
+
+def _top_output_label(top_outputs: list[Any] | None) -> str:
+    if not top_outputs:
+        return ""
+    first = top_outputs[0]
+    if isinstance(first, dict):
+        token = str(first.get("token", ""))
+        probability = float(first.get("probability", 0.0))
+    else:
+        token, probability = first
+        token = str(token)
+        probability = float(probability)
+    return f"{_clean_token(token)} {probability:.3f}"
+
+
+def _steering_hover_lines(
+    sn: str,
+    steering_factors: dict[str, float] | None,
+    activation_ratios: dict[str, float | None] | None,
+) -> list[str]:
+    lines: list[str] = []
+    if steering_factors is not None and sn in steering_factors:
+        lines.append(f"Intervention: {_format_factor(float(steering_factors[sn]))}")
+    ratio_value = activation_ratios.get(sn) if activation_ratios is not None else None
+    if ratio_value is not None:
+        ratio = float(ratio_value)
+        lines.append(f"Activation ratio: {_format_ratio(ratio)}")
+    return lines
+
+
+def _stored_intervention_text(stored_interventions: list[dict[str, Any]]) -> str:
+    lines = ["<b>External interventions</b>"]
+    for item in stored_interventions[:4]:
+        label = html.escape(str(item.get("label") or item.get("record_id") or "stored"))
+        factor = _format_factor(float(item.get("factor", 0.0)))
+        target_pos = int(item.get("target_pos", 0))
+        n_features = int(item.get("n_features", 0))
+        lines.append(f"{label}: {factor} at pos {target_pos} ({n_features} feats)")
+    if len(stored_interventions) > 4:
+        lines.append(f"+{len(stored_interventions) - 4} more")
+    return "<br>".join(lines)
 
 
 def _rounded_rect_path(x0: float, y0: float, x1: float, y1: float, rx: float, ry: float) -> str:
@@ -370,6 +430,10 @@ def supernode_graph_figure(
     use_supernode_names: bool = False,
     edge_threshold: float = 0.0,
     top_k_logits: int | None = None,
+    steering_factors: dict[str, float] | None = None,
+    activation_ratios: dict[str, float | None] | None = None,
+    top_outputs: list[Any] | None = None,
+    stored_interventions: list[dict[str, Any]] | None = None,
 ) -> go.Figure:
     """
     Build an interactive Plotly figure in the Anthropic attribution-graph style:
@@ -381,19 +445,27 @@ def supernode_graph_figure(
     ``edge_threshold`` (0-1) hides edges whose magnitude is below that fraction of
     the largest edge weight. ``top_k_logits`` keeps only the k highest-probability
     logit supernodes (and their edges); ``None`` shows all.
+
+    Steering overlays are optional and leave the summary graph unchanged:
+    ``steering_factors`` labels directly intervened supernodes, ``activation_ratios``
+    annotates cards whose activation changed relative to the clean run, ``top_outputs``
+    replaces the output-bar token with post-steering probabilities, and
+    ``stored_interventions`` records donor supernodes injected from other graphs.
     """
     # Duck-typing rather than isinstance so this survives Streamlit hot-reload,
     # which re-imports SummaryGraph and breaks isinstance on session-state objects.
     if hasattr(sng, "sn_names") and hasattr(sng, "adj_matrix"):
-        sn_names = sng.sn_names
-        sn_adj = np.asarray(sng.adj_matrix, dtype=np.float64)
-        mapping = final_supernodes if final_supernodes is not None else sng.to_mapping()
-        node_by_name = sng.node_by_name()
+        graph = cast(Any, sng)
+        sn_names = graph.sn_names
+        sn_adj = np.asarray(graph.adj_matrix, dtype=np.float64)
+        mapping = final_supernodes if final_supernodes is not None else graph.to_mapping()
+        node_by_name = graph.node_by_name()
     else:
         if final_supernodes is None:
             raise ValueError("final_supernodes is required when sng is a plain dict.")
-        sn_names = list(sng["sn_names"])
-        sn_adj = np.asarray(sng["sn_adj"], dtype=np.float64)
+        legacy = cast(dict[str, Any], sng)
+        sn_names = list(legacy["sn_names"])
+        sn_adj = np.asarray(legacy["sn_adj"], dtype=np.float64)
         mapping = final_supernodes
         node_by_name = {}
 
@@ -507,6 +579,10 @@ def supernode_graph_figure(
         cx, cy, w, h = geom[sn]
         members = mapping.get(sn, [])
         fill, line_color = _KIND_STYLE.get(kinds[sn], _KIND_STYLE["middle"])
+        ratio = activation_ratios.get(sn) if activation_ratios is not None else None
+        if ratio is not None and ratio <= 0.25:
+            fill = "#F3F4F6"
+            line_color = "#D1D5DB"
         _add_card(fig, cx, cy, w, h, fill, line_color, stacked=len(members) > 1)
         # Labeled middle cards show the LLM-generated supernode name; emb/logit keep
         # their clerp ("Emb: France", 'Output "Paris"') since those aren't relabeled.
@@ -522,9 +598,40 @@ def supernode_graph_figure(
             font=dict(size=9, color="#1a1a1a"),
             align="center",
         )
+        if steering_factors is not None and sn in steering_factors:
+            fig.add_annotation(
+                x=cx + w / 2,
+                y=cy + h / 2,
+                text=_format_factor(float(steering_factors[sn])),
+                showarrow=False,
+                xanchor="right",
+                yanchor="bottom",
+                font=dict(size=10, color="white"),
+                bgcolor="#C2570C",
+                bordercolor="#C2570C",
+                borderpad=3,
+            )
+        if ratio is not None and (abs(float(ratio) - 1.0) > 0.05 or float(ratio) <= 0.25):
+            badge_fill, badge_color = _steering_ratio_color(float(ratio))
+            fig.add_annotation(
+                x=cx - w / 2,
+                y=cy + h / 2,
+                text=_format_ratio(float(ratio)),
+                showarrow=False,
+                xanchor="left",
+                yanchor="bottom",
+                font=dict(size=10, color=badge_color),
+                bgcolor=badge_fill,
+                bordercolor=badge_color,
+                borderpad=3,
+            )
         hover_x.append(cx)
         hover_y.append(cy)
-        hover_text.append(_sn_title(sn, members, attr, node_by_name.get(sn)))
+        hover_lines = _steering_hover_lines(sn, steering_factors, activation_ratios)
+        hover_title = _sn_title(sn, members, attr, node_by_name.get(sn))
+        if hover_lines:
+            hover_title = "<br>".join([hover_title, *hover_lines])
+        hover_text.append(hover_title)
 
     # Invisible markers carry the rich hover (composite members).
     fig.add_trace(
@@ -542,7 +649,7 @@ def supernode_graph_figure(
     # --- Prompt bars + input/output arrows ---
     if prompt_tokens:
         _token_bar(fig, prompt_tokens, emb_ctx, y=0.0)
-        out_label = logit_labels[0] if logit_labels else ""
+        out_label = _top_output_label(top_outputs) or (logit_labels[0] if logit_labels else "")
         _output_bar(fig, prompt_tokens, prompt, out_label, y=float(top_y))
         # Token cell -> embedding card.
         for sn, kind in kinds.items():
@@ -586,6 +693,23 @@ def supernode_graph_figure(
                 arrowcolor="#9a9a9a",
                 text="",
             )
+
+    if stored_interventions:
+        fig.add_annotation(
+            xref="paper",
+            yref="paper",
+            x=1.0,
+            y=1.0,
+            xanchor="right",
+            yanchor="top",
+            text=_stored_intervention_text(stored_interventions),
+            showarrow=False,
+            align="left",
+            font=dict(size=10, color="#333"),
+            bgcolor="#FFF8DC",
+            bordercolor="#C2570C",
+            borderpad=6,
+        )
 
     # --- Layout / ranges ---
     n_tokens = len(prompt_tokens) if prompt_tokens else 0

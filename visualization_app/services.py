@@ -263,7 +263,11 @@ def generate_graph(
         qwen_enable_thinking=qwen_enable_thinking,
     )
 
-    dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
+    dtype_map = {
+        "float32": getattr(torch, "float32"),
+        "float16": getattr(torch, "float16"),
+        "bfloat16": getattr(torch, "bfloat16"),
+    }
     with _quiet_dependency_output():
         model = ReplacementModel.from_pretrained(
             model_name,
@@ -323,7 +327,11 @@ def preview_prompt(
         qwen_assistant=qwen_assistant,
         qwen_enable_thinking=qwen_enable_thinking,
     )
-    dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
+    dtype_map = {
+        "float32": getattr(torch, "float32"),
+        "float16": getattr(torch, "float16"),
+        "bfloat16": getattr(torch, "bfloat16"),
+    }
     with _quiet_dependency_output():
         model = ReplacementModel.from_pretrained(
             model_name,
@@ -333,7 +341,7 @@ def preview_prompt(
             backend=backend,
         )
     try:
-        tokenizer = model.tokenizer
+        tokenizer = cast(Any, model.tokenizer)
         input_ids = model.ensure_tokenized(formatted_prompt)
         token_ids = input_ids.reshape(-1).detach().cpu().tolist()
         tokens = [tokenizer.decode([int(token_id)]) for token_id in token_ids]
@@ -341,7 +349,7 @@ def preview_prompt(
             logits, _ = model.get_activations(input_ids)
         last_logits = logits.reshape(-1, logits.shape[-1])[-1]
         probs = last_logits.softmax(-1)
-        values, indices = torch.topk(probs, k=int(top_k))
+        values, indices = probs.topk(k=int(top_k))
         next_tokens = [
             {"token": tokenizer.decode([int(idx)]), "probability": float(prob)}
             for prob, idx in zip(values.detach().cpu(), indices.detach().cpu())
@@ -932,9 +940,7 @@ def list_supernode_storage(
             if source_key in str(record.get("source_slug") or "").casefold()
         ]
     if model_key:
-        records = [
-            record for record in records if str(record.get("model_name") or "") == model_key
-        ]
+        records = [record for record in records if str(record.get("model_name") or "") == model_key]
     if transcoder_key:
         records = [
             record for record in records if str(record.get("transcoder") or "") == transcoder_key
@@ -1016,7 +1022,11 @@ def _load_steering_model(
     import torch
     from circuit_tracer import ReplacementModel
 
-    dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
+    dtype_map = {
+        "float32": getattr(torch, "float32"),
+        "float16": getattr(torch, "float16"),
+        "bfloat16": getattr(torch, "bfloat16"),
+    }
     with _quiet_dependency_output():
         return ReplacementModel.from_pretrained(
             model_name,
@@ -1132,70 +1142,36 @@ def _stored_supernode_intervention_groups(
     return groups, selected
 
 
-def _steering_intervention_graph(
+def _steering_activation_ratios(
     sng,
     factors: dict[str, float],
-    prompt: str,
     orig_activations,
     new_activations,
-    edge_threshold: float,
-):
-    from graph_visualization import Feature, InterventionGraph
-    from graph_visualization import Supernode as VizSupernode
-
-    drawn = [supernode for supernode in sng.supernodes if supernode.type != "logit"]
-    viz_by_name: dict[str, VizSupernode] = {}
-    for supernode in drawn:
-        features = [
-            Feature(int(node.node_id.split("_")[0]), node.ctx_idx, int(node.node_id.split("_")[1]))
-            for node in supernode.features
-            if node.feature_type == "cross layer transcoder"
-        ]
-        viz_by_name[supernode.name] = VizSupernode(
-            name=supernode.name,
-            features=features or None,
-            children=[],
-        )
-
-    layer_of = {supernode.name: supernode.layer_min for supernode in drawn}
-    ordered_layers = sorted(set(layer_of.values()))
-    layer_row = {layer: i for i, layer in enumerate(ordered_layers)}
-    rows: list[list[VizSupernode]] = [[] for _layer in ordered_layers]
-    for supernode in drawn:
-        rows[layer_row[layer_of[supernode.name]]].append(viz_by_name[supernode.name])
-
-    sn_adj = np.asarray(sng.adj_matrix, dtype=np.float64)
-    idx = {supernode.name: i for i, supernode in enumerate(sng.supernodes)}
-    max_abs = float(np.max(np.abs(sn_adj))) if sn_adj.size else 1.0
-    for source in drawn:
-        for target in drawn:
-            if target.name == source.name:
+) -> dict[str, float | None]:
+    ratios: dict[str, float | None] = {}
+    for supernode in sng.supernodes:
+        if supernode.type != "features" or supernode.name in factors:
+            continue
+        feature_ratios: list[float] = []
+        for node in supernode.features:
+            if node.feature_type != "cross layer transcoder":
                 continue
-            if layer_row[layer_of[target.name]] <= layer_row[layer_of[source.name]]:
+            layer, feature = int(node.node_id.split("_")[0]), int(node.node_id.split("_")[1])
+            pos = int(node.ctx_idx)
+            if (
+                layer >= int(orig_activations.shape[0])
+                or pos >= int(orig_activations.shape[1])
+                or feature >= int(orig_activations.shape[2])
+            ):
                 continue
-            weight = float(sn_adj[idx[target.name], idx[source.name]])
-            if abs(weight) >= edge_threshold * max_abs:
-                viz_by_name[source.name].children.append(viz_by_name[target.name])
-
-    intervention_graph = InterventionGraph(ordered_nodes=rows, prompt=prompt)
-    for supernode in drawn:
-        node = viz_by_name[supernode.name]
-        intervention_graph.initialize_node(node, orig_activations)
-        if supernode.name in factors:
-            node.activation = None
-            node.intervention = f"{factors[supernode.name]:g}x"
-        elif node.features:
-            pairs = [
-                (orig_activations[feature].item(), new_activations[feature].item())
-                for feature in node.features
-            ]
-            active = [(orig, new) for orig, new in pairs if abs(orig) > 1e-6]
-            node.activation = (
-                float(np.mean([new / orig for orig, new in active])) if active else None
-            )
-        else:
-            node.activation = None
-    return intervention_graph
+            orig = float(orig_activations[layer, pos, feature].item())
+            if abs(orig) <= 1e-6:
+                continue
+            new = float(new_activations[layer, pos, feature].item())
+            feature_ratios.append(new / orig)
+        if feature_ratios:
+            ratios[supernode.name] = float(np.mean(feature_ratios))
+    return ratios
 
 
 def run_steering(
@@ -1216,7 +1192,7 @@ def run_steering(
     pt_root: Path = GENERATED_GRAPH_ROOT,
     progress: Callable[[str, float | None], None] | None = None,
 ) -> dict[str, Any]:
-    from graph_visualization import create_graph_visualization
+    from summarization.cluster_viz import supernode_graph_figure
     from summarization.summarize import SummaryGraph, steer_interventions_constrained
 
     safe_slug = slugify(slug)
@@ -1291,23 +1267,35 @@ def run_steering(
         for layer, pos, feature, value in interventions:
             new_activations[layer, pos, feature] = value
 
-    report("Rendering intervention graph", 0.85)
-    intervention_graph = _steering_intervention_graph(
+    report("Rendering steering graph", 0.85)
+    activation_ratios = _steering_activation_ratios(
         sng,
         factors,
-        prompt,
         orig_activations,
         new_activations,
-        edge_threshold,
     )
     top_probs, top_ids = new_logits.squeeze(0)[-1].softmax(-1).topk(int(top_k))
+    tokenizer = cast(Any, model.tokenizer)
     top_outputs = [
-        {"token": model.tokenizer.decode([int(token_id)]), "probability": float(probability)}
+        {"token": tokenizer.decode([int(token_id)]), "probability": float(probability)}
         for token_id, probability in zip(top_ids.tolist(), top_probs.tolist())
     ]
-    svg = create_graph_visualization(
-        intervention_graph,
-        [(item["token"], item["probability"]) for item in top_outputs],
+    fig = supernode_graph_figure(
+        sng=sng,
+        title="Steering intervention graph",
+        prompt_tokens=list(options["prompt_tokens"]),
+        prompt=prompt,
+        use_supernode_names=True,
+        edge_threshold=edge_threshold,
+        steering_factors=factors,
+        activation_ratios=activation_ratios,
+        top_outputs=top_outputs,
+        stored_interventions=selected_stored,
+    )
+    figure_html = fig.to_html(
+        include_plotlyjs="cdn",
+        full_html=True,
+        config={"responsive": True, "displaylogo": False},
     )
     return {
         "slug": safe_slug,
@@ -1317,5 +1305,5 @@ def run_steering(
         "steered": factors,
         "stored_supernodes": selected_stored,
         "top_outputs": top_outputs,
-        "svg": svg.data,
+        "figure_html": figure_html,
     }

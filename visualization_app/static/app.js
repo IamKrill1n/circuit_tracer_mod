@@ -476,11 +476,20 @@ function renderSteeringResult(result) {
     outputs.appendChild(pill);
   });
 
+  if (result.figure_html) {
+    const frame = document.createElement("iframe");
+    frame.className = "steering-figure";
+    frame.title = "steering visualization";
+    frame.srcdoc = result.figure_html;
+    container.appendChild(outputs);
+    container.appendChild(frame);
+    return;
+  }
+
+  container.appendChild(outputs);
   const svg = document.createElement("div");
   svg.className = "steering-svg";
   svg.innerHTML = result.svg || "";
-
-  container.appendChild(outputs);
   container.appendChild(svg);
 }
 

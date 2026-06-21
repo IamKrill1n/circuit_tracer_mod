@@ -107,3 +107,35 @@ def test_hover_text_includes_supernode_label_role_and_description() -> None:
     assert "Label: Color relation" in hover_text
     assert "Role: Abstract" in hover_text
     assert "Description: Combines object and color evidence." in hover_text
+
+
+def test_steering_overlay_adds_intervention_ratio_outputs_and_stored_notes() -> None:
+    fig = supernode_graph_figure(
+        _summary_graph(),
+        prompt_tokens=["<bos>", "The", "sky", "is"],
+        prompt="<bos>The sky is",
+        steering_factors={"SN_0": -1.0},
+        activation_ratios={"SN_0": 0.20},
+        top_outputs=[{"token": " blue", "probability": 0.42}],
+        stored_interventions=[
+            {
+                "record_id": "donor:0",
+                "label": "Stored color",
+                "factor": 2.0,
+                "target_pos": 2,
+                "n_features": 3,
+            }
+        ],
+    )
+
+    annotation_text = "\n".join(str(annotation.text) for annotation in fig.layout.annotations)
+    assert "-1x" in annotation_text
+    assert "20%" in annotation_text
+    assert "blue 0.420" in annotation_text
+    assert "External interventions" in annotation_text
+    assert "Stored color: 2x at pos 2 (3 feats)" in annotation_text
+
+    hover_trace = next(trace for trace in fig.data if getattr(trace, "hovertext", None))
+    hover_text = "<br>".join(str(item) for item in hover_trace.hovertext)
+    assert "Intervention: -1x" in hover_text
+    assert "Activation ratio: 20%" in hover_text

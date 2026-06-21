@@ -478,6 +478,14 @@ progress {
   min-width: 700px;
 }
 
+.steering-figure {
+  width: 100%;
+  min-width: 760px;
+  height: 780px;
+  border: 0;
+  background: white;
+}
+
 @media (max-width: 1180px) {
   .layout {
     grid-template-columns: 280px 1fr;

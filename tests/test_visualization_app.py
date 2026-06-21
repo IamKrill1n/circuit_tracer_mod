@@ -770,16 +770,8 @@ def test_run_steering_uses_current_and_stored_supernodes(
             logits[0, -1, 0] = 1.0
             return logits, None
 
-    class FakeSvg:
-        data = "<svg></svg>"
-
     fake_model = FakeModel()
     monkeypatch.setattr(services, "_load_steering_model", lambda *_args: fake_model)
-    monkeypatch.setattr(services, "_steering_intervention_graph", lambda *_args: object())
-    monkeypatch.setattr(
-        "graph_visualization.create_graph_visualization",
-        lambda *_args: FakeSvg(),
-    )
 
     result = services.run_steering(
         slug="current",
@@ -792,7 +784,9 @@ def test_run_steering_uses_current_and_stored_supernodes(
         pt_root=pt_root,
     )
 
-    intervention_calls = [call["interventions"] for call in fake_model.calls if call["interventions"]]
+    intervention_calls = [
+        call["interventions"] for call in fake_model.calls if call["interventions"]
+    ]
     assert [(0, 0, 1, -5.0)] in intervention_calls
     assert [(1, 2, 10, -5.0)] in intervention_calls
     assert result["stored_supernodes"] == [
@@ -805,6 +799,9 @@ def test_run_steering_uses_current_and_stored_supernodes(
             "n_features": 1,
         }
     ]
+    assert "figure_html" in result
+    assert "Steering intervention graph" in result["figure_html"]
+    assert "Current SN" in result["figure_html"]
 
 
 def test_summary_graph_viewer_payload_respects_200_node_limit() -> None:
