@@ -1,0 +1,611 @@
+\documentclass[../main.tex]{subfiles}
+\begin{document}
+
+\section{Overview}
+
+The previous chapter presented the proposed a novel summarization pipeline. This chapter evaluates whether the proposed summarization pipeline preserves the
+causal structure of attribution graphs while making them smaller and easier to
+interpret. The evaluation is organized around three questions. First, does
+influence--relevance pruning retain enough of the replacement-model computation
+to remain faithful to the original attribution graph? Second, does the proposed
+ILP clusterer produce supernodes whose members have coherent downstream causal
+effects? Third, do the final summary nodes and edges predict the behavior of the
+model under intervention?
+
+The chapter is therefore organized by experiment rather than by separating all
+metrics, baselines, and results into different sections. Section~\ref{sec:setup}
+describes the common datasets, implementation environment, and default pipeline
+configuration. Section~\ref{sec:pruning-experiment} evaluates pruning.
+Section~\ref{sec:clustering-experiment} evaluates supernode clustering.
+Section~\ref{sec:steering-experiment} validates summary graphs with steering
+interventions. Section~\ref{sec:multihop-stress-test} explains how the multi-hop
+graphs are used as a qualitative stress test.
+
+The main quantitative results support the three claims. Adding upstream
+relevance to the pruning score preserves graph completeness and replacement
+score at matched graph sizes. The ILP clusterer achieves the strongest
+downstream-effect coherence among the clustering baselines, with a downstream
+effect gap of $0.0979$ and a signed downstream effect gap of $0.2907$. Finally,
+the final summary graphs obtain a sign consistency of $0.9361$ and a
+Spearman edge-effect correlation of $0.5633$, indicating that their signed edges
+largely agree with measured intervention responses.
+
+\section{Common Experimental Setup}
+\label{sec:setup}
+\label{sec:datasets}
+
+\subsection{Datasets}
+
+\paragraph{Synthetic analogies from BATS.}
+The main quantitative evaluation uses synthetic analogy prompts built from the
+Bigger Analogy Test Set (BATS). BATS is a benchmark for probing relational and
+semantic knowledge in word embeddings and language models. We use entities from
+its lexicography category and construct prompts of the form ``The saying goes:
+$A$ is to $B$ as $C$ is to $D$'', where $A$, $B$, $C$, and $D$ come from the
+same subcategory. The model must predict $D$ from the relation expressed by
+$A \to B$ and the query entity $C$.
+
+The dataset contains 100 prompts in total, with 10 prompts for each of the
+following relation types: country--capital, country--language, UK city--county,
+name--nationality, name--occupation, animal--young, animal--sound,
+animal--shelter, object--color, and male--female. The analogy setting is useful
+because the answer entity $D$ should be recoverable by applying the relation
+between $A$ and $B$ to $C$. A good summary should therefore preserve features
+that carry the source entities, the relation, the query entity, and the predicted
+answer. For the quantitative pruning and clustering experiments, we keep prompts
+that the model answers correctly with confidence above $20\%$. This filter
+ensures that every attribution graph explains a prediction the model actually
+makes.
+
+\paragraph{Multi-hop reasoning.}
+The second dataset follows the multi-hop queries of Ameisen et
+al.~\cite{ameisen2025circuit}. Each prompt requires several reasoning steps
+before reaching the answer, so it tests whether the summary pipeline can preserve
+causal structure beyond a single local association. The dataset contains 35
+prompts covering basic knowledge in geography, biology, physics, and common
+knowledge. These graphs are used as a qualitative stress test for the
+summarization pipeline and viewer, while the quantitative tables focus on the
+BATS-derived analogy graphs, where enough examples are available for controlled
+sweeps.
+
+\subsection{Environment and implementation}
+
+Experiments run on a single workstation with an NVIDIA GeForce RTX 4090 GPU
+(24\,GB VRAM) and 128\,GB of RAM, under Ubuntu 22.04 LTS. The implementation
+uses Python 3.13.5. Attribution graphs are generated with the circuit-tracing
+library~\cite{circuit-tracer}. The summary graphs reuse the same feature
+metadata and are rendered with an adapted version of the library's user
+interface (Figure~\ref{fig:our-dashboard}).
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{Figure/our_dashboard.png}
+\caption{Summarization dashboard. The left panel lists local attribution graphs,
+the center shows the pruned attribution subgraph with its supernodes for an
+analogy prompt, and the right panel reports the generated summary with labeled
+input, abstract, and output supernodes. The viewer also exposes per-feature
+input and output details and on-demand summary generation and steering.}
+\label{fig:our-dashboard}
+\end{figure}
+
+\subsection{Default pipeline configuration}
+
+Unless stated otherwise, pruning uses the influence--relevance importance score
+from Chapter~3 with an edge retained-mass threshold of $0.95$. The pruning sweep
+varies the node retained-mass threshold and the mixture parameter $\alpha$ in
+Eq.~\eqref{eq:importance}. The clustering experiments use pruned analogy graphs
+from the $\alpha=0.5$ condition, which balances downstream influence and
+upstream relevance. The exact clusterer is the binary integer linear program
+(ILP) of Eq.~\eqref{eq:Lstage2}, solved through SciPy's \texttt{milp} interface
+to the HiGHS mixed-integer solver with an explicit time limit. Thus the
+mathematical model is an ILP, while the software backend is a mixed-integer
+solver.
+
+\section{Experiment 1: Pruning Faithfulness}
+\label{sec:pruning-experiment}
+\label{sec:eval-method}
+
+\subsection{Question and comparison}
+
+The pruning experiment asks whether the proposed influence--relevance score can
+remove graph mass while preserving the end-to-end computation represented by the
+attribution graph. The direct baseline is influence-only pruning from Ameisen et
+al.~\cite{ameisen2025circuit}. It sets $\alpha=1$ in Eq.~\eqref{eq:importance},
+so a node is ranked only by downstream reach to the target logit. The proposed
+setting uses smaller values of $\alpha$ to combine downstream influence with
+upstream relevance to input tokens. This comparison tests whether relevance
+improves the semantic focus of the retained graph without sacrificing graph-level
+faithfulness.
+
+\subsection{Metrics}
+
+Pruning is evaluated with two graph-faithfulness metrics. The first metric tests
+whether influence can still be traced from the output back to retained input
+tokens. The second metric tests how completely retained nodes explain incoming
+edge mass throughout the graph.
+
+\paragraph{Replacement score.}
+Replacement score measures the fraction of end-to-end influence from input
+tokens to output logits that flows through the retained part of the graph. Let
+$V'$ and $E'$ be the retained node and edge sets from the pruning stage. The
+complement $V \setminus V'$ denotes attribution-graph nodes outside the pruned
+graph; when the metric is computed, their mass is accumulated into the
+corresponding error or complement node. Let $W'$ be the adjacency after this
+merge, and let $\mathrm{Inf}'_v$ be the influence score computed from $W'$ using
+Eq.~\eqref{eq:inf}. The score is
+\begin{equation}
+\mathrm{Rep}
+=
+\frac{\sum_{v \in V' \cap V_{\text{emb}}} \mathrm{Inf}'_v}
+     {\sum_{v \in V} \mathrm{Inf}'_v}.
+\label{eq:metric-replacement}
+\end{equation}
+This is a strict score: it is high only when output influence can be traced all
+the way back to input tokens through retained pathways, rather than being
+absorbed by nodes outside the pruned graph.
+
+\paragraph{Graph completeness.}
+Graph completeness measures the fraction of incoming edges to all nodes that
+originate from the pruned graph, weighted by each node's influence on the output.
+As in Chapter~3, $(W')^{\text{in}}$ is column-normalized with zero columns left
+at zero when a node has no incoming edge mass. Let
+\[
+q'_v =
+\begin{cases}
+\sum_{u \in V'} (W')^{\text{in}}_{uv}
+= 1 - \sum_{u \in V \setminus V'} (W')^{\text{in}}_{uv},
+& \text{if node } v \text{ has positive incoming edge mass in } W',\\
+0, & \text{otherwise.}
+\end{cases}
+\]
+This is the fraction of node $v$'s normalized incoming edge mass that comes from
+retained nodes. The score is
+\begin{equation}
+\mathrm{Comp}
+=
+\frac{\sum_{v \in V} q'_v(\mathrm{Inf}'_v)}
+     {\sum_{v \in V}(\mathrm{Inf}'_v)}.
+\label{eq:metric-completeness}
+\end{equation}
+Unlike replacement score, completeness gives partial credit to nodes that are
+mostly explained by retained features even when some influence remains assigned
+to nodes outside the pruned graph.
+
+\subsection{Results}
+
+Figures~\ref{fig:prune-alpha-entmax-no-token-attr} and
+\ref{fig:prune-alpha-softmax-no-token-attr} compare graph completeness and
+replacement score against the average number of retained nodes. The curves
+separate the mixture parameter $\alpha$, where $\alpha=1$ is influence-only
+pruning and smaller values add upstream relevance to the node-importance score.
+Across both normalizations, adding relevance does not substantially reduce
+graph-level faithfulness at matched graph sizes. The benefit is clearest in the
+small-graph regime, where the retained subgraph must keep only the nodes most
+likely to support the target prediction.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{Figure/prune_alpha_sweep_entmax_no_token_attr.png}
+\caption{Pruning alpha sweep with entmax normalization. The figure reports graph
+completeness and replacement score against average retained node count.}
+\label{fig:prune-alpha-entmax-no-token-attr}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{Figure/prune_alpha_sweep_softmax_no_token_attr.png}
+\caption{Pruning alpha sweep with softmax normalization. The figure reports graph
+completeness and replacement score against average retained node count.}
+\label{fig:prune-alpha-softmax-no-token-attr}
+\end{figure}
+
+The pruning result supports the first evaluation claim: influence--relevance
+pruning can reduce graph size while preserving the two graph-faithfulness scores.
+
+Table~\ref{tab:syntactic-feature-count-template} defines the manual counting
+table used to compare influence-only pruning against the proposed
+$\alpha=0.5$ setting. A retained feature is counted as syntactic when its label
+primarily refers to punctuation, stop words, inflection, word order,
+prompt-format tokens, or other grammatical scaffolding. It is not counted as
+syntactic when its label refers to the semantic relation, source entity, target
+entity, or predicted answer. The table is therefore a template for measuring
+whether upstream relevance removes faithful but semantically unhelpful graph
+mass.
+
+\begin{table}[ht]
+\centering
+\caption{Template for counting syntactic features after pruning. Counts are
+computed over retained feature nodes of analogy graphs at matched graph-size
+settings.}
+\label{tab:syntactic-feature-count-template}
+\begin{tabular}{llrrrrr}
+\toprule
+Pruning score & Normalization & $\alpha$ & Stop-word & Punctuation & Other syntactic & Total syntactic \\
+\midrule
+Influence only & Entmax 1.25 & 1.0 & -- & -- & -- & -- \\
+Ours $\alpha=0.5$ & Entmax 1.25 & 0.5 & -- & -- & -- & -- \\
+Influence only & Softmax & 1.0 & -- & -- & -- & -- \\
+Ours $\alpha=0.5$ & Softmax & 0.5 & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Experiment 2: Causal Supernode Clustering}
+\label{sec:clustering-experiment}
+\label{sec:baselines}
+
+\subsection{Question and setup}
+
+The clustering experiment asks whether the proposed ILP clusterer forms
+supernodes with coherent causal roles. The experiment uses 100 pruned analogy
+graphs from the entmax $\alpha=0.5$ condition. For ILP solver, we set the upper bound for number of supernodes to $K_{\max}=20$. All clustering methods are
+matched to the same number of feature supernodes as the proposed summary on each
+graph, so the comparison isolates partition quality rather than graph size. Let
+$F = V'_{\text{feature}}$ be the retained feature nodes, let $f$ be the
+partition from clustering, and let $r(i)$ be the role vector of
+Eq.~\eqref{eq:role}. All edge-mass formulas use the retained edge set $E'$ and
+the convention that $W_{uv}$ is the edge from source $u$ to target $v$.
+
+\subsection{Baselines}
+
+\paragraph{Spectral clustering on role vectors.}
+Spectral clustering on role vectors uses the same role-vector representation as
+the proposed clusterer, but replaces the ILP objective with a standard spectral
+partitioning algorithm. The affinity is a rectified cosine similarity between
+role vectors. This baseline tests whether a generic graph-free clustering method
+can recover comparable supernodes from the same feature representation.
+
+\paragraph{K-means on role vectors.}
+K-means on role vectors first unit-normalizes each role vector and then minimizes
+Euclidean within-cluster variance. After normalization, Euclidean distance is a
+cosine-distance surrogate, so this is a strong geometric compactness baseline.
+It tests whether tight role-vector clusters are sufficient for causal summary
+quality.
+
+\paragraph{Spectral clustering on adjacency.}
+Spectral clustering on adjacency ignores the role vectors and instead uses the
+symmetrized absolute pruned adjacency matrix as its affinity. It groups features
+that are strongly connected in the retained graph. This baseline tests whether
+connectivity alone is enough, without the incoming and outgoing role profiles
+used by the proposed method.
+
+\paragraph{Random same-size clusters.}
+The random same-size baseline keeps the same feature-cluster size distribution
+as the proposed summary but randomly assigns features to clusters. It controls
+for the effect of cluster count and cluster sizes. Any method that does not beat
+this baseline is not extracting causal or geometric structure from the graph.
+
+\subsection{Metrics}
+
+\paragraph{Raw silhouette.}
+Raw silhouette measures geometric compactness in role-vector space. With $a_i$
+the average cosine distance from $r(i)$ to features in the same cluster and
+$b_i$ the smallest average cosine distance to another cluster, the score is
+\begin{equation}
+\mathrm{Sil}
+=
+\frac{1}{|F|}
+\sum_{i \in F}
+\frac{b_i - a_i}{\max(a_i, b_i)}.
+\label{eq:metric-silhouette}
+\end{equation}
+Higher silhouette means clusters are geometrically tighter, but this metric does
+not by itself test causal coherence.
+
+\paragraph{Downstream effect gap.}
+Downstream effect gap compares causal-effect similarity within supernodes against
+similarity across supernodes. Let $d_i = |v_i^{\text{out}}|$ be the nonnegative
+outgoing effect profile derived from Eq.~\eqref{eq:role}, and let
+$\mathcal{Q}_{\text{in}}=\{(i,j): i,j\in F,\, i<j,\, f(i)=f(j)\}$ and
+$\mathcal{Q}_{\text{out}}=\{(i,j): i,j\in F,\, i<j,\, f(i)\ne f(j)\}$ be the
+within-supernode and cross-supernode feature pairs. The score is
+\begin{equation}
+\mathrm{DownGap}
+=
+\frac{1}{|\mathcal{Q}_{\text{in}}|}
+  \sum_{(i,j)\in\mathcal{Q}_{\text{in}}}\cos(d_i,d_j)
+-
+\frac{1}{|\mathcal{Q}_{\text{out}}|}
+  \sum_{(i,j)\in\mathcal{Q}_{\text{out}}}\cos(d_i,d_j).
+\label{eq:metric-downgap}
+\end{equation}
+Higher downstream effect gap means that members of a supernode affect later nodes
+more similarly than features outside the supernode.
+
+\paragraph{Signed downstream effect gap.}
+Signed downstream effect gap repeats the previous calculation with the signed
+outgoing profiles $v_i^{\text{out}}$:
+\begin{equation}
+\mathrm{SignedDownGap}
+=
+\overline{\cos(v_i^{\text{out}},v_j^{\text{out}})}_{(i,j)\in\mathcal{Q}_{\text{in}}}
+-
+\overline{\cos(v_i^{\text{out}},v_j^{\text{out}})}_{(i,j)\in\mathcal{Q}_{\text{out}}}.
+\label{eq:metric-signed-downgap}
+\end{equation}
+Higher signed downstream effect gap indicates that clusters avoid merging
+features with similar targets but opposite causal signs.
+
+\paragraph{Internalized edge mass.}
+Internalized edge mass measures how much fine-grained causal weight disappears
+inside supernodes. It is
+\begin{equation}
+\mathrm{Internalized}
+=
+\frac{\sum_{(u,v)\in E':\, f(u)=f(v)} |W_{uv}|}
+     {\sum_{(u,v)\in E'} |W_{uv}|}.
+\label{eq:metric-internalized}
+\end{equation}
+Lower internalized edge mass means that more retained causal structure remains
+visible as edges between supernodes.
+
+\paragraph{DAG loss.}
+DAG loss measures the edge mass removed when the raw supernode graph is converted
+into a DAG. If $M_{\text{raw}}=\sum_{C\ne C'} |B_{C\to C'}|$ is the sum of
+absolute block-sum weights before cycle removal and
+$M_{\text{dag}}=\sum_{(C,C')\in E_H}|W_{H,\,C\to C'}|$ is the corresponding
+mass in the final summary graph, then
+\begin{equation}
+\mathrm{DAGLoss}
+=
+\frac{M_{\text{raw}} - M_{\text{dag}}}{M_{\text{raw}}}.
+\label{eq:metric-dagloss}
+\end{equation}
+Lower DAG loss means the partition is more compatible with the final acyclic
+summary graph.
+
+\subsection{Results}
+
+Table~\ref{tab:clustering-baseline-entmax} reports clustering metrics on 100
+pruned analogy graphs. K-means obtains the highest raw silhouette score,
+which confirms that it forms geometrically compact clusters in role-vector
+space. However, this compactness does not translate into the strongest causal
+coherence. The proposed ILP summary has the largest downstream effect gap and
+the largest signed downstream effect gap, meaning that features grouped inside
+one supernode tend to affect the rest of the graph in a more similar signed
+direction than features in different supernodes.
+
+\begin{table}[ht]
+\centering
+\caption{Clustering evaluation on 100 pruned analogy graphs. Higher
+downstream effect gaps indicate more coherent causal consequences inside
+supernodes. Lower internalized edge mass and lower DAG loss indicate better
+preservation of visible causal structure.}
+\label{tab:clustering-baseline-entmax}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lrrrrr}
+\toprule
+Solver & Sil. raw $\uparrow$ & Down. gap $\uparrow$ & Signed down. gap $\uparrow$ & Internalized mass $\downarrow$ & DAG loss $\downarrow$ \\
+\midrule
+Ours ILP & 0.0409 & \textbf{0.0979} & \textbf{0.2907} & \textbf{0.0491} & \textbf{0.0984} \\
+Spectral on role vectors & -0.0347 & 0.0272 & 0.1399 & 0.1081 & 0.1257 \\
+K-means on role vectors & \textbf{0.5058} & 0.0382 & 0.2824 & 0.0862 & 0.1423 \\
+Spectral on adjacency & -0.4263 & 0.0434 & 0.0132 & 0.1590 & 0.1818 \\
+Random same-size clusters & -0.5908 & 0.0136 & 0.0050 & 0.0762 & 0.2058 \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+The edge-mass metrics show the same pattern from a structural angle. The ILP
+summary has the lowest internalized edge mass and the lowest DAG loss, so it
+hides the least fine-grained edge mass inside supernodes and loses the least
+superedge mass during acyclic graph construction. Since internalized mass is
+explicitly constrained by the ILP, the most independent evidence for coherent
+supernodes is the downstream-effect gap; the mass metrics show that this
+coherence is achieved while preserving visible causal structure.
+
+\section{Experiment 3: Intervention Validation}
+\label{sec:steering-experiment}
+
+\subsection{Question and steering protocol}
+
+Attribution-graph edges are useful because they represent signed linear
+relationships between units. The intervention experiment asks whether that
+property is preserved in the final summary graph. For each non-fixed supernode
+$C$, we negate every member feature by setting its activation to $M \cdot a$
+with steer factor $M=-1$ and clean activation $a$. The constrained patch writes
+only through the direct-effect layer window $[l,l+1]$, while attention patterns
+and LayerNorm scales are frozen as in Ameisen et
+al.~\cite{ameisen2025circuit}.
+
+\subsection{Metrics}
+
+\paragraph{Sign consistency.}
+Sign consistency measures whether summary edges predict the direction of
+downstream responses. Let $\mathcal{E}_{\text{meas}}\subseteq E_H$ be the
+measurable summary edges. For each edge $e=(C,C')\in\mathcal{E}_{\text{meas}}$,
+let $w_e = W_{H,\,C\to C'}$, let $\Delta a_C$ be the source activation change,
+and let $m_e$ be the measured downstream sign. The predicted sign is
+$p_e=\operatorname{sgn}(w_e)\operatorname{sgn}(\Delta a_C)$, and the metric is
+\begin{equation}
+\mathrm{SignCons}
+=
+\frac{\sum_{e\in\mathcal{E}_{\text{meas}}} |w_e|\,\mathbf{1}[p_e=m_e]}
+     {\sum_{e\in\mathcal{E}_{\text{meas}}} |w_e|}.
+\label{eq:metric-signcons}
+\end{equation}
+Higher sign consistency means the directed signed edges of the summary graph
+match intervention responses.
+
+\paragraph{Edge-effect Spearman correlation.}
+Edge-effect correlation tests whether larger summary edges produce larger
+measured responses. Let $\mathcal{E}_{+}\subseteq E_H$ be the evaluated positive
+feature-target edges, and let $g_e = |1-\rho_e|$ be the response magnitude from
+activation ratio $\rho_e$. The metric is
+\begin{equation}
+\rho_{\text{edge}}
+=
+\mathrm{Spearman}\bigl(\{|w_e|\}_{e\in\mathcal{E}_{+}},
+                        \{g_e\}_{e\in\mathcal{E}_{+}}\bigr).
+\label{eq:metric-spearman}
+\end{equation}
+Higher correlation means summary edge magnitude is more aligned with measured
+intervention strength.
+
+\paragraph{Target probability change.}
+Target probability change measures how strongly steering a supernode changes the
+model's predicted answer. If $\Delta p_y(C)$ is the target-token probability
+change after steering source supernode $C$, and
+$\mathcal{C}_{\text{steer}}\subseteq V_H$ is the set of steered supernodes, then
+\begin{equation}
+\Delta p_{\text{target}}
+=
+\frac{1}{|\mathcal{C}_{\text{steer}}|}
+\sum_{C\in\mathcal{C}_{\text{steer}}} |\Delta p_y(C)|.
+\label{eq:metric-target-delta}
+\end{equation}
+Larger values indicate that the summary contains supernodes with causal access
+to the target prediction.
+
+\subsection{Entity-swap supernode steering}
+
+Entity-swap steering tests whether an Output-role supernode carries transferable
+answer-entity information, rather than only receiving a plausible post-hoc
+label. Within each BATS relation type, we form ordered source--donor pairs of
+prompts that share the same relation but have different target answers. The
+source prompt is first run without intervention to obtain its clean feature
+activations. We then suppress the source summary's Output CLT features by
+writing $-c$ times their clean activations, and inject the donor summary's
+Output CLT features at the source final-token position by writing $c$ times the
+donor activations. The coefficient $c$ controls the strength of the swap.
+Figure~\ref{fig:our-steering} illustrates one such swap on the summary graph.
+
+This intervention asks whether replacing the answer-related Output state changes
+the source model prediction toward the donor answer. Pairs are skipped when the
+source and donor have the same target token, or when either summary lacks usable
+Output-role CLT features. The primary success criterion is strict: the clean
+source prediction must be the source target, and the steered top-1 prediction
+must become the donor target. We also record the unconditional donor top-1 rate
+and the source and donor target probabilities before and after steering. These
+probability measurements show partial transfer even when the top-1 token does
+not flip. This protocol complements the edge-response test by evaluating whether
+a whole Output-role supernode carries answer-specific information, rather than
+only predicting local downstream signs.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{Figure/our_steering.png}
+\caption{Entity-swap intervention on a summary graph for the prompt
+``abuja is to nigeria as amman is to''. The source Output supernode is
+suppressed (``say Jordan'', factor $-2$) while the donor Output supernode is
+injected at the final-token position (``Say Australia'', factor $+8$), steering
+the prediction toward the donor answer. Node colors denote supernode roles and
+edge thickness denotes signed superedge weight.}
+\label{fig:our-steering}
+\end{figure}
+
+\subsection{Entity-swap steering results}
+
+Table~\ref{tab:entity-swap-steering} reports entity-swap transfer for the ten
+BATS relation types at three donor steering factors. Each row aggregates 50
+attempted source--donor pairs with the source Output features suppressed at
+factor $-2$. The hit rates are computed over all attempted pairs, and the
+probability deltas are the mean steered-minus-clean probability of the source
+and donor target tokens.
+
+\begin{table}[ht]
+\centering
+\caption{Entity-swap supernode steering on 50 BATS analogy pairs per relation
+and donor factor. Source Output features are suppressed with factor $-2$; donor
+Output features are injected at the listed positive factor. Hit rates are over
+all attempted pairs; $\Delta p$ is the mean steered minus clean target-token
+probability.}
+\label{tab:entity-swap-steering}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{llrrrr}
+\toprule
+Relation & Donor factor & Top-1 hit & Top-5 hit & $\Delta p_{\text{source}}$ & $\Delta p_{\text{donor}}$ \\
+\midrule
+country--capital & 2 & 0.3400 & 0.5400 & $-0.6613$ & $+0.2298$ \\
+country--capital & 4 & 0.4400 & 0.6600 & $-0.7352$ & $+0.3177$ \\
+country--capital & 8 & 0.3600 & 0.5600 & $-0.7551$ & $+0.2338$ \\
+country--language & 2 & 0.3600 & 0.4400 & $-0.4918$ & $+0.1931$ \\
+country--language & 4 & 0.3800 & 0.4600 & $-0.5312$ & $+0.2984$ \\
+country--language & 8 & 0.3200 & 0.4800 & $-0.5662$ & $+0.2143$ \\
+UK city--county & 2 & 0.0800 & 0.1600 & $-0.4148$ & $+0.0515$ \\
+UK city--county & 4 & 0.1400 & 0.2600 & $-0.4536$ & $+0.0764$ \\
+UK city--county & 8 & 0.1800 & 0.2800 & $-0.4807$ & $+0.0325$ \\
+name--nationality & 2 & 0.2600 & 0.6400 & $-0.4708$ & $+0.0454$ \\
+name--nationality & 4 & 0.4400 & 0.8400 & $-0.5386$ & $+0.1973$ \\
+name--nationality & 8 & 0.1400 & 0.7200 & $-0.5950$ & $+0.0736$ \\
+name--occupation & 2 & 0.1800 & 0.3600 & $-0.3350$ & $+0.0958$ \\
+name--occupation & 4 & 0.3800 & 0.5600 & $-0.3620$ & $+0.2458$ \\
+name--occupation & 8 & 0.3800 & 0.7600 & $-0.4057$ & $+0.3341$ \\
+animal--young & 2 & 0.0400 & 0.2200 & $-0.0891$ & $+0.0253$ \\
+animal--young & 4 & 0.1000 & 0.2400 & $-0.1875$ & $+0.0755$ \\
+animal--young & 8 & 0.1000 & 0.2400 & $-0.3099$ & $+0.0702$ \\
+animal--sound & 2 & 0.0000 & 0.1800 & $-0.3140$ & $+0.0070$ \\
+animal--sound & 4 & 0.0800 & 0.2800 & $-0.3371$ & $+0.0343$ \\
+animal--sound & 8 & 0.1800 & 0.3600 & $-0.4443$ & $+0.1215$ \\
+animal--shelter & 2 & 0.0800 & 0.2600 & $-0.3245$ & $+0.0674$ \\
+animal--shelter & 4 & 0.1800 & 0.4000 & $-0.3409$ & $+0.1109$ \\
+animal--shelter & 8 & 0.2800 & 0.5000 & $-0.3831$ & $+0.1788$ \\
+object--color & 2 & 0.0800 & 0.2600 & $-0.3524$ & $+0.0318$ \\
+object--color & 4 & 0.1200 & 0.3200 & $-0.4229$ & $+0.0564$ \\
+object--color & 8 & 0.1600 & 0.2800 & $-0.4829$ & $+0.0837$ \\
+male--female & 2 & 0.1600 & 0.2800 & $-0.5284$ & $+0.1095$ \\
+male--female & 4 & 0.2400 & 0.4200 & $-0.5913$ & $+0.1982$ \\
+male--female & 8 & 0.3200 & 0.4400 & $-0.6292$ & $+0.2568$ \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+The transfer strength varies sharply by relation. Closed-class factual relations
+such as country--capital, country--language, and name--occupation reach top-1 hit
+rates of $0.38$--$0.44$ at donor factor $4$, where the donor answer probability
+rises by up to $+0.33$ while the source answer probability collapses toward zero.
+Looser semantic relations such as animal--young and animal--sound stay near zero
+top-1 transfer, although their negative source deltas and small positive donor
+deltas show that the intervention still moves probability mass in the expected
+direction even when the top-1 token does not flip. Across most relations the
+source target probability is strongly suppressed at every factor, confirming
+that the source Output supernode is the dominant carrier of the original answer;
+donor injection then competes for the freed probability mass, and its success
+depends on how cleanly the relation maps a query entity to a single answer token.
+
+\subsection{Edge-response steering results}
+
+Table~\ref{tab:steering-summary} summarizes the steering evaluation on
+the final summary graphs. The result is averaged over 100 summary graphs
+from the $\alpha=0.5$, node-threshold $0.02$ condition and covers 13,881
+evaluated edge-result rows. Sign consistency is high, which means that most
+signed summary edges predict the direction of the measured intervention
+response.
+
+\begin{table}[ht]
+\centering
+\caption{Steering validation on 100 summary graphs. Values are means
+across graphs. Sign consistency and Spearman correlation are higher when
+summary edges better predict intervention responses.}
+\label{tab:steering-summary}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lrrrr}
+\toprule
+Method & Sign consistency & Spearman edge effect & $|\Delta p_y|$ & Logit-SN $|\Delta p|$ \\
+\midrule
+Ours & 0.9361 & 0.5633 & 0.1332 & 0.1333 \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+The positive edge-effect rank correlation shows that larger summary edges tend
+to induce larger measured responses. Together with the high sign consistency,
+this suggests that the final summary graph preserves much of the directional and
+signed intervention behavior of the underlying attribution graph.
+
+\section{Chapter Summary}
+
+This chapter evaluated the summarization pipeline through three experiments. The
+pruning experiment showed that adding upstream relevance to the importance score
+does not substantially reduce replacement score or graph completeness at matched
+graph sizes, while discarding features that are not semantically relevant to the input prompt. The clustering experiment showed that the ILP clusterer yields the
+strongest downstream-effect coherence and the lowest structural loss among the
+tested baselines, even though K-means obtains the highest raw silhouette score.
+The end to end steering experiment validated the final summary graph's ability to predict the behavior of the model under intervention. Taken
+together, these results indicate that the proposed pipeline preserves important
+causal structure while compressing attribution graphs into more interpretable
+summary graphs. Chapter~6 discusses the remaining limitations, and future work.
+\end{document}

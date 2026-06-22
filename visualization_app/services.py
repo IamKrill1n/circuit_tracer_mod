@@ -1131,6 +1131,7 @@ def _stored_supernode_intervention_groups(
                 "source_slug": record["source_slug"],
                 "factor": factor,
                 "target_pos": target_pos,
+                "layer": min(layer for layer, _feature in donor_by_feature),
                 "n_features": len(donor_by_feature),
             }
         )

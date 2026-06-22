@@ -478,11 +478,20 @@ progress {
   min-width: 700px;
 }
 
+.steering-figure-panel {
+  margin-top: 14px;
+}
+
+.steering-figure-panel:empty {
+  margin-top: 0;
+}
+
 .steering-figure {
   width: 100%;
-  min-width: 760px;
-  height: 780px;
-  border: 0;
+  min-width: 0;
+  height: 800px;
+  border: 1px solid #d8e0ea;
+  border-radius: 7px;
   background: white;
 }
 

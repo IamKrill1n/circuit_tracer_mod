@@ -201,6 +201,7 @@ async function openSteeringDialog() {
   status.textContent = "Loading steering options...";
   result.className = "steering-result muted";
   result.textContent = "Steering output appears here.";
+  el("steeringFigure").innerHTML = "";
   el("steeringProgressRow").hidden = true;
   el("supernodeStoragePanel").hidden = true;
   el("steeringDialog").showModal();
@@ -223,7 +224,26 @@ function defaultStoredTargetPos() {
   return Math.max(0, tokens.length - 1);
 }
 
+function captureSteeringSelection() {
+  const checked = [];
+  const factors = {};
+  el("steeringNodeList")
+    .querySelectorAll("input[type='checkbox'][data-steer-name]")
+    .forEach((checkbox) => {
+      if (checkbox.checked) checked.push(checkbox.dataset.steerName);
+    });
+  el("steeringNodeList")
+    .querySelectorAll("input[data-steer-factor]")
+    .forEach((input) => {
+      factors[input.dataset.steerFactor] = input.value;
+    });
+  return { checked, factors };
+}
+
 function renderSteeringNodes(supernodes) {
+  const preSelection = captureSteeringSelection();
+  const hadPriorNodes =
+    el("steeringNodeList").querySelectorAll("input[data-steer-name]").length > 0;
   const list = el("steeringNodeList");
   list.innerHTML = "";
   const stored = state.selectedStoredSupernodes || [];
@@ -243,7 +263,9 @@ function renderSteeringNodes(supernodes) {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.dataset.steerName = supernode.name;
-    checkbox.checked = index === 0;
+    checkbox.checked = hadPriorNodes
+      ? preSelection.checked.includes(supernode.name)
+      : index === 0;
     checkboxLabel.appendChild(checkbox);
 
     const text = document.createElement("span");
@@ -258,7 +280,7 @@ function renderSteeringNodes(supernodes) {
     const factor = document.createElement("input");
     factor.type = "number";
     factor.step = "0.5";
-    factor.value = "-1";
+    factor.value = preSelection.factors[supernode.name] ?? "-1";
     factor.dataset.steerFactor = supernode.name;
     factor.setAttribute("aria-label", `factor for ${supernode.name}`);
 
@@ -466,6 +488,8 @@ function renderSteeringResult(result) {
   const container = el("steeringResult");
   container.className = "steering-result";
   container.innerHTML = "";
+  const figurePanel = el("steeringFigure");
+  figurePanel.innerHTML = "";
 
   const outputs = document.createElement("div");
   outputs.className = "steering-outputs";
@@ -475,22 +499,21 @@ function renderSteeringResult(result) {
     pill.textContent = `${item.token} ${Number(item.probability).toFixed(3)}`;
     outputs.appendChild(pill);
   });
+  container.appendChild(outputs);
 
   if (result.figure_html) {
     const frame = document.createElement("iframe");
     frame.className = "steering-figure";
     frame.title = "steering visualization";
     frame.srcdoc = result.figure_html;
-    container.appendChild(outputs);
-    container.appendChild(frame);
+    figurePanel.appendChild(frame);
     return;
   }
 
-  container.appendChild(outputs);
   const svg = document.createElement("div");
   svg.className = "steering-svg";
   svg.innerHTML = result.svg || "";
-  container.appendChild(svg);
+  figurePanel.appendChild(svg);
 }
 
 el("refreshBtn").addEventListener("click", refreshGraphs);

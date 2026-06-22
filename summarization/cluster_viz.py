@@ -27,6 +27,10 @@ _KIND_STYLE = {
 _CARD_W = 0.92
 _CARD_H = 0.58
 _BAR_H = 0.52
+# Injected donor supernodes use an orange "active intervention" fill (matches the
+# highlighted "California" card in the Anthropic steering figure).
+_ADDED_FILL = "#FBE3CB"
+_ADDED_LINE = "#C2570C"
 
 
 def _sn_kind(sn_name: str, node_by_name: dict[str, Supernode]) -> str:
@@ -170,6 +174,11 @@ def _format_factor(factor: float) -> str:
     return f"{factor:g}x"
 
 
+def _format_signed_factor(factor: float) -> str:
+    """Badge text with an explicit sign so added (+2x) and ablated (-2x) read distinctly."""
+    return f"+{factor:g}x" if factor >= 0 else f"{factor:g}x"
+
+
 def _format_ratio(ratio: float) -> str:
     return f"{ratio * 100:.0f}%" if 0.0 <= ratio <= 2.0 else f"{ratio:.2g}x"
 
@@ -211,19 +220,6 @@ def _steering_hover_lines(
         ratio = float(ratio_value)
         lines.append(f"Activation ratio: {_format_ratio(ratio)}")
     return lines
-
-
-def _stored_intervention_text(stored_interventions: list[dict[str, Any]]) -> str:
-    lines = ["<b>External interventions</b>"]
-    for item in stored_interventions[:4]:
-        label = html.escape(str(item.get("label") or item.get("record_id") or "stored"))
-        factor = _format_factor(float(item.get("factor", 0.0)))
-        target_pos = int(item.get("target_pos", 0))
-        n_features = int(item.get("n_features", 0))
-        lines.append(f"{label}: {factor} at pos {target_pos} ({n_features} feats)")
-    if len(stored_interventions) > 4:
-        lines.append(f"+{len(stored_interventions) - 4} more")
-    return "<br>".join(lines)
 
 
 def _rounded_rect_path(x0: float, y0: float, x1: float, y1: float, rx: float, ry: float) -> str:
@@ -272,7 +268,7 @@ def _supernode_layout(
     attr: dict[str, dict[str, Any]] | None,
     node_by_name: dict[str, Supernode],
     right_x: float | None = None,
-) -> tuple[dict[str, tuple[float, float]], int]:
+) -> tuple[dict[str, tuple[float, float]], int, dict[int, int]]:
     """x = token position (ctx mean); y = layer rank (row 0 reserved for token bar)."""
     rows: dict[int, list[tuple[str, float]]] = {}
     non_logit_ctx: list[float] = []
@@ -307,7 +303,7 @@ def _supernode_layout(
             last_x = x
             pos[sn] = (x, float(layer_y[layer]))
     top_y = len(ordered_layers) + 1
-    return pos, top_y
+    return pos, top_y, layer_y
 
 
 def _rect_boundary_point(
@@ -356,7 +352,8 @@ def _token_bar(
     fig.add_annotation(
         xref="paper",
         x=0.0,
-        xanchor="left",
+        xanchor="right",
+        xshift=-8,
         yref="y",
         y=y,
         text="<b>Input Tokens →</b>",
@@ -410,7 +407,8 @@ def _output_bar(
     fig.add_annotation(
         xref="paper",
         x=0.0,
-        xanchor="left",
+        xanchor="right",
+        xshift=-8,
         yref="y",
         y=y,
         text="<b>Outputs / Logits →</b>",
@@ -483,7 +481,9 @@ def supernode_graph_figure(
 
     layout_names = [sn for sn in sn_names if sn not in hidden]
     output_x = float(len(prompt_tokens)) if prompt_tokens else None
-    pos, top_y = _supernode_layout(layout_names, mapping, attr, node_by_name, right_x=output_x)
+    pos, top_y, layer_y = _supernode_layout(
+        layout_names, mapping, attr, node_by_name, right_x=output_x
+    )
     k = len(sn_names)
 
     # Per-card geometry, colors, kinds.
@@ -602,7 +602,7 @@ def supernode_graph_figure(
             fig.add_annotation(
                 x=cx + w / 2,
                 y=cy + h / 2,
-                text=_format_factor(float(steering_factors[sn])),
+                text=_format_signed_factor(float(steering_factors[sn])),
                 showarrow=False,
                 xanchor="right",
                 yanchor="bottom",
@@ -694,27 +694,85 @@ def supernode_graph_figure(
                 text="",
             )
 
-    if stored_interventions:
+    # --- Injected donor supernodes (the "added" intervention) as highlighted cards ---
+    # These are not part of the summary graph, so they have no layout slot or edges; we
+    # place each at the injection token column (target_pos) and the row of its nearest
+    # decode layer, then nudge right into a free slot so the card never overlaps an
+    # existing supernode (or another donor).
+    min_dx, min_dy = 1.05, 0.9  # card-center separation needed to avoid visual overlap
+    occupied_centers: list[tuple[float, float]] = [(g[0], g[1]) for g in geom.values()]
+    donor_coords: list[tuple[float, float]] = []
+    donor_hover_x: list[float] = []
+    donor_hover_y: list[float] = []
+    donor_hover_text: list[str] = []
+    for item in stored_interventions or []:
+        cx = float(item.get("target_pos", 0))
+        layer = int(item.get("layer", 0))
+        if layer_y:
+            nearest_layer = min(layer_y, key=lambda lyr: abs(lyr - layer))
+            cy = float(layer_y[nearest_layer])
+        else:
+            cy = float(top_y) - 1.0
+        while any(abs(cx - ox) < min_dx and abs(cy - oy) < min_dy for ox, oy in occupied_centers):
+            cx += 1.0
+        occupied_centers.append((cx, cy))
+
+        _add_card(fig, cx, cy, _CARD_W, _CARD_H, _ADDED_FILL, _ADDED_LINE, stacked=True)
+        label = str(item.get("label") or item.get("record_id") or "stored")
         fig.add_annotation(
-            xref="paper",
-            yref="paper",
-            x=1.0,
-            y=1.0,
-            xanchor="right",
-            yanchor="top",
-            text=_stored_intervention_text(stored_interventions),
+            x=cx,
+            y=cy,
+            text=_wrap_label(label),
             showarrow=False,
-            align="left",
-            font=dict(size=10, color="#333"),
-            bgcolor="#FFF8DC",
+            font=dict(size=9, color="#1a1a1a"),
+            align="center",
+        )
+        fig.add_annotation(
+            x=cx + _CARD_W / 2,
+            y=cy + _CARD_H / 2,
+            text=_format_signed_factor(float(item.get("factor", 0.0))),
+            showarrow=False,
+            xanchor="right",
+            yanchor="bottom",
+            font=dict(size=10, color="white"),
+            bgcolor="#C2570C",
             bordercolor="#C2570C",
-            borderpad=6,
+            borderpad=3,
+        )
+        donor_coords.append((cx, cy))
+        donor_hover_x.append(cx)
+        donor_hover_y.append(cy)
+        donor_hover_text.append(
+            "<br>".join(
+                [
+                    f"<b>Injected supernode: {html.escape(label)}</b>",
+                    f"Source: {html.escape(str(item.get('source_slug') or ''))}",
+                    f"Intervention: {_format_signed_factor(float(item.get('factor', 0.0)))}",
+                    f"Target position: {int(item.get('target_pos', 0))}",
+                    f"Features: {int(item.get('n_features', 0))}",
+                ]
+            )
+        )
+
+    if donor_hover_x:
+        fig.add_trace(
+            go.Scatter(
+                x=donor_hover_x,
+                y=donor_hover_y,
+                mode="markers",
+                marker=dict(size=18, color="rgba(0,0,0,0)"),
+                hovertext=donor_hover_text,
+                hoverinfo="text",
+                showlegend=False,
+            )
         )
 
     # --- Layout / ranges ---
     n_tokens = len(prompt_tokens) if prompt_tokens else 0
-    xs_for_range = [g[0] for g in geom.values()] + edge_xs + [0.0, float(n_tokens)]
-    ys_for_range = [g[1] for g in geom.values()] + edge_ys + [0.0, float(top_y)]
+    donor_xs = [c[0] for c in donor_coords]
+    donor_ys = [c[1] for c in donor_coords]
+    xs_for_range = [g[0] for g in geom.values()] + edge_xs + donor_xs + [0.0, float(n_tokens)]
+    ys_for_range = [g[1] for g in geom.values()] + edge_ys + donor_ys + [0.0, float(top_y)]
     x_min = min(xs_for_range) - 1.5
     x_max = max(xs_for_range) + 1.5
     y_min = min(ys_for_range) - 0.7
@@ -724,7 +782,7 @@ def supernode_graph_figure(
         showlegend=False,
         xaxis=dict(visible=False, range=[x_min, x_max]),
         yaxis=dict(visible=False, range=[y_min, y_max]),
-        margin=dict(l=120, r=30, t=50, b=20),
+        margin=dict(l=150, r=30, t=50, b=20),
         plot_bgcolor="white",
         paper_bgcolor="white",
         height=760,
