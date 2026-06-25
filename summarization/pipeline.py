@@ -169,6 +169,9 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     # Stage 0: produce a circuit_tracer Graph (local attribution or loaded .pt).
     _report_progress(args, "Loading attribution graph", 0.05)
     graph = _acquire_graph(args)
+    device = str(getattr(args, "device", "cpu"))
+    if not device.startswith("cpu") and hasattr(graph, "to"):
+        graph.to(device)
     _report_progress(args, "Building attribution graph view", 0.12)
     ag = AttrGraph.from_graph(graph)
 

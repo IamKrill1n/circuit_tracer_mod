@@ -68,6 +68,14 @@ def test_prune_api_defaults_match_pipeline_defaults() -> None:
 def test_run_pipeline_saves_prune_graph(monkeypatch, tmp_path) -> None:
     from summarization import pipeline
 
+    class FakeGraph:
+        def __init__(self) -> None:
+            self.devices: list[str] = []
+
+        def to(self, device: str) -> None:
+            self.devices.append(device)
+
+    graph = FakeGraph()
     nodes = [
         Node(
             node_id="E_1_0",
@@ -115,7 +123,7 @@ def test_run_pipeline_saves_prune_graph(monkeypatch, tmp_path) -> None:
     ]
     summary_graph = SummaryGraph(rows, prune_graph.pruned_adj, prune_graph.metadata)
 
-    monkeypatch.setattr(pipeline, "_acquire_graph", lambda _args: object())
+    monkeypatch.setattr(pipeline, "_acquire_graph", lambda _args: graph)
     monkeypatch.setattr(pipeline.AttrGraph, "from_graph", lambda _graph: object())
     monkeypatch.setattr(pipeline, "prune_attr_graph", lambda *_args, **_kwargs: prune_graph)
     monkeypatch.setattr(pipeline, "cluster", lambda *_args, **_kwargs: rows)
@@ -126,6 +134,7 @@ def test_run_pipeline_saves_prune_graph(monkeypatch, tmp_path) -> None:
     args = Namespace(
         token_weights=None,
         auto_token_weights=False,
+        device="cuda",
         logit_weights="target",
         node_threshold=0.02,
         edge_threshold=0.9,
@@ -156,5 +165,6 @@ def test_run_pipeline_saves_prune_graph(monkeypatch, tmp_path) -> None:
     saved = load_prune_graph(str(prune_path))
     assert saved.num_nodes == prune_graph.num_nodes
     assert saved.num_edges == prune_graph.num_edges
+    assert graph.devices == ["cuda"]
     assert result["prune_graph_out"] == str(prune_path)
     assert result["summary_graph_out"] == str(summary_path)
