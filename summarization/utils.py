@@ -2,8 +2,6 @@ import json
 import time
 import torch
 from api import get_feature, generate_autointerp
-import networkx as nx
-from typing import Any, Literal, NamedTuple
 
 from summarization.summarize import Node
 

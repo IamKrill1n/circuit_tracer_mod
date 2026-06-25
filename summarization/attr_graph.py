@@ -125,7 +125,6 @@ class AttrGraph:
             )
 
         # --- Embedding / token nodes ---
-        error_end_idx = n_feat + n_err
         for pos in range(n_tok):
             vocab_idx = graph.input_tokens[pos]
             vid = int(vocab_idx.item()) if hasattr(vocab_idx, "item") else int(vocab_idx)

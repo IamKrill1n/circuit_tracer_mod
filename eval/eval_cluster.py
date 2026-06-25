@@ -541,9 +541,9 @@ def _discover_prune_graphs(
 
 
 def _default_input_paths() -> list[str]:
-    candidates = ["eval_outputs/prune/subgraph/clt-hp"]
+    candidates = ["pruned_graphs", "eval_outputs/prune/subgraph/clt-hp"]
     existing = [path for path in candidates if Path(path).exists()]
-    return existing or ["demos/eval_shap_prune"]
+    return existing or ["pruned_graphs"]
 
 
 def _graph_identity(graph_path: Path, input_paths: Sequence[str]) -> tuple[str, str]:

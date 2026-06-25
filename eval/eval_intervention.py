@@ -11,7 +11,7 @@ For each supernode in either a saved summary graph or a clustering rebuilt from 
          of logit-delta vectors (vs. inter-cluster baseline)
 
 When prune graphs are used as input, methods are compared against the same baselines used in
-eval_cluster.py: modularity (K-matched), spectral-rbf, and kmeans, all at our spectral's auto-k.
+eval_cluster.py: spectral-cosine, kmeans, and spectral-adj, all at our spectral's auto-k.
 When summary graphs are used as input, the saved summary graph is evaluated as-is.
 """
 
@@ -33,7 +33,7 @@ from eval.eval_cluster import (
     _adjacency_affinity,
     _kmeans_middle_labels,
     _middle_indices,
-    _modularity_middle_labels,
+    _spectral_affinity_middle_labels,
     _spectral_cosine_middle_labels,
 )
 from eval.legacy_cluster_baselines import (
@@ -63,9 +63,9 @@ ALL_METHODS = (
     "spectral",
     "agglomerative",
     "ilp",
-    "baseline-modularity",
     "baseline-spectral-cosine",
     "baseline-kmeans",
+    "baseline-spectral-adj",
 )
 DEFAULT_METHODS = tuple(m for m in ALL_METHODS if m != "ilp")
 
@@ -375,7 +375,7 @@ def _build_sngs(
 
     # Baselines (match eval_cluster.py). They run at K = best_k_s (spectral's auto-k) so the
     # per-method comparison is at the same supernode count — unless K-matched to ILP instead.
-    baseline_methods = {"baseline-modularity", "baseline-spectral-cosine", "baseline-kmeans"}
+    baseline_methods = {"baseline-spectral-cosine", "baseline-kmeans", "baseline-spectral-adj"}
     if wanted & baseline_methods:
         if baseline_k_override is not None:
             baseline_k = baseline_k_override
@@ -388,11 +388,13 @@ def _build_sngs(
         adjacency_mid = _adjacency_affinity(prune_graph)[np.ix_(mid_idx, mid_idx)]
         phi_mid = compute_phi_vectors(prune_graph).detach().cpu().numpy()[mid_idx]
         baseline_labels = {
-            "baseline-modularity": _modularity_middle_labels(adjacency_mid, baseline_k),
             "baseline-spectral-cosine": _spectral_cosine_middle_labels(
                 phi_mid, baseline_k, random_state, n_init
             ),
             "baseline-kmeans": _kmeans_middle_labels(phi_mid, baseline_k, random_state, n_init),
+            "baseline-spectral-adj": _spectral_affinity_middle_labels(
+                adjacency_mid, baseline_k, random_state, n_init
+            ),
         }
         for name, labels in baseline_labels.items():
             if name in wanted:

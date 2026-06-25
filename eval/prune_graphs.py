@@ -396,7 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
             "PruneGraph .pt files plus a manifest.json consumed by eval/eval_prune.py."
         )
     )
-    parser.add_argument("--graphs-root", default="demos/temp_graph_files")
+    parser.add_argument("--graphs-root", default="dataset/analogies")
     parser.add_argument("--source-sets", nargs="+", default=None)
     parser.add_argument("--output-root", default="eval_outputs/prune/subgraph")
     parser.add_argument("--shap-values-json", type=str, default=str(DEFAULT_SHAP_VALUES_JSON))

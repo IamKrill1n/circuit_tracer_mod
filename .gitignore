@@ -178,21 +178,25 @@ cython_debug/
 .vscode/
 
 #Big files
-demos/graphs/
-demos/temp_graph_files/
-demos/graph_files/
+demos/
 nohup.out
 runs/
-pruned_graph
-dataset/
+pruned_graph/
+pruned_graphs/
+summary_graphs/
+labeled_summary/
+temp_graph_files/
+eval_outputs/
+dataset/*
+!dataset/analogies/
+dataset/analogies/*
+!dataset/analogies/shap_values.json
 analogy_graphs/
 multihop_graphs/
-eval_outputs/analogies/analogies
 graphs/
 graph_files/
 generated_graphs/
 summary/
+reports/
+figures/
 # agent
-# datasets
-make_bats_dataset.py
-

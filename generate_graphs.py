@@ -12,10 +12,8 @@ Usage:
 """
 
 import argparse
-import os
 from pathlib import Path
 
-from circuit_tracer.utils.create_graph_files import create_graph_files
 import torch
 from huggingface_hub import HfApi
 

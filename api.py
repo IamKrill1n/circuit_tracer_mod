@@ -1,5 +1,5 @@
 import requests
-from typing import Tuple, List, Optional, Any
+from typing import Any
 from pathlib import Path
 import zlib
 from config import NEURONPEDIA_API_KEY
@@ -12,7 +12,7 @@ CLOUDFRONT_FEATURES = "https://d1fk9w8oratjix.cloudfront.net/features"
 HF_BASE = "https://huggingface.co"
 
 
-def get_feature(modelId: str, layer: str, index: int) -> Tuple[int, str]:
+def get_feature(modelId: str, layer: str, index: int) -> tuple[int, str]:
     """Fetch a feature from the Neuronpedia API.
 
     Args:
@@ -128,7 +128,7 @@ def generate_autointerp(
     index: int,
     explanationModelName: str = "gemini-2.5-flash",
     explanationType: str = "oai_token-act-pair"
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     """Generate auto-interpretation for a feature.
     
     Args:
@@ -168,7 +168,7 @@ def generate_graph(
     maxFeatureNodes: int = 10000,
     maxNLogits: int = 15,
     nodeThreshold: float = 1
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     """Generate an attribution graph via the Neuronpedia API.
     
     Args:
@@ -207,13 +207,13 @@ def save_subgraph(
     modelId: str,
     slug: str,
     displayName: str,
-    pinnedIds: List[str],
-    supernodes: Optional[List[List[str]]] = None,
-    clerps: Optional[List[str]] = None,
+    pinnedIds: list[str],
+    supernodes: list[list[str]] | None = None,
+    clerps: list[str] | None = None,
     pruningThreshold: float = 0.8,
     densityThreshold: float = 0.99,
     overwriteId: str = "",
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     """Save a subgraph to Neuronpedia.
 
     Args:
@@ -255,16 +255,16 @@ def save_subgraph(
 def steer_logits(
     modelId: str,
     prompt: str,
-    features: List[dict[str, Any]],
-    sourceSetName: Optional[str] = None,
+    features: list[dict[str, Any]],
+    sourceSetName: str | None = None,
     nTokens: int = 1,
     topK: int = 5,
     freezeAttention: bool = True,
     temperature: float = 0.0,
     freqPenalty: float = 0.0,
-    seed: Optional[int] = 16,
+    seed: int | None = 16,
     steeredOutputOnly: bool = False,
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     """Steer model logits via Neuronpedia's `/api/steer-logits` endpoint.
 
     Args:
