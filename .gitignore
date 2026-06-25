@@ -187,10 +187,6 @@ summary_graphs/
 labeled_summary/
 temp_graph_files/
 eval_outputs/
-dataset/*
-!dataset/analogies/
-dataset/analogies/*
-!dataset/analogies/shap_values.json
 analogy_graphs/
 multihop_graphs/
 graphs/

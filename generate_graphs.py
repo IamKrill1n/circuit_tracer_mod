@@ -54,7 +54,7 @@ def main() -> None:
         api.create_repo(args.hf_repo, repo_type="dataset", exist_ok=True)
 
     model = ReplacementModel.from_pretrained(
-        args.model, args.transcoder, dtype=torch.bfloat16, lazy_encoder=True, backend=args.backend
+        args.model, args.transcoder, dtype=torch.bfloat16, lazy_encoder=False, backend=args.backend
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
