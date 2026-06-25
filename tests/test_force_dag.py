@@ -206,27 +206,33 @@ def test_pi_is_dag_on_complex_input() -> None:
 # --- compute_C_causal integration -------------------------------------------
 
 
-def test_compute_C_causal_is_internal_mass_fraction() -> None:
+def test_compute_C_causal_uses_total_pruned_mass_denominator() -> None:
     # C_causal: fraction of pruned edge mass absorbed inside a supernode.
     from eval.eval_cluster import compute_C_causal
 
-    a = _feat_node("a", 0, layer=1)
-    b = _feat_node("b", 1, layer=2)
-    c = _feat_node("c", 2, layer=2)
+    emb = _emb_node("emb", 0)
+    a = _feat_node("a", 1, layer=1)
+    b = _feat_node("b", 2, layer=2)
+    c = _feat_node("c", 3, layer=2)
+    logit = _logit_node("logit", 4)
+    emb_sn = Supernode("EMB", [emb], "emb", 0, 0)
     ab = Supernode("AB", [a, b], "features", 1, 2)  # a, b merged: a->b edge is internal
     c_sn = Supernode("C", [c], "features", 2, 2)
+    logit_sn = Supernode("LOGIT", [logit], "logit", 27, 27)
     pruned_adj = torch.tensor(
         [
-            [0.0, 0.0, 0.0],  # to a
-            [2.0, 0.0, 0.0],  # to b: from a (2.0) — internal to AB
-            [1.0, 3.0, 0.0],  # to c: from a (1.0), from b (3.0) — external
+            [0.0, 0.0, 0.0, 0.0, 0.0],  # to emb
+            [5.0, 0.0, 0.0, 0.0, 0.0],  # to a: from emb (5.0)
+            [0.0, 2.0, 0.0, 0.0, 0.0],  # to b: from a (2.0) — internal to AB
+            [0.0, 1.0, 3.0, 0.0, 0.0],  # to c: from a (1.0), from b (3.0)
+            [0.0, 0.0, 0.0, 7.0, 0.0],  # to logit: from c (7.0)
         ],
         dtype=torch.float32,
     )
-    sng = SummaryGraph(supernodes=[ab, c_sn], pruned_adj=pruned_adj)
+    sng = SummaryGraph(supernodes=[emb_sn, ab, c_sn, logit_sn], pruned_adj=pruned_adj)
 
     internal = 2.0  # only a->b lives inside a supernode
-    total = 2.0 + 1.0 + 3.0  # all pruned edge mass
+    total = 5.0 + 2.0 + 1.0 + 3.0 + 7.0  # all pruned edge mass
     assert compute_C_causal(sng) == pytest.approx(internal / total)
 
 

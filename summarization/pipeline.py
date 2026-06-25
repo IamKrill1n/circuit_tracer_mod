@@ -21,7 +21,7 @@ from api import save_subgraph
 from eval.legacy_cluster_baselines import cluster as legacy_cluster
 from eval.legacy_cluster_baselines import find_best_k
 from summarization.attr_graph import AttrGraph
-from summarization.cluster import cluster
+from summarization.cluster import DEFAULT_THETA, cluster
 from summarization.cluster_viz import supernode_graph_figure
 from summarization.prune import filter_act_density, prune_attr_graph
 from summarization.summarize import summarize
@@ -216,6 +216,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     if args.method == "ilp":
         rows = cluster(
             prune_graph,
+            theta=getattr(args, "theta", DEFAULT_THETA),
             max_layer_span=args.max_layer_span,
             max_sn=args.max_sn,
             eps_causal=args.eps_causal,
@@ -273,7 +274,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         },
     )
     _save_json(
-        args.auto_k_sweep_out,
+        getattr(args, "auto_k_sweep_out", None),
         {
             str(k): {key: value for key, value in score.items() if key != "final_supernodes"}
             for k, score in sweep.items()

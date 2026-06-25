@@ -35,19 +35,29 @@ def test_slugify_and_graph_paths(tmp_path: Path) -> None:
     slug = services.slugify("Gemma graph: Austin!")
 
     assert slug == "Gemma-graph--Austin"
-    assert services.graph_dir(slug, tmp_path) == tmp_path / slug
-    assert services.graph_json_path(slug, tmp_path) == tmp_path / slug / f"{slug}.json"
+    assert services.graph_dir(slug, "custom", tmp_path) == tmp_path / "custom" / slug
+    assert (
+        services.graph_json_path(slug, "custom", tmp_path)
+        == tmp_path / "custom" / slug / f"{slug}.json"
+    )
     assert services.sidecar_pt_path(slug, tmp_path) == tmp_path / f"{slug}.pt"
+    assert (
+        services.summary_path(slug, "analogies", tmp_path)
+        == tmp_path / "analogies" / f"{slug}.sng.pt"
+    )
 
 
 def test_list_graphs_reads_viewer_directories(tmp_path: Path) -> None:
     graph_root = tmp_path / "graph_files"
-    pt_root = tmp_path / "generated_graphs"
-    graph_dir = graph_root / "austin"
+    summary_root = tmp_path / "summary"
+    custom_pt_root = tmp_path / "generated_graphs"
+    graph_dir = graph_root / "custom" / "austin"
     graph_dir.mkdir(parents=True)
-    pt_root.mkdir()
-    (pt_root / "Austin.pt").write_bytes(b"pt")
-    (pt_root / "austin.sng.pt").write_bytes(b"sng")
+    custom_pt_root.mkdir()
+    summary_root.mkdir(parents=True)
+    (custom_pt_root / "Austin.pt").write_bytes(b"pt")
+    (summary_root / "custom").mkdir(parents=True)
+    (summary_root / "custom" / "austin.sng.pt").write_bytes(b"sng")
     (graph_dir / "austin.json").write_text(
         json.dumps(
             {
@@ -64,14 +74,51 @@ def test_list_graphs_reads_viewer_directories(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    records = services.list_graphs(graph_root, pt_root)
+    records = services.list_graphs(
+        graph_root,
+        summary_root,
+        custom_pt_root=custom_pt_root,
+    )
 
     assert len(records) == 1
     assert records[0].slug == "austin"
+    assert records[0].dataset == "custom"
     assert records[0].has_pt is True
     assert records[0].has_summary is True
     assert records[0].node_count == 1
     assert records[0].link_count == 1
+
+
+def test_list_graphs_distinguishes_same_slug_across_datasets(tmp_path: Path) -> None:
+    graph_root = tmp_path / "graph_files"
+    summary_root = tmp_path / "summary"
+    dataset_root = tmp_path / "dataset"
+    for dataset in ("analogies", "multihop"):
+        graph_dir = graph_root / dataset / "000"
+        graph_dir.mkdir(parents=True)
+        (dataset_root / dataset).mkdir(parents=True)
+        (dataset_root / dataset / "000.pt").write_bytes(b"pt")
+        (graph_dir / "000.json").write_text(
+            json.dumps(
+                {
+                    "metadata": {"slug": "000", "prompt": dataset, "prompt_tokens": []},
+                    "nodes": [],
+                    "links": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    records = services.list_graphs(
+        graph_root,
+        summary_root,
+        dataset_root=dataset_root,
+    )
+
+    assert {(record.dataset, record.slug) for record in records} == {
+        ("analogies", "000"),
+        ("multihop", "000"),
+    }
 
 
 def test_summary_request_defaults_match_graph_workflow() -> None:
@@ -81,15 +128,15 @@ def test_summary_request_defaults_match_graph_workflow() -> None:
 
     assert req.token_weights_source == "shap"
     assert req.token_attr_normalize == "entmax"
-    assert req.shap_values_path == "dataset/analogies/shap_values.json"
+    assert req.shap_values_path == ""
     assert req.node_threshold == 0.02
     assert req.edge_threshold == 0.9
     assert req.filter_act_density is True
-    assert req.cluster_method == "ilp"
     assert req.max_layer_span == 7
     assert req.max_sn == 20
     assert req.eps_causal == 0.05
-    assert req.theta == 0.0
+    assert req.theta == "p65"
+    assert req.label_supernodes is True
     assert req.label_model == "gemma-4-31b-it"
 
 
@@ -111,10 +158,10 @@ def test_steering_request_defaults_match_streamlit_workflow() -> None:
     assert req.stored_supernodes == []
 
     stored_req = SteeringRequest(
-        stored_supernodes=[{"record_id": "austin:0", "factor": 2.0, "target_pos": 3}]
+        stored_supernodes=[{"record_id": "analogies:austin:0", "factor": 2.0, "target_pos": 3}]
     )
     assert stored_req.factors == {}
-    assert stored_req.stored_supernodes[0].record_id == "austin:0"
+    assert stored_req.stored_supernodes[0].record_id == "analogies:austin:0"
     assert stored_req.stored_supernodes[0].factor == 2.0
     assert stored_req.stored_supernodes[0].target_pos == 3
 
@@ -165,10 +212,10 @@ def test_load_steering_model_suppresses_dependency_output(
 
 def test_steering_options_reads_feature_supernodes(tmp_path: Path) -> None:
     graph_root = tmp_path / "graph_files"
-    pt_root = tmp_path / "generated_graphs"
-    graph_dir = graph_root / "austin"
+    summary_root = tmp_path / "summary"
+    graph_dir = graph_root / "custom" / "austin"
     graph_dir.mkdir(parents=True)
-    pt_root.mkdir()
+    summary_root.mkdir(parents=True)
     (graph_dir / "austin.json").write_text(
         json.dumps(
             {
@@ -206,9 +253,17 @@ def test_steering_options_reads_feature_supernodes(tmp_path: Path) -> None:
         pruned_adj=torch.zeros((3, 3)),
         metadata={"prompt": "summary prompt"},
     )
-    sng.save(str(pt_root / "austin.sng.pt"))
+    (summary_root / "custom").mkdir(parents=True)
+    sng.save(str(summary_root / "custom" / "austin.sng.pt"))
 
-    options = services.steering_options("austin", graph_root, pt_root)
+    options = services.steering_options(
+        "austin",
+        "custom",
+        graph_root,
+        summary_root,
+        dataset_root=tmp_path / "dataset",
+        custom_pt_root=tmp_path / "generated_graphs",
+    )
 
     assert options["prompt"] == "summary prompt"
     assert options["transcoder"] == "CLT-HP"
@@ -227,8 +282,9 @@ def test_steering_options_reads_feature_supernodes(tmp_path: Path) -> None:
 
 def test_supernode_storage_indexes_feature_supernodes_only(tmp_path: Path) -> None:
     graph_root = tmp_path / "graph_files"
-    pt_root = tmp_path / "generated_graphs"
-    pt_root.mkdir()
+    summary_root = tmp_path / "summary"
+    summary_dir = summary_root / "custom"
+    summary_dir.mkdir(parents=True)
     sng = SummaryGraph(
         supernodes=[
             Supernode(
@@ -254,15 +310,20 @@ def test_supernode_storage_indexes_feature_supernodes_only(tmp_path: Path) -> No
         pruned_adj=torch.zeros((3, 3)),
         metadata={"prompt": "prompt", "prompt_tokens": ["prompt"], "scan": "CLT-HP"},
     )
-    sng.save(str(pt_root / "austin.sng.pt"))
+    sng.save(str(summary_dir / "austin.sng.pt"))
 
-    payload = services.rebuild_supernode_storage(graph_root, pt_root)
+    payload = services.rebuild_supernode_storage(
+        graph_root,
+        summary_root,
+        dataset_root=tmp_path / "dataset",
+        custom_pt_root=tmp_path / "generated_graphs",
+    )
 
-    assert services.supernode_storage_path(pt_root).exists()
+    assert services.supernode_storage_path(summary_root).exists()
     assert payload["version"] == 1
     assert len(payload["records"]) == 1
     record = payload["records"][0]
-    assert record["record_id"] == "austin:0"
+    assert record["record_id"] == "custom:austin:0"
     assert record["label"] == "Entity label"
     assert record["role"] == "Input"
     assert record["description"] == "Tracks the source entity."
@@ -271,8 +332,8 @@ def test_supernode_storage_indexes_feature_supernodes_only(tmp_path: Path) -> No
 
 
 def test_supernode_storage_filters_by_label_role_and_description(tmp_path: Path) -> None:
-    pt_root = tmp_path / "generated_graphs"
-    pt_root.mkdir()
+    summary_root = tmp_path / "summary"
+    summary_root.mkdir()
     payload = {
         "version": 1,
         "records": [
@@ -296,14 +357,14 @@ def test_supernode_storage_filters_by_label_role_and_description(tmp_path: Path)
             },
         ],
     }
-    services.supernode_storage_path(pt_root).write_text(json.dumps(payload), encoding="utf-8")
+    services.supernode_storage_path(summary_root).write_text(json.dumps(payload), encoding="utf-8")
 
-    by_label = services.list_supernode_storage(label="entity", pt_root=pt_root)
-    by_role = services.list_supernode_storage(role="abstract", pt_root=pt_root)
-    by_description = services.list_supernode_storage(description="source", pt_root=pt_root)
-    by_model = services.list_supernode_storage(model_name="google/gemma-2-2b", pt_root=pt_root)
+    by_label = services.list_supernode_storage(label="entity", summary_root=summary_root)
+    by_role = services.list_supernode_storage(role="abstract", summary_root=summary_root)
+    by_description = services.list_supernode_storage(description="source", summary_root=summary_root)
+    by_model = services.list_supernode_storage(model_name="google/gemma-2-2b", summary_root=summary_root)
     by_transcoder = services.list_supernode_storage(
-        transcoder="mwhanna/qwen3-4b-transcoders", pt_root=pt_root
+        transcoder="mwhanna/qwen3-4b-transcoders", summary_root=summary_root
     )
 
     assert [record["record_id"] for record in by_label["records"]] == ["a:0"]
@@ -357,15 +418,19 @@ def test_supernode_storage_endpoint_forwards_filters(monkeypatch: pytest.MonkeyP
 
 
 def test_stored_supernode_intervention_rejects_model_mismatch(tmp_path: Path) -> None:
-    pt_root = tmp_path / "generated_graphs"
-    pt_root.mkdir()
+    summary_root = tmp_path / "summary"
+    summary_root.mkdir()
+    donor_path = summary_root / "custom" / "donor.sng.pt"
+    donor_path.parent.mkdir(parents=True)
+    donor_path.write_bytes(b"placeholder")
     payload = {
         "version": 1,
         "records": [
             {
-                "record_id": "donor:0",
+                "record_id": "custom:donor:0",
+                "source_dataset": "custom",
                 "source_slug": "donor",
-                "source_path": str(pt_root / "donor.sng.pt"),
+                "source_path": str(donor_path),
                 "supernode_index": 0,
                 "label": "Stored donor",
                 "model_name": "model-a",
@@ -373,11 +438,11 @@ def test_stored_supernode_intervention_rejects_model_mismatch(tmp_path: Path) ->
             }
         ],
     }
-    services.supernode_storage_path(pt_root).write_text(json.dumps(payload), encoding="utf-8")
+    services.supernode_storage_path(summary_root).write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="indexed for model"):
         services._stored_supernode_intervention_groups(
-            [{"record_id": "donor:0", "factor": 1.0, "target_pos": 0}],
+            [{"record_id": "custom:donor:0", "factor": 1.0, "target_pos": 0}],
             n_pos=1,
             n_layers=1,
             d_transcoder=1,
@@ -385,7 +450,7 @@ def test_stored_supernode_intervention_rejects_model_mismatch(tmp_path: Path) ->
             transcoder="tc-a",
             layers_below=0,
             layers_above=1,
-            pt_root=pt_root,
+            summary_root=summary_root,
         )
 
 
@@ -610,15 +675,17 @@ def test_run_summary_delegates_core_work_to_pipeline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pt_root = tmp_path / "generated_graphs"
-    pt_root.mkdir()
-    pt_path = services.sidecar_pt_path("austin", pt_root)
+    summary_root = tmp_path / "summary"
+    custom_pt_root = tmp_path / "generated_graphs"
+    custom_pt_root.mkdir()
+    pt_path = services.custom_pt_path("austin", custom_pt_root)
     pt_path.write_bytes(b"placeholder")
     captured = {}
 
     def fake_run_pipeline(args):
         captured["graph_pt"] = args.graph_pt
         captured["method"] = args.method
+        captured["theta"] = args.theta
         captured["auto_token_weights"] = args.auto_token_weights
         captured["summary_graph_out"] = args.summary_graph_out
         sng = SummaryGraph(
@@ -650,24 +717,27 @@ def test_run_summary_delegates_core_work_to_pipeline(
 
     result = services.run_summary(
         slug="austin",
+        dataset="custom",
         settings={
             "token_weights_source": "shap",
-            "cluster_method": "ilp",
+            "theta": "p80",
             "label_supernodes": False,
         },
-        pt_root=pt_root,
+        summary_root=summary_root,
+        custom_pt_root=custom_pt_root,
     )
 
     assert captured == {
         "graph_pt": str(pt_path),
         "method": "ilp",
+        "theta": "p80",
         "auto_token_weights": True,
-        "summary_graph_out": str(services.summary_path("austin", pt_root)),
+        "summary_graph_out": str(services.summary_path("austin", "custom", summary_root)),
     }
-    assert result["summary_path"] == str(services.summary_path("austin", pt_root))
+    assert result["summary_path"] == str(services.summary_path("austin", "custom", summary_root))
     assert result["pruned_nodes"] == 2
     assert result["viewer"]["supernodes"] == [["SN_0", "0_0_0", "0_1_0"]]
-    storage = json.loads(services.supernode_storage_path(pt_root).read_text(encoding="utf-8"))
+    storage = json.loads(services.supernode_storage_path(summary_root).read_text(encoding="utf-8"))
     assert [record["label"] for record in storage["records"]] == ["SN_0"]
 
 
@@ -676,10 +746,14 @@ def test_run_steering_uses_current_and_stored_supernodes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     graph_root = tmp_path / "graph_files"
-    pt_root = tmp_path / "generated_graphs"
-    current_dir = graph_root / "current"
+    summary_root = tmp_path / "summary"
+    custom_pt_root = tmp_path / "generated_graphs"
+    current_dir = graph_root / "custom" / "current"
     current_dir.mkdir(parents=True)
-    pt_root.mkdir()
+    custom_pt_root.mkdir()
+    summary_custom = summary_root / "custom"
+    summary_custom.mkdir(parents=True)
+    (custom_pt_root / "current.pt").write_bytes(b"placeholder")
     (current_dir / "current.json").write_text(
         json.dumps(
             {
@@ -708,7 +782,7 @@ def test_run_steering_uses_current_and_stored_supernodes(
         torch.zeros((1, 1)),
         metadata={"prompt": "current prompt", "prompt_tokens": ["current", " prompt", "."]},
     )
-    current_sng.save(str(pt_root / "current.sng.pt"))
+    current_sng.save(str(summary_custom / "current.sng.pt"))
 
     donor_sng = SummaryGraph(
         [
@@ -729,8 +803,13 @@ def test_run_steering_uses_current_and_stored_supernodes(
         torch.zeros((3, 3)),
         metadata={"prompt": "donor prompt", "prompt_tokens": ["donor"], "scan": "CLT-HP"},
     )
-    donor_sng.save(str(pt_root / "donor.sng.pt"))
-    services.rebuild_supernode_storage(graph_root, pt_root)
+    donor_sng.save(str(summary_custom / "donor.sng.pt"))
+    services.rebuild_supernode_storage(
+        graph_root,
+        summary_root,
+        dataset_root=tmp_path / "dataset",
+        custom_pt_root=custom_pt_root,
+    )
 
     class FakeTokenizer:
         def decode(self, token_ids):
@@ -775,13 +854,14 @@ def test_run_steering_uses_current_and_stored_supernodes(
 
     result = services.run_steering(
         slug="current",
+        dataset="custom",
         factors={"Current SN": -1.0},
-        stored_supernodes=[{"record_id": "donor:0", "factor": -1.0, "target_pos": 2}],
+        stored_supernodes=[{"record_id": "custom:donor:0", "factor": -1.0, "target_pos": 2}],
         model_name="model",
         transcoder="CLT-HP",
         top_k=2,
         root=graph_root,
-        pt_root=pt_root,
+        summary_root=summary_root,
     )
 
     intervention_calls = [
@@ -791,11 +871,12 @@ def test_run_steering_uses_current_and_stored_supernodes(
     assert [(1, 2, 10, -5.0)] in intervention_calls
     assert result["stored_supernodes"] == [
         {
-            "record_id": "donor:0",
+            "record_id": "custom:donor:0",
             "label": "Stored entity",
             "source_slug": "donor",
             "factor": -1.0,
             "target_pos": 2,
+            "layer": 1,
             "n_features": 1,
         }
     ]
@@ -860,7 +941,7 @@ def test_summary_graph_viewer_payload_includes_singleton_logit_supernodes() -> N
 
 
 def test_summary_job_reports_progress(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_load_graph_record(_slug):
+    def fake_load_graph_record(_slug, _dataset, *_args, **_kwargs):
         return object()
 
     def fake_run_summary(*, progress, **_kwargs):
@@ -871,7 +952,7 @@ def test_summary_job_reports_progress(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(services, "run_summary", fake_run_summary)
     client = TestClient(app)
 
-    response = client.post("/api/graphs/austin/summary", json={"label_supernodes": False})
+    response = client.post("/api/graphs/custom/austin/summary", json={"label_supernodes": False})
 
     assert response.status_code == 200
     job_id = response.json()["job"]["id"]

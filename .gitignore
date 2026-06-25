@@ -191,6 +191,7 @@ eval_outputs/analogies/analogies
 graphs/
 graph_files/
 generated_graphs/
+summary/
 # agent
 # datasets
 make_bats_dataset.py

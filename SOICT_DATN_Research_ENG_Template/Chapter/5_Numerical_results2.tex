@@ -24,9 +24,10 @@ graphs are used as a qualitative stress test.
 The main quantitative results support the three claims. Adding upstream
 relevance to the pruning score preserves graph completeness and replacement
 score at matched graph sizes. The ILP clusterer achieves the strongest
-downstream-effect coherence among the clustering baselines, with a downstream
-effect gap of $0.0979$ and a signed downstream effect gap of $0.2907$. Finally,
-the final summary graphs obtain a sign consistency of $0.9361$ and a
+structural preservation among the clustering baselines: at the $p65$ role-cosine
+threshold it obtains an internalized feature-edge mass of $0.0994$ and a DAG
+loss of $0.0359$, while retaining high signed role gaps. Finally, the final
+summary graphs obtain a sign consistency of $0.9361$ and a
 Spearman edge-effect correlation of $0.5633$, indicating that their signed edges
 largely agree with measured intervention responses.
 
@@ -238,7 +239,10 @@ Ours $\alpha=0.5$ & Softmax & 0.5 & -- & -- & -- & -- \\
 
 The clustering experiment asks whether the proposed ILP clusterer forms
 supernodes with coherent causal roles. The experiment uses 100 pruned analogy
-graphs from the entmax $\alpha=0.5$ condition. For ILP solver, we set the upper bound for number of supernodes to $K_{\max}=20$. All clustering methods are
+graphs from the entmax $\alpha=0.5$ condition. For the ILP solver, we set the
+role-cosine threshold to the $65$th percentile of allowed feature pairs, denoted
+$p65$, and set the upper bound for the number of supernodes to $K_{\max}=20$.
+All clustering methods are
 matched to the same number of feature supernodes as the proposed summary on each
 graph, so the comparison isolates partition quality rather than graph size. Let
 $F = V'_{\text{feature}}$ be the retained feature nodes, let $f$ be the
@@ -277,123 +281,168 @@ this baseline is not extracting causal or geometric structure from the graph.
 
 \subsection{Metrics}
 
-\paragraph{Raw silhouette.}
-Raw silhouette measures geometric compactness in role-vector space. With $a_i$
-the average cosine distance from $r(i)$ to features in the same cluster and
-$b_i$ the smallest average cosine distance to another cluster, the score is
-\begin{equation}
-\mathrm{Sil}
-=
-\frac{1}{|F|}
-\sum_{i \in F}
-\frac{b_i - a_i}{\max(a_i, b_i)}.
-\label{eq:metric-silhouette}
-\end{equation}
-Higher silhouette means clusters are geometrically tighter, but this metric does
-not by itself test causal coherence.
+All clustering metrics are computed independently for each graph and then
+averaged as unweighted graph means. Same-cluster feature pairs are always used
+exactly; cross-cluster pairs are sampled with a fixed seed only when their count
+exceeds the evaluation cap.
 
-\paragraph{Downstream effect gap.}
-Downstream effect gap compares causal-effect similarity within supernodes against
-similarity across supernodes. Let $d_i = |v_i^{\text{out}}|$ be the nonnegative
-outgoing effect profile derived from Eq.~\eqref{eq:role}, and let
-$\mathcal{Q}_{\text{in}}=\{(i,j): i,j\in F,\, i<j,\, f(i)=f(j)\}$ and
-$\mathcal{Q}_{\text{out}}=\{(i,j): i,j\in F,\, i<j,\, f(i)\ne f(j)\}$ be the
-within-supernode and cross-supernode feature pairs. The score is
+\paragraph{Role gap.}
+Role gap measures whether full signed causal-role vectors are more similar
+inside a supernode than across different supernodes. Let
+$r_i=[v_i^{\text{out}};v_i^{\text{in}}]$ be the signed role vector from
+Eq.~\eqref{eq:role}, and let
+$\mathcal{Q}_{\text{same}}=\{(i,j): i,j\in F,\, i<j,\, f(i)=f(j)\}$ and
+$\mathcal{Q}_{\text{diff}}=\{(i,j): i,j\in F,\, i<j,\, f(i)\ne f(j)\}$ be
+same-cluster and cross-cluster feature pairs. The cosine uses
+$\cos(x,y)=x^\top y/(||x||\,||y||+\epsilon)$ with $\epsilon=10^{-12}$. The score
+is
 \begin{equation}
-\mathrm{DownGap}
+\mathrm{RoleGap}
 =
-\frac{1}{|\mathcal{Q}_{\text{in}}|}
-  \sum_{(i,j)\in\mathcal{Q}_{\text{in}}}\cos(d_i,d_j)
+\overline{\cos(r_i,r_j)}_{(i,j)\in\mathcal{Q}_{\text{same}}}
 -
-\frac{1}{|\mathcal{Q}_{\text{out}}|}
-  \sum_{(i,j)\in\mathcal{Q}_{\text{out}}}\cos(d_i,d_j).
-\label{eq:metric-downgap}
+\overline{\cos(r_i,r_j)}_{(i,j)\in\mathcal{Q}_{\text{diff}}}.
+\label{eq:metric-role-gap}
 \end{equation}
-Higher downstream effect gap means that members of a supernode affect later nodes
-more similarly than features outside the supernode.
+Higher role gap means that members of the same supernode have more similar
+combined incoming and outgoing signed roles than features assigned to different
+supernodes.
 
-\paragraph{Signed downstream effect gap.}
-Signed downstream effect gap repeats the previous calculation with the signed
-outgoing profiles $v_i^{\text{out}}$:
+\paragraph{Signed upstream gap.}
+Signed upstream gap applies the same within-minus-cross comparison to the
+incoming role component $v_i^{\text{in}}$:
+\begin{equation}
+\mathrm{SignedUpGap}
+=
+\overline{\cos(v_i^{\text{in}},v_j^{\text{in}})}_{(i,j)\in\mathcal{Q}_{\text{same}}}
+-
+\overline{\cos(v_i^{\text{in}},v_j^{\text{in}})}_{(i,j)\in\mathcal{Q}_{\text{diff}}}.
+\label{eq:metric-signed-up-gap}
+\end{equation}
+Higher signed upstream gap means that features grouped into one supernode receive
+causal input from more similar upstream sources.
+
+\paragraph{Signed downstream gap.}
+Signed downstream gap applies the comparison to the outgoing role component
+$v_i^{\text{out}}$:
 \begin{equation}
 \mathrm{SignedDownGap}
 =
-\overline{\cos(v_i^{\text{out}},v_j^{\text{out}})}_{(i,j)\in\mathcal{Q}_{\text{in}}}
+\overline{\cos(v_i^{\text{out}},v_j^{\text{out}})}_{(i,j)\in\mathcal{Q}_{\text{same}}}
 -
-\overline{\cos(v_i^{\text{out}},v_j^{\text{out}})}_{(i,j)\in\mathcal{Q}_{\text{out}}}.
+\overline{\cos(v_i^{\text{out}},v_j^{\text{out}})}_{(i,j)\in\mathcal{Q}_{\text{diff}}}.
 \label{eq:metric-signed-downgap}
 \end{equation}
-Higher signed downstream effect gap indicates that clusters avoid merging
-features with similar targets but opposite causal signs.
+Higher signed downstream gap indicates that features grouped inside one
+supernode affect later nodes with more similar signed profiles.
 
 \paragraph{Internalized edge mass.}
 Internalized edge mass measures how much fine-grained causal weight disappears
-inside supernodes. It is
+inside feature supernodes. Unlike a graph-wide edge fraction, this metric is
+restricted to retained feature--feature edges and excludes embedding-to-feature
+and feature-to-logit edges:
 \begin{equation}
 \mathrm{Internalized}
 =
-\frac{\sum_{(u,v)\in E':\, f(u)=f(v)} |W_{uv}|}
-     {\sum_{(u,v)\in E'} |W_{uv}|}.
+\frac{\sum_{(u,v)\in E'_{FF}:\, f(u)=f(v)} |W_{uv}|}
+     {\sum_{(u,v)\in E'_{FF}} |W_{uv}|}.
 \label{eq:metric-internalized}
 \end{equation}
 Lower internalized edge mass means that more retained causal structure remains
 visible as edges between supernodes.
 
 \paragraph{DAG loss.}
-DAG loss measures the edge mass removed when the raw supernode graph is converted
-into a DAG. If $M_{\text{raw}}=\sum_{C\ne C'} |B_{C\to C'}|$ is the sum of
-absolute block-sum weights before cycle removal and
-$M_{\text{dag}}=\sum_{(C,C')\in E_H}|W_{H,\,C\to C'}|$ is the corresponding
-mass in the final summary graph, then
+DAG loss measures the fraction of aggregated superedge mass that points backward
+under the summary graph's topological order. Let $A_{C\to C'}$ be the raw
+block-sum edge from supernode $C$ to supernode $C'$ before antiparallel merging
+or backward-edge removal, and let $\sigma(C)$ be the final supernode order. The
+backward set is
+$R_\sigma=\{(C,C'): A_{C\to C'}\ne 0,\, \sigma(C)>\sigma(C')\}$. The score is
 \begin{equation}
 \mathrm{DAGLoss}
 =
-\frac{M_{\text{raw}} - M_{\text{dag}}}{M_{\text{raw}}}.
+\frac{\sum_{(C,C')\in R_\sigma}|A_{C\to C'}|}
+     {\sum_{C\ne C'}|A_{C\to C'}|+\epsilon}.
 \label{eq:metric-dagloss}
 \end{equation}
 Lower DAG loss means the partition is more compatible with the final acyclic
 summary graph.
 
+\paragraph{Number of singleton supernodes.}
+The number of singleton supernodes counts feature supernodes that contain
+exactly one retained feature node. Embedding and logit singleton nodes are
+excluded because they are fixed by construction. Lower values indicate more
+compression, while higher values indicate that the clusterer leaves more
+features unmerged.
+
 \subsection{Results}
 
 Table~\ref{tab:clustering-baseline-entmax} reports clustering metrics on 100
-pruned analogy graphs. K-means obtains the highest raw silhouette score,
-which confirms that it forms geometrically compact clusters in role-vector
-space. However, this compactness does not translate into the strongest causal
-coherence. The proposed ILP summary has the largest downstream effect gap and
-the largest signed downstream effect gap, meaning that features grouped inside
-one supernode tend to affect the rest of the graph in a more similar signed
-direction than features in different supernodes.
+pruned analogy graphs, including the matched-K baselines and two ILP ablations
+that vary the layer-span and causal-budget constraints. K-means obtains the
+largest role gap, signed upstream gap, and signed downstream gap among the main
+baseline rows. This result shows that direct geometric clustering can form
+compact role-vector groups. However, those groups hide substantially more
+feature--feature edge mass and require more backward-edge removal when converted
+into an acyclic summary graph.
 
 \begin{table}[ht]
 \centering
 \caption{Clustering evaluation on 100 pruned analogy graphs. Higher
-downstream effect gaps indicate more coherent causal consequences inside
-supernodes. Lower internalized edge mass and lower DAG loss indicate better
-preservation of visible causal structure.}
+role gaps indicate more coherent signed causal roles inside supernodes. Lower
+internalized edge mass and lower DAG loss indicate better preservation of
+visible causal structure.}
 \label{tab:clustering-baseline-entmax}
 \resizebox{\linewidth}{!}{%
-\begin{tabular}{lrrrrr}
+\begin{tabular}{lllrrrrr}
 \toprule
-Solver & Sil. raw $\uparrow$ & Down. gap $\uparrow$ & Signed down. gap $\uparrow$ & Internalized mass $\downarrow$ & DAG loss $\downarrow$ \\
+Method & Max layer span & $\epsilon_{\mathrm{causal}}$ & Role gap $\uparrow$ & Signed up gap $\uparrow$ & Signed down gap $\uparrow$ & Internalized mass $\downarrow$ & DAG loss $\downarrow$ \\
 \midrule
-Ours ILP & 0.0409 & \textbf{0.0979} & \textbf{0.2907} & \textbf{0.0491} & \textbf{0.0984} \\
-Spectral on role vectors & -0.0347 & 0.0272 & 0.1399 & 0.1081 & 0.1257 \\
-K-means on role vectors & \textbf{0.5058} & 0.0382 & 0.2824 & 0.0862 & 0.1423 \\
-Spectral on adjacency & -0.4263 & 0.0434 & 0.0132 & 0.1590 & 0.1818 \\
-Random same-size clusters & -0.5908 & 0.0136 & 0.0050 & 0.0762 & 0.2058 \\
+Ours ILP & None & 0.050 & 0.680 & 0.625 & 0.474 & 0.050 & 0.087 \\
+Ours ILP & 7 & 0.050 & 0.663 & 0.604 & 0.541 & \textbf{0.049} & 0.062 \\
+Ours ILP & 7 & 0.090 & 0.680 & 0.601 & 0.541 & 0.083 & \textbf{0.061} \\
+K-means on role vectors & \textemdash{} & \textemdash{} & \textbf{0.696} & \textbf{0.631} & \textbf{0.593} & 0.086 & 0.090 \\
+Random same-size clusters & \textemdash{} & \textemdash{} & -0.014 & -0.008 & -0.005 & 0.086 & 0.125 \\
+Spectral on adjacency & \textemdash{} & \textemdash{} & 0.125 & 0.186 & -0.030 & 0.159 & 0.115 \\
+Spectral on role vectors & \textemdash{} & \textemdash{} & 0.575 & 0.542 & 0.210 & 0.109 & 0.078 \\
 \bottomrule
 \end{tabular}
 }
 \end{table}
 
-The edge-mass metrics show the same pattern from a structural angle. The ILP
-summary has the lowest internalized edge mass and the lowest DAG loss, so it
-hides the least fine-grained edge mass inside supernodes and loses the least
-superedge mass during acyclic graph construction. Since internalized mass is
-explicitly constrained by the ILP, the most independent evidence for coherent
-supernodes is the downstream-effect gap; the mass metrics show that this
-coherence is achieved while preserving visible causal structure.
+The edge-mass metrics identify the intended advantage of the ILP formulation.
+The ILP rows have lower internalized feature-edge mass than the matched-K
+baselines, and the bounded layer-span variants also reduce DAG loss. The
+role-gap metrics therefore expose a tradeoff: K-means produces the tightest
+signed role-vector clusters, but the ILP gives up some role compactness to
+preserve more visible causal structure in the final summary graph.
+
+Table~\ref{tab:theta-sensitivity-entmax} reports the ILP sensitivity to the
+role-cosine threshold $\theta$. The $p50$, $p65$, and $p80$ settings correspond
+to the 50th, 65th, and 80th percentiles of allowed feature-pair cosine values on
+each graph. Increasing the threshold improves the role-gap metrics and reduces
+both internalized edge mass and DAG loss, but it also leaves more feature
+supernodes as singletons. Thus the stricter threshold preserves more local
+causal structure at the cost of lower compression.
+
+\begin{table}[ht]
+\centering
+\caption{Sensitivity of the ILP clusterer to the role-cosine threshold on 100
+pruned analogy graphs. Values are unweighted means across graphs. Singleton
+counts include only feature supernodes.}
+\label{tab:theta-sensitivity-entmax}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lrrrrrr}
+\toprule
+$\theta$ & Role gap $\uparrow$ & Signed up gap $\uparrow$ & Signed down gap $\uparrow$ & Internalized mass $\downarrow$ & DAG loss $\downarrow$ & Singletons $\downarrow$ \\
+\midrule
+$p50$ & 0.6036 & 0.5412 & 0.4685 & 0.1056 & 0.0340 & \textbf{4.32} \\
+$p65$ & 0.6465 & 0.5652 & 0.5266 & 0.0994 & 0.0359 & 5.48 \\
+$p80$ & \textbf{0.6687} & \textbf{0.5969} & \textbf{0.5779} & \textbf{0.0849} & \textbf{0.0310} & 8.78 \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
 
 \section{Experiment 3: Intervention Validation}
 \label{sec:steering-experiment}
@@ -569,23 +618,24 @@ depends on how cleanly the relation maps a query entity to a single answer token
 
 Table~\ref{tab:steering-summary} summarizes the steering evaluation on
 the final summary graphs. The result is averaged over 100 summary graphs
-from the $\alpha=0.5$, node-threshold $0.02$ condition and covers 13,881
-evaluated edge-result rows. Sign consistency is high, which means that most
-signed summary edges predict the direction of the measured intervention
-response.
+from the $\alpha=0.5$, node-threshold $0.02$ condition and covers 6,765
+evaluated edge-result rows, stratified by target type. Sign consistency is
+high for both feature and logit targets, which means that most signed
+summary edges predict the direction of the measured intervention response.
 
 \begin{table}[ht]
 \centering
-\caption{Steering validation on 100 summary graphs. Values are means
-across graphs. Sign consistency and Spearman correlation are higher when
+\caption{Steering validation on 100 summary graphs. Values are stratified
+by target type. Sign consistency and Spearman correlation are higher when
 summary edges better predict intervention responses.}
 \label{tab:steering-summary}
 \resizebox{\linewidth}{!}{%
-\begin{tabular}{lrrrr}
+\begin{tabular}{llrrrr}
 \toprule
-Method & Sign consistency & Spearman edge effect & $|\Delta p_y|$ & Logit-SN $|\Delta p|$ \\
+Method & Target type & Number of edges & Sign consistency $\uparrow$ & Spearman $\rho$ $\uparrow$ & Mean $|\text{effect}|$ \\
 \midrule
-Ours & 0.9361 & 0.5633 & 0.1332 & 0.1333 \\
+Ours & Feature & 5{,}612 & 0.8286 & 0.7609 & 0.5980 \\
+Ours & Logit & 1{,}153 & 0.7624 & 0.6840 & 0.1324 \\
 \bottomrule
 \end{tabular}
 }
@@ -601,10 +651,12 @@ signed intervention behavior of the underlying attribution graph.
 This chapter evaluated the summarization pipeline through three experiments. The
 pruning experiment showed that adding upstream relevance to the importance score
 does not substantially reduce replacement score or graph completeness at matched
-graph sizes, while discarding features that are not semantically relevant to the input prompt. The clustering experiment showed that the ILP clusterer yields the
-strongest downstream-effect coherence and the lowest structural loss among the
-tested baselines, even though K-means obtains the highest raw silhouette score.
-The end to end steering experiment validated the final summary graph's ability to predict the behavior of the model under intervention. Taken
+graph sizes, while discarding features that are not semantically relevant to the
+input prompt. The clustering experiment showed that the ILP clusterer yields the
+lowest internalized edge mass and DAG loss among the tested baselines, while
+K-means yields the strongest role-vector gaps. The end to end steering
+experiment validated the final summary graph's ability to predict the behavior
+of the model under intervention. Taken
 together, these results indicate that the proposed pipeline preserves important
 causal structure while compressing attribution graphs into more interpretable
 summary graphs. Chapter~6 discusses the remaining limitations, and future work.

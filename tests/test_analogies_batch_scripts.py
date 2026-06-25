@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from eval.label_summary_graphs import _manifest_root, _stem_from_summary_path, _upsert_row
-from import_analogies import _replace_with_summary_link
+from import_dataset import _replace_with_summary_link
 
 
 def test_label_summary_graphs_resolves_labeled_summary_manifest_root() -> None:

@@ -72,7 +72,7 @@ class SummaryRequest(BaseModel):
     token_attr_model: str = ""
     token_attr_normalize: str = "entmax"
     entmax_alpha: float = 1.25
-    shap_values_path: str = "dataset/analogies/shap_values.json"
+    shap_values_path: str = ""
     device: str = "cuda"
     node_threshold: float = 0.02
     edge_threshold: float = 0.9
@@ -83,17 +83,10 @@ class SummaryRequest(BaseModel):
     filter_act_density: bool = True
     act_density_lb: float = 2e-5
     act_density_ub: float = 0.1
-    cluster_method: str = "ilp"
-    target_k: int = 7
     max_layer_span: int = 7
     max_sn: int | None = 20
-    mean_method: str = "arith"
-    normalize_weights: bool = False
-    decay_rate: float | None = 1.0
-    random_state: int = 42
-    n_init: int = 20
     eps_causal: float | None = 0.05
-    theta: float | str = 0.0
+    theta: float | str = "p65"
     ilp_time_limit: float = 30.0
     label_supernodes: bool = True
     label_model: str = "gemma-4-31b-it"
@@ -271,7 +264,7 @@ def upload_graph(
         raise HTTPException(status_code=400, detail="Only .pt attribution graphs are supported.")
 
     safe_slug = services.slugify(slug or Path(file.filename).stem)
-    upload_dir = services.graph_dir(safe_slug)
+    upload_dir = services.graph_dir(safe_slug, services.CUSTOM_DATASET)
     upload_dir.mkdir(parents=True, exist_ok=True)
     tmp_path = upload_dir / f"{safe_slug}.upload.pt"
     with tmp_path.open("wb") as out:
@@ -283,6 +276,7 @@ def upload_graph(
         record = services.convert_pt_to_viewer(
             tmp_path,
             slug=safe_slug,
+            dataset=services.CUSTOM_DATASET,
             scan=scan,
             node_threshold=node_threshold,
             edge_threshold=edge_threshold,
@@ -351,46 +345,55 @@ def generate_graph(req: GenerateGraphRequest) -> dict[str, Any]:
     return {"job": _json_job(job)}
 
 
-@app.post("/api/graphs/{slug}/summary")
-def summarize_graph(slug: str, req: SummaryRequest) -> dict[str, Any]:
+@app.post("/api/graphs/{dataset}/{slug}/summary")
+def summarize_graph(dataset: str, slug: str, req: SummaryRequest) -> dict[str, Any]:
     safe_slug = services.slugify(slug)
+    safe_dataset = services.validate_dataset(dataset)
     try:
-        services.load_graph_record(safe_slug)
-    except FileNotFoundError as exc:
+        services.load_graph_record(safe_slug, safe_dataset)
+    except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    settings = req.model_dump()
+    if not settings.get("shap_values_path"):
+        settings["shap_values_path"] = services.default_shap_path(safe_dataset)
 
     job = _submit_job(
         "summary",
         lambda progress: services.run_summary(
             slug=safe_slug,
-            settings=req.model_dump(),
+            dataset=safe_dataset,
+            settings=settings,
             progress=progress,
         ),
     )
     return {"job": _json_job(job)}
 
 
-@app.get("/api/graphs/{slug}/steering-options")
-def steering_options(slug: str) -> dict[str, Any]:
+@app.get("/api/graphs/{dataset}/{slug}/steering-options")
+def steering_options(dataset: str, slug: str) -> dict[str, Any]:
     safe_slug = services.slugify(slug)
+    safe_dataset = services.validate_dataset(dataset)
     try:
-        return services.steering_options(safe_slug)
-    except FileNotFoundError as exc:
+        return services.steering_options(safe_slug, safe_dataset)
+    except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@app.post("/api/graphs/{slug}/steer")
-def steer_graph(slug: str, req: SteeringRequest) -> dict[str, Any]:
+@app.post("/api/graphs/{dataset}/{slug}/steer")
+def steer_graph(dataset: str, slug: str, req: SteeringRequest) -> dict[str, Any]:
     safe_slug = services.slugify(slug)
+    safe_dataset = services.validate_dataset(dataset)
     try:
-        services.load_graph_record(safe_slug)
-    except FileNotFoundError as exc:
+        services.load_graph_record(safe_slug, safe_dataset)
+    except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     job = _submit_job(
         "steering",
         lambda progress: services.run_steering(
             slug=safe_slug,
+            dataset=safe_dataset,
             factors=req.factors,
             stored_supernodes=[item.model_dump() for item in req.stored_supernodes],
             model_name=req.model_name,
@@ -417,16 +420,20 @@ def get_job(job_id: str) -> dict[str, Any]:
     return {"job": _json_job(job)}
 
 
-@app.get("/api/graphs/{slug}/viewer-url")
-def get_viewer_url(slug: str, summary: bool = False) -> dict[str, Any]:
+@app.get("/api/graphs/{dataset}/{slug}/viewer-url")
+def get_viewer_url(dataset: str, slug: str, summary: bool = False) -> dict[str, Any]:
     safe_slug = services.slugify(slug)
-    record = services.load_graph_record(safe_slug)
+    safe_dataset = services.validate_dataset(dataset)
+    try:
+        record = services.load_graph_record(safe_slug, safe_dataset)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     base_url = _set_viewer_dir(Path(record.directory))
 
     extra_params = None
     summary_data = None
     if summary:
-        path = services.summary_path(safe_slug)
+        path = services.summary_path(safe_slug, safe_dataset)
         if not path.exists():
             raise HTTPException(status_code=404, detail="Summary has not been generated.")
         from summarization.summarize import SummaryGraph

@@ -261,8 +261,10 @@ A resolution threshold $\theta$ converts this similarity into a linear merge cos
 $c^{\text{atom}}_{ij} = \theta - s_{ij}$. If $s_{ij} > \theta$, then
 $c^{\text{atom}}_{ij} < 0$ and the ILP is rewarded for merging the pair; if
 $s_{ij} < \theta$, then $c^{\text{atom}}_{ij} > 0$ and the ILP is penalized for
-merging the pair. The implementation may use a fixed value such as $\theta = 0$ or
-an adaptive percentile rule such as \texttt{p65}.
+merging the pair. The implementation uses an adaptive percentile threshold $\theta$, 
+which is the $q$-th percentile of the allowed-pair cosine values on the current graph.
+A small threshold will incentivize more merging, while a large threshold will incentivize less merging.
+We found that a threshold of 65\% works well for most graphs, higher threshold might create many singleton supernodes which increase the complexity of the summary graph.
 
 The causal-preservation coefficient of a pair is the retained edge mass that would
 be hidden if the two features were placed in the same supernode:

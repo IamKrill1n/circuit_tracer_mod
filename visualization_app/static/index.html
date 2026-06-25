@@ -22,6 +22,15 @@
     <main class="layout">
       <aside class="sidebar">
         <div class="section-title">Local Graphs</div>
+        <label class="dataset-filter">
+          Dataset
+          <select id="datasetFilter">
+            <option value="">All</option>
+            <option value="analogies">Analogies</option>
+            <option value="multihop">Multihop</option>
+            <option value="custom">Custom</option>
+          </select>
+        </label>
         <div id="graphList" class="graph-list"></div>
       </aside>
 
@@ -126,7 +135,7 @@
         <div class="two-col">
           <label>Node Threshold <input id="sumNodeThreshold" type="number" min="0" max="1" step="0.01" value="0.02" /></label>
           <label>Edge Threshold <input id="sumEdgeThreshold" type="number" min="0" max="1" step="0.01" value="0.9" /></label>
-          <label>Target K <input id="sumTargetK" type="number" min="1" value="7" /></label>
+          <label><input id="sumLabelGraph" type="checkbox" checked /> Label graph</label>
           <label>Label Model <input id="sumLabelModel" value="gemma-4-31b-it" /></label>
         </div>
 
@@ -143,7 +152,7 @@
               <select id="sumTokenAttrNormalize"><option value="entmax">entmax</option><option value="softmax">softmax</option><option value="entmax15">entmax15</option><option value="sparsemax">sparsemax</option></select>
             </label>
             <label>Entmax Alpha <input id="sumEntmaxAlpha" type="number" min="1" step="0.05" value="1.25" /></label>
-            <label>SHAP Values JSON <input id="sumShapValuesPath" value="dataset/analogies/shap_values.json" /></label>
+            <label>SHAP Values JSON <input id="sumShapValuesPath" value="" placeholder="dataset/analogies/shap_values.json" /></label>
             <label>Token Attribution Model <input id="sumTokenAttrModel" placeholder="default = graph model" /></label>
             <label>Token Attribution Device <input id="sumDevice" value="cuda" /></label>
             <label>Combine Method
@@ -159,22 +168,20 @@
         </details>
 
         <details>
-          <summary>Clustering</summary>
+          <summary>Clustering (ILP)</summary>
           <div class="two-col">
-            <label>Method
-              <select id="sumClusterMethod"><option value="ilp">ilp</option><option value="spectral">spectral</option><option value="agglomerative">agglomerative</option></select>
-            </label>
             <label>Max Layer Span <input id="sumLayerSpan" type="number" min="1" value="7" /></label>
             <label>Max Supernodes <input id="sumMaxSn" type="number" min="0" value="20" /></label>
             <label>Epsilon Causal <input id="sumEpsCausal" type="number" min="0" max="1" step="0.01" value="0.05" /></label>
-            <label>Theta <input id="sumTheta" type="number" min="-1" max="1" step="0.05" value="0" /></label>
-            <label>Mean Method
-              <select id="sumMean"><option>arith</option><option>geo</option><option>harm</option></select>
+            <label>Theta Mode
+              <select id="sumThetaMode"><option value="adaptive">adaptive percentile</option><option value="fixed">fixed</option></select>
             </label>
-            <label><input id="sumNormalizeWeights" type="checkbox" /> Normalize weights</label>
-            <label>Decay Rate <input id="sumDecay" type="number" min="0" step="0.1" value="1.0" /></label>
-            <label>Random State <input id="sumRandom" type="number" value="42" /></label>
-            <label>N Init <input id="sumNInit" type="number" min="1" value="20" /></label>
+            <label id="sumThetaPercentileRow">Theta percentile q
+              <input id="sumThetaPercentile" type="number" min="0" max="100" step="5" value="65" />
+            </label>
+            <label id="sumThetaFixedRow" hidden>Theta (signed cosine)
+              <input id="sumThetaFixed" type="number" min="-1" max="1" step="0.05" value="0" />
+            </label>
             <label>ILP Time Limit <input id="sumIlpTime" type="number" min="1" value="30" /></label>
           </div>
         </details>
@@ -182,7 +189,6 @@
         <details>
           <summary>Labeling</summary>
           <div class="two-col">
-            <label><input id="sumDoLabel" type="checkbox" checked /> Label supernodes</label>
             <label>Temperature <input id="sumLabelTemp" type="number" min="0" max="1" step="0.05" value="0.2" /></label>
             <label>Thinking Effort
               <select id="sumThinking"><option value="off">off</option><option value="default">registry default</option><option>low</option><option>medium</option><option>high</option></select>

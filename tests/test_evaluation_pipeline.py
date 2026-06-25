@@ -60,14 +60,13 @@ def test_evaluation_pipeline_writes_summary_and_runs_all_solvers(tmp_path) -> No
         map_location="cpu",
         node_threshold=None,
         max_layer_span=4,
-        enforce_dag=False,
         ilp_theta="p65",
+        theta_sweep=None,
         ilp_eps_causal=0.05,
         ilp_max_sn=20,
         ilp_time_limit=30.0,
         random_state=42,
         n_init=5,
-        lambda_causal=1.0,
     )
 
     result = run_evaluation(args)
@@ -75,37 +74,36 @@ def test_evaluation_pipeline_writes_summary_and_runs_all_solvers(tmp_path) -> No
     assert result["n_graphs"] == 1
     assert result["n_runs"] == 5  # ILP plus four matched-K baselines
     assert (output_dir / "summary.csv").exists()
+    assert (output_dir / "method_means.csv").exists()
     assert (output_dir / "results.json").exists()
     assert (output_dir / "manifest.json").exists()
 
     rows = json.loads((output_dir / "results.json").read_text(encoding="utf-8"))
     assert len(rows) == 5
-    solvers = {row["solver"] for row in rows}
+    methods = {row["method"] for row in rows}
     assert {
         "ours-ilp",
         "baseline-spectral-cosine",
         "baseline-kmeans",
         "baseline-spectral-adj",
         "baseline-random-same-size",
-    } <= solvers
+    } <= methods
 
     for row in rows:
-        # Every solver row should carry the eval-local Stage-2 objective terms.
+        # Every method row carries the plan's per-graph metrics.
         for key in (
             "matched_k",
-            "L",
-            "L_atom",
-            "L_atom_norm",
-            "sil_norm",
+            "role_gap",
+            "signed_up_gap",
+            "signed_down_gap",
             "C_causal",
-            "internalized_mass_fraction",
-            "dag_removed_mass_fraction",
+            "dag_loss",
+            "L_atom",
             "final_retained_mass_fraction",
-            "prune_loss",
         ):
-            assert key in row, f"missing {key} in solver row {row.get('solver')}"
+            assert key in row, f"missing {key} in method row {row.get('method')}"
         assert row["result_path"]
 
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
-    lambdas = manifest["lambdas"]
-    assert abs(lambdas["lambda_causal"] - 1.0) < 1e-9
+    assert set(manifest["methods"]) == methods
+    assert manifest["theta_sweep"] == []

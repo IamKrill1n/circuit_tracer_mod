@@ -296,6 +296,30 @@ def _sng_from_clusters(prune_graph: PruneGraph, clusters: list[list[str]]) -> Su
     )
 
 
+def _feature_supernode_count(sng: SummaryGraph) -> int:
+    return sum(1 for s in sng.supernodes if s.type not in ("emb", "logit"))
+
+
+def _prune_graph_stem(path: Path) -> str:
+    stem = path.with_suffix("").name
+    if stem.endswith("_prune_graph"):
+        stem = stem.removesuffix("_prune_graph")
+    return stem
+
+
+def _summary_graph_path_for_prune_graph(prune_graph_path: Path, summary_graphs_dir: Path) -> Path:
+    return summary_graphs_dir / f"{_prune_graph_stem(prune_graph_path)}_summary_graph.pt"
+
+
+def _baseline_k_from_summary_graph(prune_graph_path: Path, summary_graphs_dir: Path) -> int:
+    summary_path = _summary_graph_path_for_prune_graph(prune_graph_path, summary_graphs_dir)
+    if not summary_path.is_file():
+        raise FileNotFoundError(
+            f"No summary graph for {prune_graph_path.name}: expected {summary_path}"
+        )
+    return _feature_supernode_count(SummaryGraph.load(str(summary_path)))
+
+
 def _build_sngs(
     prune_graph: PruneGraph,
     methods: list[str],
@@ -305,13 +329,17 @@ def _build_sngs(
     ilp_max_layer_span: int = 4,
     ilp_time_limit: float = 30.0,
     match_baseline_k_to_ilp: bool = False,
+    baseline_k_override: int | None = None,
 ) -> dict[str, SummaryGraph]:
     """Build a SummaryGraph per requested clustering method. Only the requested methods are
     computed, so selecting a single method skips the others' clustering work.
 
     ``match_baseline_k_to_ilp`` runs the baselines at ILP's feature-supernode count (solving
     ILP for K even when it is not itself a requested method), so a baseline can be compared to
-    ILP at equal granularity rather than at spectral's auto-k."""
+    ILP at equal granularity rather than at spectral's auto-k.
+
+    ``baseline_k_override`` pins baselines to a caller-supplied K (e.g. from a saved summary
+    graph) without re-solving ILP."""
     wanted = set(methods)
     sngs: dict[str, SummaryGraph] = {}
 
@@ -349,11 +377,12 @@ def _build_sngs(
     # per-method comparison is at the same supernode count — unless K-matched to ILP instead.
     baseline_methods = {"baseline-modularity", "baseline-spectral-cosine", "baseline-kmeans"}
     if wanted & baseline_methods:
-        baseline_k = (
-            ilp_k
-            if (match_baseline_k_to_ilp and ilp_k is not None)
-            else find_best_k(prune_graph)[0]
-        )
+        if baseline_k_override is not None:
+            baseline_k = baseline_k_override
+        elif match_baseline_k_to_ilp and ilp_k is not None:
+            baseline_k = ilp_k
+        else:
+            baseline_k = find_best_k(prune_graph)[0]
         mid_idx = _middle_indices(prune_graph)
         middle_ids = [prune_graph.nodes[i].node_id for i in mid_idx]
         adjacency_mid = _adjacency_affinity(prune_graph)[np.ix_(mid_idx, mid_idx)]
@@ -459,6 +488,7 @@ def evaluate_graph(
     run_exp_d: bool = True,
     ilp_kwargs: dict | None = None,
     match_baseline_k_to_ilp: bool = False,
+    baseline_k_override: int | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     prompt: str = prune_graph.metadata["prompt"]
     # The stored prompt begins with a literal "<bos>"; re-feeding it as a raw string would let
@@ -469,7 +499,11 @@ def evaluate_graph(
     orig_logits, orig_activations = model.get_activations(inputs)
 
     sngs = _build_sngs(
-        prune_graph, methods, match_baseline_k_to_ilp=match_baseline_k_to_ilp, **(ilp_kwargs or {})
+        prune_graph,
+        methods,
+        match_baseline_k_to_ilp=match_baseline_k_to_ilp,
+        baseline_k_override=baseline_k_override,
+        **(ilp_kwargs or {}),
     )
     all_edge: list[dict] = []
     all_sn: list[dict] = []
@@ -730,15 +764,27 @@ def main() -> None:
     parser.add_argument(
         "--ilp-time-limit", type=float, default=30.0, help="ILP HiGHS time limit per graph (s)."
     )
-    parser.add_argument(
+    k_match = parser.add_mutually_exclusive_group()
+    k_match.add_argument(
         "--match-baseline-k-to-ilp",
         action="store_true",
         help="Run baselines at ILP's feature-supernode count per graph (solving ILP for K even "
         "if 'ilp' is not in --methods), for an equal-granularity comparison against ILP.",
     )
+    k_match.add_argument(
+        "--match-baseline-k-from-summary-graphs-dir",
+        type=Path,
+        help="Run baselines at the feature-supernode count of each saved summary graph in this "
+        "directory (paired by stem, e.g. 000_prune_graph.pt ↔ 000_summary_graph.pt).",
+    )
     args = parser.parse_args()
 
     use_summary_graphs = args.summary_graph is not None or args.summary_graphs_dir is not None
+    if args.match_baseline_k_from_summary_graphs_dir is not None and use_summary_graphs:
+        parser.error(
+            "--match-baseline-k-from-summary-graphs-dir requires --prune-graphs-dir, not "
+            "saved summary graph inputs"
+        )
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
     if not use_summary_graphs:
         unknown = set(methods) - set(ALL_METHODS)
@@ -791,6 +837,12 @@ def main() -> None:
             )
         else:
             prune_graph = load_prune_graph(str(path))
+            baseline_k_override = None
+            if args.match_baseline_k_from_summary_graphs_dir is not None:
+                baseline_k_override = _baseline_k_from_summary_graph(
+                    path, args.match_baseline_k_from_summary_graphs_dir
+                )
+                logger.info("  baseline K=%d from saved summary graph", baseline_k_override)
             edge_rows, sn_rows, logit_rows = evaluate_graph(
                 model,
                 prune_graph,
@@ -802,6 +854,7 @@ def main() -> None:
                 run_exp_d=not args.skip_exp_d,
                 ilp_kwargs=ilp_kwargs,
                 match_baseline_k_to_ilp=args.match_baseline_k_to_ilp,
+                baseline_k_override=baseline_k_override,
             )
         all_edge.extend(edge_rows)
         all_sn.extend(sn_rows)

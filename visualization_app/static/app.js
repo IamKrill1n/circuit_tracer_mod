@@ -1,6 +1,8 @@
 const state = {
   graphs: [],
+  activeDataset: null,
   activeSlug: null,
+  datasetFilter: "",
   summary: null,
   steeringOptions: null,
   storageRecords: [],
@@ -8,6 +10,25 @@ const state = {
 };
 
 const el = (id) => document.getElementById(id);
+
+function graphKey(graph) {
+  return `${graph.dataset}/${graph.slug}`;
+}
+
+function graphApiPath(dataset, slug, suffix = "") {
+  return `/api/graphs/${encodeURIComponent(dataset)}/${encodeURIComponent(slug)}${suffix}`;
+}
+
+function defaultShapPath(dataset) {
+  if (dataset === "analogies" || dataset === "multihop") {
+    return `dataset/${dataset}/shap_values.json`;
+  }
+  return "";
+}
+
+function isActiveGraph(graph) {
+  return graph.dataset === state.activeDataset && graph.slug === state.activeSlug;
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, options);
@@ -23,22 +44,28 @@ function numberValue(id) {
   return value === "" ? null : Number(value);
 }
 
+function filteredGraphs() {
+  if (!state.datasetFilter) return state.graphs;
+  return state.graphs.filter((graph) => graph.dataset === state.datasetFilter);
+}
+
 function renderGraphs() {
   const list = el("graphList");
   list.innerHTML = "";
-  if (!state.graphs.length) {
+  const graphs = filteredGraphs();
+  if (!graphs.length) {
     list.innerHTML = '<div class="muted">No local graphs found.</div>';
     return;
   }
 
-  state.graphs.forEach((graph) => {
+  graphs.forEach((graph) => {
     const button = document.createElement("button");
-    button.className = `graph-item ${graph.slug === state.activeSlug ? "active" : ""}`;
+    button.className = `graph-item ${isActiveGraph(graph) ? "active" : ""}`;
     button.innerHTML = `
-      <div class="graph-name">${graph.slug}</div>
+      <div class="graph-name">${graph.dataset}/${graph.slug}</div>
       <div class="graph-meta">${graph.node_count} nodes - ${graph.link_count} edges - ${graph.has_pt ? ".pt" : "view-only"}${graph.has_summary ? " - summary" : ""}</div>
     `;
-    button.addEventListener("click", () => selectGraph(graph.slug));
+    button.addEventListener("click", () => selectGraph(graph.dataset, graph.slug));
     list.appendChild(button);
   });
 }
@@ -50,15 +77,16 @@ async function refreshGraphs() {
 }
 
 function activeGraph() {
-  return state.graphs.find((graph) => graph.slug === state.activeSlug);
+  return state.graphs.find((graph) => isActiveGraph(graph));
 }
 
-async function selectGraph(slug, useSummary = false) {
+async function selectGraph(dataset, slug, useSummary = false) {
+  state.activeDataset = dataset;
   state.activeSlug = slug;
   state.summary = null;
   renderGraphs();
   const graph = activeGraph();
-  el("activeTitle").textContent = slug;
+  el("activeTitle").textContent = `${dataset}/${slug}`;
   el("activeMeta").textContent = graph ? `${graph.scan || "unknown scan"} - ${graph.prompt || "no prompt metadata"}` : "";
   el("summaryBtn").disabled = !graph?.has_pt;
   el("showSummaryBtn").disabled = !graph?.has_summary;
@@ -69,8 +97,10 @@ async function selectGraph(slug, useSummary = false) {
 }
 
 async function openViewer(useSummary = false) {
-  if (!state.activeSlug) return;
-  const payload = await api(`/api/graphs/${encodeURIComponent(state.activeSlug)}/viewer-url?summary=${useSummary ? "true" : "false"}`);
+  if (!state.activeDataset || !state.activeSlug) return;
+  const payload = await api(
+    `${graphApiPath(state.activeDataset, state.activeSlug, "/viewer-url")}?summary=${useSummary ? "true" : "false"}`,
+  );
   el("viewerFrame").src = payload.url;
   state.summary = payload.summary;
   renderSummaryDetails(payload.summary);
@@ -157,6 +187,19 @@ function generationPayload() {
   };
 }
 
+function syncThetaModeInputs() {
+  const adaptive = el("sumThetaMode").value === "adaptive";
+  el("sumThetaPercentileRow").hidden = !adaptive;
+  el("sumThetaFixedRow").hidden = adaptive;
+}
+
+function summaryThetaValue() {
+  if (el("sumThetaMode").value === "adaptive") {
+    return `p${numberValue("sumThetaPercentile")}`;
+  }
+  return numberValue("sumThetaFixed");
+}
+
 function summaryPayload() {
   return {
     logit_weights: el("sumLogitWeights").value,
@@ -173,19 +216,12 @@ function summaryPayload() {
     alpha: numberValue("sumAlpha"),
     keep_all_tokens_and_logits: el("sumKeepAll").checked,
     filter_act_density: el("sumFilterAct").checked,
-    cluster_method: el("sumClusterMethod").value,
-    target_k: numberValue("sumTargetK"),
     max_layer_span: numberValue("sumLayerSpan"),
     max_sn: numberValue("sumMaxSn") || null,
-    mean_method: el("sumMean").value,
-    normalize_weights: el("sumNormalizeWeights").checked,
-    decay_rate: numberValue("sumDecay"),
-    random_state: numberValue("sumRandom"),
-    n_init: numberValue("sumNInit"),
     eps_causal: numberValue("sumEpsCausal"),
-    theta: numberValue("sumTheta"),
+    theta: summaryThetaValue(),
     ilp_time_limit: numberValue("sumIlpTime"),
-    label_supernodes: el("sumDoLabel").checked,
+    label_supernodes: el("sumLabelGraph").checked,
     label_model: el("sumLabelModel").value,
     label_temperature: numberValue("sumLabelTemp"),
     thinking_effort: el("sumThinking").value,
@@ -193,7 +229,7 @@ function summaryPayload() {
 }
 
 async function openSteeringDialog() {
-  if (!state.activeSlug) return;
+  if (!state.activeDataset || !state.activeSlug) return;
   const status = el("steeringStatus");
   const list = el("steeringNodeList");
   const result = el("steeringResult");
@@ -206,7 +242,7 @@ async function openSteeringDialog() {
   el("supernodeStoragePanel").hidden = true;
   el("steeringDialog").showModal();
   try {
-    const payload = await api(`/api/graphs/${encodeURIComponent(state.activeSlug)}/steering-options`);
+    const payload = await api(graphApiPath(state.activeDataset, state.activeSlug, "/steering-options"));
     state.steeringOptions = payload;
     el("steerModel").value = payload.model_name || "";
     el("steerTranscoder").value = payload.transcoder || "";
@@ -304,7 +340,10 @@ function renderSteeringNodes(supernodes) {
     const title = document.createElement("strong");
     title.textContent = record.label;
     const meta = document.createElement("small");
-    meta.textContent = `${record.feature_count} feature(s) · L${record.layer_min}-${record.layer_max} · ${record.source_slug}${record.role ? ` · ${record.role}` : ""}`;
+    const sourceLabel = record.source_dataset
+      ? `${record.source_dataset}/${record.source_slug}`
+      : record.source_slug;
+    meta.textContent = `${record.feature_count} feature(s) · L${record.layer_min}-${record.layer_max} · ${sourceLabel}${record.role ? ` · ${record.role}` : ""}`;
     text.appendChild(title);
     text.appendChild(meta);
     main.appendChild(text);
@@ -399,7 +438,10 @@ function renderSupernodeStorage(records) {
     const title = document.createElement("strong");
     title.textContent = record.label;
     const meta = document.createElement("small");
-    meta.textContent = `${record.role || "Feature"} · L${record.layer_min}-${record.layer_max} · ${record.feature_count} feature(s) · ${record.source_slug}`;
+    const sourceLabel = record.source_dataset
+      ? `${record.source_dataset}/${record.source_slug}`
+      : record.source_slug;
+    meta.textContent = `${record.role || "Feature"} · L${record.layer_min}-${record.layer_max} · ${record.feature_count} feature(s) · ${sourceLabel}`;
     const description = document.createElement("span");
     description.textContent = record.description || "";
     main.appendChild(title);
@@ -517,9 +559,20 @@ function renderSteeringResult(result) {
 }
 
 el("refreshBtn").addEventListener("click", refreshGraphs);
+el("datasetFilter").addEventListener("change", (event) => {
+  state.datasetFilter = event.target.value;
+  renderGraphs();
+});
 el("newGraphBtn").addEventListener("click", () => el("generateDialog").showModal());
 el("uploadBtn").addEventListener("click", () => el("uploadDialog").showModal());
-el("summaryBtn").addEventListener("click", () => el("summaryDialog").showModal());
+el("summaryBtn").addEventListener("click", () => {
+  if (state.activeDataset) {
+    el("sumShapValuesPath").value = defaultShapPath(state.activeDataset);
+  }
+  syncThetaModeInputs();
+  el("summaryDialog").showModal();
+});
+el("sumThetaMode").addEventListener("change", syncThetaModeInputs);
 el("showSummaryBtn").addEventListener("click", () => openViewer(true));
 el("steerBtn").addEventListener("click", openSteeringDialog);
 el("showRawBtn").addEventListener("click", () => openViewer(false));
@@ -591,7 +644,7 @@ el("startGenerateBtn").addEventListener("click", async () => {
   await pollJob(payload.job, status, async (result) => {
     await refreshGraphs();
     el("generateDialog").close();
-    await selectGraph(result.graph.slug);
+    await selectGraph(result.graph.dataset, result.graph.slug);
   });
 });
 
@@ -610,11 +663,11 @@ el("startUploadBtn").addEventListener("click", async () => {
   const payload = await api("/api/graphs/upload", { method: "POST", body: data });
   await refreshGraphs();
   el("uploadDialog").close();
-  await selectGraph(payload.graph.slug);
+  await selectGraph(payload.graph.dataset, payload.graph.slug);
 });
 
 el("startSummaryBtn").addEventListener("click", async () => {
-  if (!state.activeSlug) return;
+  if (!state.activeDataset || !state.activeSlug) return;
   const status = el("summaryStatus");
   const progressRow = el("summaryProgressRow");
   const progressBar = el("summaryProgress");
@@ -625,7 +678,7 @@ el("startSummaryBtn").addEventListener("click", async () => {
   updateProgress(progressBar, progressText, 0);
   status.textContent = "Starting summary...";
   try {
-    const payload = await api(`/api/graphs/${encodeURIComponent(state.activeSlug)}/summary`, {
+    const payload = await api(graphApiPath(state.activeDataset, state.activeSlug, "/summary"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(summaryPayload()),
@@ -633,7 +686,7 @@ el("startSummaryBtn").addEventListener("click", async () => {
     await pollJob(payload.job, status, async () => {
       await refreshGraphs();
       el("summaryDialog").close();
-      await selectGraph(state.activeSlug, true);
+      await selectGraph(state.activeDataset, state.activeSlug, true);
     }, progressBar, progressText);
   } finally {
     startButton.disabled = false;
@@ -641,7 +694,7 @@ el("startSummaryBtn").addEventListener("click", async () => {
 });
 
 el("startSteeringBtn").addEventListener("click", async () => {
-  if (!state.activeSlug) return;
+  if (!state.activeDataset || !state.activeSlug) return;
   const status = el("steeringStatus");
   const progressRow = el("steeringProgressRow");
   const progressBar = el("steeringProgress");
@@ -658,7 +711,7 @@ el("startSteeringBtn").addEventListener("click", async () => {
   updateProgress(progressBar, progressText, 0);
   status.textContent = "Starting steering...";
   try {
-    const payload = await api(`/api/graphs/${encodeURIComponent(state.activeSlug)}/steer`, {
+    const payload = await api(graphApiPath(state.activeDataset, state.activeSlug, "/steer"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req),
