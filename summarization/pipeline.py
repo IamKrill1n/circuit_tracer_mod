@@ -23,7 +23,7 @@ from eval.legacy_cluster_baselines import find_best_k
 from summarization.attr_graph import AttrGraph
 from summarization.cluster import DEFAULT_THETA, cluster
 from summarization.cluster_viz import supernode_graph_figure
-from summarization.prune import filter_act_density, prune_attr_graph
+from summarization.prune import filter_act_density, prune_attr_graph, save_prune_graph
 from summarization.summarize import summarize
 from summarization.utils import node_is_embedding
 
@@ -161,7 +161,7 @@ def _report_progress(
 
 
 def _supernodes_for_upload(rows: list) -> list[list[str]]:
-    """Neuronpedia upload format [label, member_1, ...] for non-singleton supernodes."""
+    """Neuronpedia upload format [group_name, member_1, ...] for non-singleton supernodes."""
     return [[s.name, *s.member_node_ids()] for s in rows if len(s.features) > 1]
 
 
@@ -210,6 +210,13 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             act_density_ub=args.act_density_ub,
         )
 
+    prune_graph_out = getattr(args, "prune_graph_out", None)
+    if prune_graph_out:
+        _report_progress(args, "Saving pruned graph", 0.54)
+        out = Path(prune_graph_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        save_prune_graph(prune_graph, str(out))
+
     # Stage 2: cluster (ILP canonical; legacy baselines remain eval-owned).
     _report_progress(args, "Clustering supernodes", 0.62)
     sweep: dict[int, dict[str, Any]] = {}
@@ -254,7 +261,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     # Stage 3: summarize.
     _report_progress(args, "Assembling summary graph", 0.78)
     sng = summarize(rows, prune_graph.pruned_adj, prune_graph.metadata)
-    labelled_supernodes = _supernodes_for_upload(rows)
+    upload_supernodes = _supernodes_for_upload(rows)
 
     _report_progress(args, "Saving summary artifacts", 0.84)
     summary_graph_out = getattr(args, "summary_graph_out", None)
@@ -263,7 +270,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         out.parent.mkdir(parents=True, exist_ok=True)
         sng.save(str(out))
 
-    _save_json(args.supernodes_out, labelled_supernodes)
+    _save_json(args.supernodes_out, upload_supernodes)
     _save_json(args.supernode_map_out, supernode_map)
     _save_json(
         args.supernode_flow_out,
@@ -310,7 +317,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             slug=args.slug,
             displayName=args.display_name,
             pinnedIds=prune_graph.node_ids,
-            supernodes=labelled_supernodes,
+            supernodes=upload_supernodes,
             pruningThreshold=args.upload_pruning_threshold,
             densityThreshold=args.upload_density_threshold,
         )
@@ -321,8 +328,10 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         "pruned_edges": prune_graph.num_edges,
         "resolved_k": resolved_k,
         "auto_k_candidates": len(sweep),
-        "supernodes": labelled_supernodes,
+        "supernodes": upload_supernodes,
         "supernode_map": supernode_map,
+        "prune_graph_out": str(prune_graph_out) if prune_graph_out else None,
+        "summary_graph_out": str(summary_graph_out) if summary_graph_out else None,
         "figure_html_out": figure_path,
         "upload_status": upload_status,
         "upload_body": upload_body,

@@ -1,0 +1,31 @@
+{
+  "pipeline": "summarization.pipeline.run_pipeline",
+  "hf_repo_id": "anhtu77/analogies_BATS_circuit",
+  "graph_prefix": "analogies/graphs/clt-gemma-2-2b-426k",
+  "shap_path_in_repo": "analogies/shap_values.json",
+  "dataset_name": "hf_analogies_BATS_circuit",
+  "normalizations": [
+    "entmax"
+  ],
+  "limit": 1,
+  "alpha": 0.5,
+  "node_threshold": 0.02,
+  "edge_threshold": 0.95,
+  "combine_method": "geometric",
+  "score_normalization": "rank",
+  "logit_weights": "target",
+  "entmax_alpha": 1.25,
+  "keep_all_tokens_and_logits": false,
+  "filter_act_density": true,
+  "act_density_lb": 2e-05,
+  "act_density_ub": 0.1,
+  "masker_keep_prefix": null,
+  "ilp": {
+    "theta": "p65",
+    "eps_causal": 0.05,
+    "max_sn": 20,
+    "max_layer_span": 7,
+    "time_limit": 30.0
+  },
+  "device": "cuda"
+}

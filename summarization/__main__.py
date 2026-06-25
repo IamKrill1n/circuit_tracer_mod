@@ -141,12 +141,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eps-causal", type=float, default=None)
 
     # Outputs.
+    parser.add_argument(
+        "--prune-graph-out",
+        type=str,
+        default=None,
+        help="Optional .pt path for the PruneGraph used by clustering and summarization.",
+    )
     parser.add_argument("--supernodes-out", type=str, default="temp_graph_files/supernodes.json")
     parser.add_argument(
         "--supernode-map-out", type=str, default="temp_graph_files/supernode_map.json"
     )
     parser.add_argument("--supernode-flow-out", type=str, default=None)
     parser.add_argument("--auto-k-sweep-out", type=str, default=None)
+    parser.add_argument(
+        "--summary-graph-out",
+        type=str,
+        default=None,
+        help="Optional .pt path for the unlabeled SummaryGraph.",
+    )
     parser.add_argument(
         "--figure-html-out", type=str, default=None, help="Optional HTML visualization output path."
     )
@@ -172,6 +184,10 @@ def main() -> None:
     print(f"resolved_k: {result['resolved_k']}")
     print(f"auto_k_candidates: {result['auto_k_candidates']}")
     print(f"supernodes: {len(result['supernodes'])}")
+    if result["prune_graph_out"]:
+        print(f"prune_graph_out: {result['prune_graph_out']}")
+    if result["summary_graph_out"]:
+        print(f"summary_graph_out: {result['summary_graph_out']}")
     if result["figure_html_out"]:
         print(f"figure_html_out: {result['figure_html_out']}")
     if result["upload_status"] is not None:
