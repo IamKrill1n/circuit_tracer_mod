@@ -517,12 +517,12 @@ def _discover_prune_graphs(
     for raw_path in input_paths:
         path = Path(raw_path).expanduser().resolve()
         if path.is_file():
-            if path.suffix == ".pt" and path.name.endswith("_prune_graph.pt"):
+            if _is_prune_graph_file(path):
                 discovered.append(path)
             continue
         if path.is_dir():
             discovered.extend(
-                sorted(p.resolve() for p in path.rglob("*_prune_graph.pt") if p.is_file())
+                sorted(p.resolve() for p in path.rglob("*.pt") if _is_prune_graph_file(p))
             )
     unique = sorted(dict.fromkeys(discovered))
     if not unique:
@@ -538,6 +538,15 @@ def _discover_prune_graphs(
             "Expected a path directory like 'node_0.7' or 'node_inf_0.7_rel_0.7' under --input-path."
         )
     return filtered
+
+
+def _is_prune_graph_file(path: Path) -> bool:
+    if path.suffix != ".pt" or not path.is_file():
+        return False
+    if path.name.endswith("_prune_graph.pt"):
+        return True
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    return isinstance(payload, dict) and {"nodes", "pruned_adj", "metadata"} <= set(payload)
 
 
 def _default_input_paths() -> list[str]:
@@ -569,6 +578,30 @@ def _token_normalization_from_path(graph_path: Path) -> str:
         if part in _NORM_TOKENS:
             return part
     return "unknown"
+
+
+def _prune_graph_stem(path: Path) -> str:
+    stem = path.stem
+    return stem[: -len("_prune_graph")] if stem.endswith("_prune_graph") else stem
+
+
+def _summary_graph_path_for_prune_graph(prune_graph_path: Path, summary_graphs_dir: Path) -> Path:
+    stem = _prune_graph_stem(prune_graph_path)
+    candidates = [
+        summary_graphs_dir / f"{stem}.pt",
+        summary_graphs_dir / f"{stem}_summary_graph.pt",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    raise FileNotFoundError(
+        f"No saved summary graph for {prune_graph_path.name}: expected one of "
+        f"{', '.join(str(p) for p in candidates)}"
+    )
+
+
+def _clusters_from_summary_graph(sng: SummaryGraph) -> list[list[str]]:
+    return [sn.member_node_ids() for sn in sng.supernodes]
 
 
 # --- Per-partition evaluation -------------------------------------------------
@@ -662,8 +695,14 @@ def evaluate_prune_graph(
     random_state: int,
     n_init: int,
     theta_sweep: list[str],
+    summary_graphs_dir: Path | None,
 ) -> list[dict[str, Any]]:
-    """Evaluate the ILP method and matched-K baselines on a single prune graph."""
+    """Evaluate the ILP method and matched-K baselines on a single prune graph.
+
+    When ``summary_graphs_dir`` is set, the ``ours-ilp`` row uses the saved
+    SummaryGraph partition matched by graph stem; baselines are still rebuilt from
+    the PruneGraph at the saved partition's feature-supernode count.
+    """
     prune_graph = load_prune_graph(str(graph_path), map_location=map_location)
     graph_name, dataset = _graph_identity(graph_path, input_paths)
     token_normalization = _token_normalization_from_path(graph_path)
@@ -692,18 +731,24 @@ def evaluate_prune_graph(
         theta_main,
     )
 
-    ilp_clusters = cluster_graph_ilp(
-        prune_graph,
-        theta=ilp_theta,
-        eps_causal=ilp_eps_causal,
-        max_sn=ilp_max_sn,
-        max_layer_span=max_layer_span,
-        time_limit=ilp_time_limit,
-    )
+    if summary_graphs_dir is None:
+        ilp_clusters = cluster_graph_ilp(
+            prune_graph,
+            theta=ilp_theta,
+            eps_causal=ilp_eps_causal,
+            max_sn=ilp_max_sn,
+            max_layer_span=max_layer_span,
+            time_limit=ilp_time_limit,
+        )
+        matched_source = "ILP"
+    else:
+        summary_path = _summary_graph_path_for_prune_graph(graph_path, summary_graphs_dir)
+        ilp_clusters = _clusters_from_summary_graph(SummaryGraph.load(str(summary_path)))
+        matched_source = f"saved summary graph {summary_path}"
     ilp_feature_clusters = [c for c in ilp_clusters if c and c[0] in middle_id_to_local]
     matched_k = len(ilp_feature_clusters)
     ilp_cluster_sizes = [len(c) for c in ilp_feature_clusters]
-    logger.info("  matched_k from ILP: %d", matched_k)
+    logger.info("  matched_k from %s: %d", matched_source, matched_k)
 
     def baseline(labels: np.ndarray) -> list[list[str]]:
         return labels_to_supernodes(prune_graph, middle_ids, labels)
@@ -822,6 +867,12 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = Path(args.output_dir).expanduser().resolve()
     ilp_theta = _parse_ilp_theta(str(args.ilp_theta))
     theta_sweep = _parse_theta_sweep(getattr(args, "theta_sweep", None))
+    summary_graphs_dir_raw = getattr(args, "summary_graphs_dir", None)
+    summary_graphs_dir = (
+        Path(summary_graphs_dir_raw).expanduser().resolve() if summary_graphs_dir_raw else None
+    )
+    if summary_graphs_dir is not None and theta_sweep:
+        raise ValueError("--theta-sweep cannot be combined with --summary-graphs-dir")
     graph_paths = _discover_prune_graphs(args.input_path, node_threshold=args.node_threshold)
 
     logger.info("Discovered %d prune graph(s); writing under %s", len(graph_paths), output_dir)
@@ -829,6 +880,8 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
         logger.info("Node-threshold filter: %g", args.node_threshold)
     if theta_sweep:
         logger.info("Theta sweep (ILP-only extra rows): %s", ", ".join(theta_sweep))
+    if summary_graphs_dir is not None:
+        logger.info("Using saved SummaryGraph partitions for ours-ilp from %s", summary_graphs_dir)
 
     summary_rows: list[dict[str, Any]] = []
     n_graphs = len(graph_paths)
@@ -849,6 +902,7 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 random_state=args.random_state,
                 n_init=args.n_init,
                 theta_sweep=theta_sweep,
+                summary_graphs_dir=summary_graphs_dir,
             )
         )
         logger.info(
@@ -873,6 +927,7 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
         manifest_path,
         {
             "input_paths": list(args.input_path),
+            "summary_graphs_dir": str(summary_graphs_dir) if summary_graphs_dir else None,
             "node_threshold": args.node_threshold,
             "graph_paths": [str(p) for p in graph_paths],
             "output_dir": str(output_dir),
@@ -909,6 +964,7 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 "map_location": args.map_location,
                 "random_state": args.random_state,
                 "n_init": args.n_init,
+                "summary_graphs_dir": str(summary_graphs_dir) if summary_graphs_dir else None,
                 "diff_pair_sample_cap": DIFF_PAIR_SAMPLE_CAP,
                 "eps": EPS,
             },
@@ -948,7 +1004,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--input-path",
         action="append",
         default=[],
-        help="File or directory with prune-graph .pt files. Repeatable; dirs searched recursively.",
+        help=(
+            "File or directory with PruneGraph .pt files. Repeatable; dirs searched "
+            "recursively. Numeric .pt files are accepted when their payload is a PruneGraph."
+        ),
+    )
+    parser.add_argument(
+        "--summary-graphs-dir",
+        type=str,
+        default=None,
+        help=(
+            "Optional directory with saved SummaryGraph .pt files matched by prune-graph stem. "
+            "When set, ours-ilp uses the saved partition and baselines use its matched K."
+        ),
     )
     parser.add_argument(
         "--output-dir",

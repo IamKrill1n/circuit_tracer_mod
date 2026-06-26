@@ -45,6 +45,26 @@ def test_slugify_and_graph_paths(tmp_path: Path) -> None:
         services.summary_path(slug, "analogies", tmp_path)
         == tmp_path / "analogies" / f"{slug}.sng.pt"
     )
+    source_set = "mntss/clt-gemma-2-2b-426k"
+    assert (
+        services.graph_json_path("000", "analogies", tmp_path, source_set)
+        == tmp_path / "analogies" / "mntss" / "clt-gemma-2-2b-426k" / "000.json"
+    )
+    assert (
+        services.dataset_pt_path("000", "analogies", tmp_path, source_set=source_set)
+        == tmp_path / "analogies" / "mntss" / "clt-gemma-2-2b-426k" / "graphs" / "000.pt"
+    )
+    assert (
+        services.source_summary_path("000", "analogies", source_set, tmp_path)
+        == tmp_path
+        / "analogies"
+        / "mntss"
+        / "clt-gemma-2-2b-426k"
+        / "entmax"
+        / "alpha_0.50"
+        / "node_0.02"
+        / "000.pt"
+    )
 
 
 def test_list_graphs_reads_viewer_directories(tmp_path: Path) -> None:
@@ -119,6 +139,62 @@ def test_list_graphs_distinguishes_same_slug_across_datasets(tmp_path: Path) -> 
         ("analogies", "000"),
         ("multihop", "000"),
     }
+
+
+def test_list_graphs_distinguishes_same_slug_across_source_sets(tmp_path: Path) -> None:
+    graph_root = tmp_path / "graph_files"
+    summary_root = tmp_path / "summary"
+    dataset_root = tmp_path / "dataset"
+    summary_graph_root = tmp_path / "summary_graphs"
+    source_sets = ("mntss/clt-gemma-2-2b-426k", "mntss/clt-llama-3.2-1b-524k")
+    for source_set in source_sets:
+        graph_dir = graph_root / "analogies" / Path(source_set)
+        graph_dir.mkdir(parents=True)
+        pt_path = services.dataset_pt_path(
+            "000",
+            "analogies",
+            dataset_root,
+            source_set=source_set,
+        )
+        pt_path.parent.mkdir(parents=True)
+        pt_path.write_bytes(b"pt")
+        services.source_summary_path(
+            "000",
+            "analogies",
+            source_set,
+            summary_graph_root,
+        ).parent.mkdir(parents=True)
+        services.source_summary_path(
+            "000",
+            "analogies",
+            source_set,
+            summary_graph_root,
+        ).write_bytes(b"sng")
+        (graph_dir / "000.json").write_text(
+            json.dumps(
+                {
+                    "metadata": {"slug": "000", "prompt": source_set, "prompt_tokens": []},
+                    "nodes": [],
+                    "links": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    records = services.list_graphs(
+        graph_root,
+        summary_root,
+        dataset_root=dataset_root,
+        summary_graph_root=summary_graph_root,
+    )
+
+    assert {(record.source_set, record.slug) for record in records} == {
+        ("mntss/clt-gemma-2-2b-426k", "000"),
+        ("mntss/clt-llama-3.2-1b-524k", "000"),
+    }
+    assert all(record.dataset == "analogies" for record in records)
+    assert all(record.has_pt for record in records)
+    assert all(record.has_summary for record in records)
 
 
 def test_summary_request_defaults_match_graph_workflow() -> None:

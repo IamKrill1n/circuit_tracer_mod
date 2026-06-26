@@ -6,7 +6,9 @@ import json
 import torch
 
 from eval.eval_cluster import run_evaluation
+from summarization.cluster import clusters_to_supernodes
 from summarization.prune import PruneGraph, save_prune_graph
+from summarization.summarize import SummaryGraph
 from summarization.utils import _node_from_json_dict
 
 
@@ -107,3 +109,89 @@ def test_evaluation_pipeline_writes_summary_and_runs_all_solvers(tmp_path) -> No
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
     assert set(manifest["methods"]) == methods
     assert manifest["theta_sweep"] == []
+
+
+def test_evaluation_pipeline_discovers_numeric_prune_graph_files(tmp_path) -> None:
+    graph_path = tmp_path / "000.pt"
+    save_prune_graph(_build_test_graph(), str(graph_path))
+
+    output_dir = tmp_path / "eval"
+    args = argparse.Namespace(
+        input_path=[str(tmp_path)],
+        output_dir=str(output_dir),
+        map_location="cpu",
+        node_threshold=None,
+        max_layer_span=4,
+        ilp_theta="p65",
+        theta_sweep=None,
+        ilp_eps_causal=0.05,
+        ilp_max_sn=20,
+        ilp_time_limit=30.0,
+        random_state=42,
+        n_init=5,
+        summary_graphs_dir=None,
+    )
+
+    result = run_evaluation(args)
+
+    assert result["n_graphs"] == 1
+    rows = json.loads((output_dir / "results.json").read_text(encoding="utf-8"))
+    assert {row["method"] for row in rows} == {
+        "ours-ilp",
+        "baseline-spectral-cosine",
+        "baseline-kmeans",
+        "baseline-spectral-adj",
+        "baseline-random-same-size",
+    }
+
+
+def test_evaluation_pipeline_uses_saved_summary_graph_for_ours_ilp(tmp_path) -> None:
+    prune_graph = _build_test_graph()
+    prune_dir = tmp_path / "pruned"
+    summary_dir = tmp_path / "summary"
+    prune_dir.mkdir()
+    summary_dir.mkdir()
+    graph_path = prune_dir / "000.pt"
+    save_prune_graph(prune_graph, str(graph_path))
+
+    clusters = [
+        ["1_0_0", "1_1_0"],
+        ["2_0_0"],
+        ["2_1_0"],
+        ["E_0_0"],
+        ["27_0_0"],
+    ]
+    saved = SummaryGraph(
+        supernodes=clusters_to_supernodes(prune_graph, clusters),
+        pruned_adj=prune_graph.pruned_adj,
+        metadata=prune_graph.metadata,
+    )
+    saved.save(str(summary_dir / "000.pt"))
+
+    output_dir = tmp_path / "eval"
+    args = argparse.Namespace(
+        input_path=[str(prune_dir)],
+        output_dir=str(output_dir),
+        map_location="cpu",
+        node_threshold=None,
+        max_layer_span=4,
+        ilp_theta="p65",
+        theta_sweep=None,
+        ilp_eps_causal=0.05,
+        ilp_max_sn=20,
+        ilp_time_limit=0.001,
+        random_state=42,
+        n_init=5,
+        summary_graphs_dir=str(summary_dir),
+    )
+
+    result = run_evaluation(args)
+
+    assert result["n_graphs"] == 1
+    assert result["n_runs"] == 5
+    rows = json.loads((output_dir / "results.json").read_text(encoding="utf-8"))
+    ours = next(row for row in rows if row["method"] == "ours-ilp")
+    assert ours["matched_k"] == 3
+    assert all(row["matched_k"] == 3 for row in rows)
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["summary_graphs_dir"] == str(summary_dir.resolve())

@@ -39,6 +39,11 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Directory with raw attribution .pt files (default: dataset/{dataset}).",
     )
+    parser.add_argument(
+        "--source-set",
+        default="",
+        help="Optional source-set namespace, for example mntss/clt-gemma-2-2b-426k.",
+    )
     parser.add_argument("--summary-dir", type=Path, default=DEFAULT_SUMMARY_DIR)
     parser.add_argument("--graph-root", type=Path, default=services.GRAPH_ROOT)
     parser.add_argument("--summary-root", type=Path, default=services.SUMMARY_ROOT)
@@ -60,6 +65,8 @@ def _replace_with_summary_link(source: Path, destination: Path, *, copy: bool) -
         raise FileNotFoundError(f"Summary does not exist: {source}")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.resolve() == destination.resolve():
+        return "already-present"
     if destination.exists() or destination.is_symlink():
         destination.unlink()
 
@@ -74,7 +81,12 @@ def _replace_with_summary_link(source: Path, destination: Path, *, copy: bool) -
 
 def main() -> None:
     args = _parse_args()
-    graphs_root = args.graphs_root or (services.DATASET_ROOT / args.dataset)
+    source_set = services.validate_source_set(args.source_set)
+    graphs_root = args.graphs_root or (
+        services.dataset_pt_path("placeholder", args.dataset, source_set=source_set).parent
+        if source_set
+        else services.DATASET_ROOT / args.dataset
+    )
     graph_paths = sorted(graphs_root.glob("*.pt"))
     if args.limit is not None:
         graph_paths = graph_paths[: args.limit]
@@ -84,14 +96,26 @@ def main() -> None:
     imported = linked = missing = 0
     for i, graph_path in enumerate(graph_paths, start=1):
         stem = graph_path.stem
-        stored_summary = args.summary_dir / f"{stem}_labeled_summary_graph.pt"
-        app_summary = services.summary_path(stem, args.dataset, args.summary_root)
-        print(f"[{i}/{len(graph_paths)}] {args.dataset}/{stem}", flush=True)
+        summary_candidates = [
+            args.summary_dir / f"{stem}.pt",
+            args.summary_dir / f"{stem}_labeled_summary_graph.pt",
+            args.summary_dir / f"{stem}_summary_graph.pt",
+        ]
+        stored_summary = next((path for path in summary_candidates if path.exists()), summary_candidates[0])
+        app_summary = services.app_summary_path(
+            stem,
+            args.dataset,
+            args.summary_root,
+            source_set=source_set,
+        )
+        graph_name = "/".join(part for part in (args.dataset, source_set, stem) if part)
+        print(f"[{i}/{len(graph_paths)}] {graph_name}", flush=True)
 
         services.convert_pt_to_viewer(
             graph_path,
             slug=stem,
             dataset=args.dataset,
+            source_set=source_set,
             root=args.graph_root,
             summary_root=args.summary_root,
             node_threshold=args.node_threshold,

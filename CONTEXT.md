@@ -76,6 +76,11 @@ does not share the same target token, and both graphs have usable Output role fe
 The catalogue mapping a **model name** to its **provider**, endpoint, credential source, and
 default generation settings. The single place that knows how to reach and configure a model.
 
+## Source set
+
+A named collection of attribution graphs within a dataset that share the same model and
+transcoder family.
+
 ## Provider
 
 The backend family serving a model: official OpenAI, Google Gemini, or a generic

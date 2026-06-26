@@ -346,23 +346,30 @@ def generate_graph(req: GenerateGraphRequest) -> dict[str, Any]:
 
 
 @app.post("/api/graphs/{dataset}/{slug}/summary")
-def summarize_graph(dataset: str, slug: str, req: SummaryRequest) -> dict[str, Any]:
+def summarize_graph(
+    dataset: str,
+    slug: str,
+    req: SummaryRequest,
+    source_set: str = "",
+) -> dict[str, Any]:
     safe_slug = services.slugify(slug)
     safe_dataset = services.validate_dataset(dataset)
+    safe_source_set = services.validate_source_set(source_set)
     try:
-        services.load_graph_record(safe_slug, safe_dataset)
+        services.load_graph_record(safe_slug, safe_dataset, source_set=safe_source_set)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     settings = req.model_dump()
     if not settings.get("shap_values_path"):
-        settings["shap_values_path"] = services.default_shap_path(safe_dataset)
+        settings["shap_values_path"] = services.default_shap_path(safe_dataset, safe_source_set)
 
     job = _submit_job(
         "summary",
         lambda progress: services.run_summary(
             slug=safe_slug,
             dataset=safe_dataset,
+            source_set=safe_source_set,
             settings=settings,
             progress=progress,
         ),
@@ -371,21 +378,28 @@ def summarize_graph(dataset: str, slug: str, req: SummaryRequest) -> dict[str, A
 
 
 @app.get("/api/graphs/{dataset}/{slug}/steering-options")
-def steering_options(dataset: str, slug: str) -> dict[str, Any]:
+def steering_options(dataset: str, slug: str, source_set: str = "") -> dict[str, Any]:
     safe_slug = services.slugify(slug)
     safe_dataset = services.validate_dataset(dataset)
+    safe_source_set = services.validate_source_set(source_set)
     try:
-        return services.steering_options(safe_slug, safe_dataset)
+        return services.steering_options(safe_slug, safe_dataset, source_set=safe_source_set)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/graphs/{dataset}/{slug}/steer")
-def steer_graph(dataset: str, slug: str, req: SteeringRequest) -> dict[str, Any]:
+def steer_graph(
+    dataset: str,
+    slug: str,
+    req: SteeringRequest,
+    source_set: str = "",
+) -> dict[str, Any]:
     safe_slug = services.slugify(slug)
     safe_dataset = services.validate_dataset(dataset)
+    safe_source_set = services.validate_source_set(source_set)
     try:
-        services.load_graph_record(safe_slug, safe_dataset)
+        services.load_graph_record(safe_slug, safe_dataset, source_set=safe_source_set)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -394,6 +408,7 @@ def steer_graph(dataset: str, slug: str, req: SteeringRequest) -> dict[str, Any]
         lambda progress: services.run_steering(
             slug=safe_slug,
             dataset=safe_dataset,
+            source_set=safe_source_set,
             factors=req.factors,
             stored_supernodes=[item.model_dump() for item in req.stored_supernodes],
             model_name=req.model_name,
@@ -421,11 +436,17 @@ def get_job(job_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/graphs/{dataset}/{slug}/viewer-url")
-def get_viewer_url(dataset: str, slug: str, summary: bool = False) -> dict[str, Any]:
+def get_viewer_url(
+    dataset: str,
+    slug: str,
+    summary: bool = False,
+    source_set: str = "",
+) -> dict[str, Any]:
     safe_slug = services.slugify(slug)
     safe_dataset = services.validate_dataset(dataset)
+    safe_source_set = services.validate_source_set(source_set)
     try:
-        record = services.load_graph_record(safe_slug, safe_dataset)
+        record = services.load_graph_record(safe_slug, safe_dataset, source_set=safe_source_set)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     base_url = _set_viewer_dir(Path(record.directory))
@@ -433,7 +454,7 @@ def get_viewer_url(dataset: str, slug: str, summary: bool = False) -> dict[str, 
     extra_params = None
     summary_data = None
     if summary:
-        path = services.summary_path(safe_slug, safe_dataset)
+        path = services.app_summary_path(safe_slug, safe_dataset, source_set=safe_source_set)
         if not path.exists():
             raise HTTPException(status_code=404, detail="Summary has not been generated.")
         from summarization.summarize import SummaryGraph

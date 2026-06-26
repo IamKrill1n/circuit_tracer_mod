@@ -23,6 +23,7 @@ if HUGGINGFACE_API_KEY and not os.getenv("HF_TOKEN"):
 REPO = Path(__file__).resolve().parents[1]
 GRAPH_ROOT = REPO / "graph_files"
 SUMMARY_ROOT = REPO / "summary"
+SUMMARY_GRAPH_ROOT = REPO / "summary_graphs"
 DATASET_ROOT = REPO / "dataset"
 CUSTOM_PT_ROOT = REPO / "generated_graphs"
 GENERATED_GRAPH_ROOT = CUSTOM_PT_ROOT
@@ -42,8 +43,21 @@ def validate_dataset(dataset: str) -> str:
     return dataset
 
 
-def default_shap_path(dataset: str) -> str:
+def validate_source_set(source_set: str = "") -> str:
+    safe = source_set.strip().strip("/")
+    if not safe:
+        return ""
+    parts = Path(safe).parts
+    if any(part in {"", ".", ".."} for part in parts) or Path(safe).is_absolute():
+        raise ValueError(f"Invalid source_set: {source_set!r}")
+    return "/".join(parts)
+
+
+def default_shap_path(dataset: str, source_set: str = "") -> str:
     safe = validate_dataset(dataset)
+    safe_source_set = validate_source_set(source_set)
+    if safe_source_set:
+        return f"dataset/{safe}/{safe_source_set}/shap_values.json"
     if safe in KNOWN_DATASETS:
         return f"dataset/{safe}/shap_values.json"
     return ""
@@ -94,18 +108,47 @@ def _format_generation_prompt(
     )
 
 
-def graph_dir(slug: str, dataset: str, root: Path = GRAPH_ROOT) -> Path:
-    return root / validate_dataset(dataset) / slugify(slug)
+def source_set_path(root: Path, dataset: str, source_set: str = "") -> Path:
+    safe_dataset = validate_dataset(dataset)
+    safe_source_set = validate_source_set(source_set)
+    if safe_source_set:
+        return root / safe_dataset / Path(safe_source_set)
+    return root / safe_dataset
 
 
-def graph_json_path(slug: str, dataset: str, root: Path = GRAPH_ROOT) -> Path:
+def graph_dir(
+    slug: str,
+    dataset: str,
+    root: Path = GRAPH_ROOT,
+    source_set: str = "",
+) -> Path:
+    base = source_set_path(root, dataset, source_set)
+    if validate_source_set(source_set):
+        return base
+    return base / slugify(slug)
+
+
+def graph_json_path(
+    slug: str,
+    dataset: str,
+    root: Path = GRAPH_ROOT,
+    source_set: str = "",
+) -> Path:
     safe_slug = slugify(slug)
-    return graph_dir(safe_slug, dataset, root) / f"{safe_slug}.json"
+    return graph_dir(safe_slug, dataset, root, source_set) / f"{safe_slug}.json"
 
 
-def dataset_pt_path(slug: str, dataset: str, dataset_root: Path = DATASET_ROOT) -> Path:
+def dataset_pt_path(
+    slug: str,
+    dataset: str,
+    dataset_root: Path = DATASET_ROOT,
+    source_set: str = "",
+) -> Path:
     safe_slug = slugify(slug)
-    return dataset_root / validate_dataset(dataset) / f"{safe_slug}.pt"
+    base = source_set_path(dataset_root, dataset, source_set)
+    if validate_source_set(source_set):
+        return base / "graphs" / f"{safe_slug}.pt"
+    return base / f"{safe_slug}.pt"
 
 
 def custom_pt_path(slug: str, custom_pt_root: Path = CUSTOM_PT_ROOT) -> Path:
@@ -120,6 +163,7 @@ def sidecar_pt_path(slug: str, root: Path = CUSTOM_PT_ROOT) -> Path:
 class GraphRecord:
     slug: str
     dataset: str
+    source_set: str
     directory: str
     prompt: str
     prompt_tokens: list[str]
@@ -138,16 +182,23 @@ def find_pt_path(
     slug: str,
     dataset: str,
     *,
+    source_set: str = "",
     dataset_root: Path = DATASET_ROOT,
     custom_pt_root: Path = CUSTOM_PT_ROOT,
 ) -> Path | None:
     safe_slug = slugify(slug)
     safe_dataset = validate_dataset(dataset)
+    safe_source_set = validate_source_set(source_set)
     if safe_dataset in KNOWN_DATASETS:
-        exact_path = dataset_pt_path(safe_slug, safe_dataset, dataset_root)
+        exact_path = dataset_pt_path(
+            safe_slug,
+            safe_dataset,
+            dataset_root,
+            source_set=safe_source_set,
+        )
         if exact_path.exists():
             return exact_path
-        search_root = dataset_root / safe_dataset
+        search_root = exact_path.parent if safe_source_set else dataset_root / safe_dataset
     else:
         exact_path = custom_pt_path(safe_slug, custom_pt_root)
         if exact_path.exists():
@@ -173,6 +224,61 @@ def summary_sidecar_dir(dataset: str, summary_root: Path = SUMMARY_ROOT) -> Path
     return summary_root / validate_dataset(dataset)
 
 
+def source_summary_path(
+    slug: str,
+    dataset: str,
+    source_set: str,
+    summary_graph_root: Path = SUMMARY_GRAPH_ROOT,
+    *,
+    normalization: str = "entmax",
+    alpha: float = 0.5,
+    node_threshold: float = 0.02,
+) -> Path:
+    safe_slug = slugify(slug)
+    safe_source_set = validate_source_set(source_set)
+    if not safe_source_set:
+        raise ValueError("source_set is required for source summary paths.")
+    return (
+        source_set_path(summary_graph_root, dataset, safe_source_set)
+        / normalization
+        / f"alpha_{alpha:.2f}"
+        / f"node_{node_threshold:.2f}"
+        / f"{safe_slug}.pt"
+    )
+
+
+def app_summary_path(
+    slug: str,
+    dataset: str,
+    summary_root: Path = SUMMARY_ROOT,
+    *,
+    source_set: str = "",
+    summary_graph_root: Path = SUMMARY_GRAPH_ROOT,
+) -> Path:
+    safe_source_set = validate_source_set(source_set)
+    if safe_source_set:
+        return source_summary_path(slug, dataset, safe_source_set, summary_graph_root)
+    return summary_path(slug, dataset, summary_root)
+
+
+def app_summary_sidecar_dir(
+    dataset: str,
+    summary_root: Path = SUMMARY_ROOT,
+    *,
+    source_set: str = "",
+    summary_graph_root: Path = SUMMARY_GRAPH_ROOT,
+) -> Path:
+    safe_source_set = validate_source_set(source_set)
+    if safe_source_set:
+        return source_summary_path(
+            "placeholder",
+            dataset,
+            safe_source_set,
+            summary_graph_root,
+        ).parent
+    return summary_sidecar_dir(dataset, summary_root)
+
+
 def supernode_storage_path(summary_root: Path = SUMMARY_ROOT) -> Path:
     return summary_root / SUPERNODE_STORAGE_FILENAME
 
@@ -183,6 +289,7 @@ def list_graphs(
     *,
     dataset_root: Path = DATASET_ROOT,
     custom_pt_root: Path = CUSTOM_PT_ROOT,
+    summary_graph_root: Path = SUMMARY_GRAPH_ROOT,
     datasets: tuple[str, ...] = ALL_DATASETS,
 ) -> list[GraphRecord]:
     if not root.exists():
@@ -193,16 +300,16 @@ def list_graphs(
         dataset_dir = root / dataset
         if not dataset_dir.is_dir():
             continue
-        for directory in sorted(path for path in dataset_dir.iterdir() if path.is_dir()):
-            slug = slugify(directory.name)
-            graph_path = directory / f"{slug}.json"
-            if not graph_path.exists():
-                candidates = sorted(directory.glob("*.json"))
-                candidates = [p for p in candidates if p.name != "graph-metadata.json"]
-                if not candidates:
-                    continue
-                graph_path = candidates[0]
-                slug = graph_path.stem
+        json_paths = sorted(
+            path
+            for path in dataset_dir.rglob("*.json")
+            if path.name != "graph-metadata.json"
+        )
+        for graph_path in json_paths:
+            directory = graph_path.parent
+            slug = slugify(graph_path.stem)
+            legacy_dir = dataset_dir / slug
+            source_set = "" if directory == legacy_dir else directory.relative_to(dataset_dir).as_posix()
 
             try:
                 payload = _read_graph_json(graph_path)
@@ -214,6 +321,7 @@ def list_graphs(
                 GraphRecord(
                     slug=slug,
                     dataset=dataset,
+                    source_set=source_set,
                     directory=str(directory),
                     prompt=str(metadata.get("prompt") or ""),
                     prompt_tokens=[str(t) for t in metadata.get("prompt_tokens") or []],
@@ -221,11 +329,18 @@ def list_graphs(
                     has_pt=find_pt_path(
                         slug,
                         dataset,
+                        source_set=source_set,
                         dataset_root=dataset_root,
                         custom_pt_root=custom_pt_root,
                     )
                     is not None,
-                    has_summary=summary_path(slug, dataset, summary_root).exists(),
+                    has_summary=app_summary_path(
+                        slug,
+                        dataset,
+                        summary_root,
+                        source_set=source_set,
+                        summary_graph_root=summary_graph_root,
+                    ).exists(),
                     node_count=len(payload.get("nodes") or []),
                     link_count=len(payload.get("links") or []),
                 )
@@ -239,19 +354,29 @@ def load_graph_record(
     root: Path = GRAPH_ROOT,
     summary_root: Path = SUMMARY_ROOT,
     *,
+    source_set: str = "",
     dataset_root: Path = DATASET_ROOT,
     custom_pt_root: Path = CUSTOM_PT_ROOT,
+    summary_graph_root: Path = SUMMARY_GRAPH_ROOT,
 ) -> GraphRecord:
     safe_slug = slugify(slug)
     safe_dataset = validate_dataset(dataset)
+    safe_source_set = validate_source_set(source_set)
     for record in list_graphs(
         root,
         summary_root,
+        summary_graph_root=summary_graph_root,
         dataset_root=dataset_root,
         custom_pt_root=custom_pt_root,
     ):
-        if record.slug == safe_slug and record.dataset == safe_dataset:
+        if (
+            record.slug == safe_slug
+            and record.dataset == safe_dataset
+            and record.source_set == safe_source_set
+        ):
             return record
+    if safe_source_set:
+        raise FileNotFoundError(f"Unknown graph: {safe_dataset}/{safe_source_set}/{safe_slug}")
     raise FileNotFoundError(f"Unknown graph: {safe_dataset}/{safe_slug}")
 
 
@@ -269,10 +394,12 @@ def convert_pt_to_viewer(
     *,
     slug: str,
     dataset: str,
+    source_set: str = "",
     scan: str | None = None,
     root: Path = GRAPH_ROOT,
     summary_root: Path = SUMMARY_ROOT,
     custom_pt_root: Path = CUSTOM_PT_ROOT,
+    summary_graph_root: Path = SUMMARY_GRAPH_ROOT,
     node_threshold: float = 0.8,
     edge_threshold: float = 0.98,
 ) -> GraphRecord:
@@ -281,7 +408,8 @@ def convert_pt_to_viewer(
 
     safe_slug = slugify(slug)
     safe_dataset = validate_dataset(dataset)
-    viewer_dir = graph_dir(safe_slug, safe_dataset, root)
+    safe_source_set = validate_source_set(source_set)
+    viewer_dir = graph_dir(safe_slug, safe_dataset, root, safe_source_set)
     viewer_dir.mkdir(parents=True, exist_ok=True)
 
     graph = Graph.from_pt(str(pt_path))
@@ -305,7 +433,9 @@ def convert_pt_to_viewer(
         safe_dataset,
         root,
         summary_root,
+        source_set=safe_source_set,
         custom_pt_root=custom_pt_root,
+        summary_graph_root=summary_graph_root,
     )
 
 
@@ -538,11 +668,13 @@ def run_summary(
     *,
     slug: str,
     dataset: str,
+    source_set: str = "",
     settings: dict[str, Any],
     root: Path = GRAPH_ROOT,
     summary_root: Path = SUMMARY_ROOT,
     dataset_root: Path = DATASET_ROOT,
     custom_pt_root: Path = CUSTOM_PT_ROOT,
+    summary_graph_root: Path = SUMMARY_GRAPH_ROOT,
     progress: Callable[[str, float | None], None] | None = None,
 ) -> dict[str, Any]:
     from argparse import Namespace
@@ -553,9 +685,11 @@ def run_summary(
 
     safe_slug = slugify(slug)
     safe_dataset = validate_dataset(dataset)
+    safe_source_set = validate_source_set(source_set)
     pt_path = find_pt_path(
         safe_slug,
         safe_dataset,
+        source_set=safe_source_set,
         dataset_root=dataset_root,
         custom_pt_root=custom_pt_root,
     )
@@ -600,8 +734,19 @@ def run_summary(
     elif token_weights_source != "uniform":
         raise ValueError(f"Unknown token_weights_source: {token_weights_source!r}")
 
-    out = summary_path(safe_slug, safe_dataset, summary_root)
-    sidecar_dir = summary_sidecar_dir(safe_dataset, summary_root)
+    out = app_summary_path(
+        safe_slug,
+        safe_dataset,
+        summary_root,
+        source_set=safe_source_set,
+        summary_graph_root=summary_graph_root,
+    )
+    sidecar_dir = app_summary_sidecar_dir(
+        safe_dataset,
+        summary_root,
+        source_set=safe_source_set,
+        summary_graph_root=summary_graph_root,
+    )
     sidecar_dir.mkdir(parents=True, exist_ok=True)
 
     def pipeline_progress(message: str, value: float | None = None) -> None:
@@ -697,13 +842,22 @@ def run_summary(
         sng.save(str(out))
 
     report("Updating supernode storage", 0.93)
-    upsert_summary_supernode_storage(safe_slug, safe_dataset, out, root, summary_root)
+    upsert_summary_supernode_storage(
+        safe_slug,
+        safe_dataset,
+        out,
+        root,
+        summary_root,
+        source_set=safe_source_set,
+        summary_graph_root=summary_graph_root,
+    )
 
     report("Preparing viewer import", 0.96)
     pinned_ids, supernodes, stats = summary_graph_viewer_payload(sng)
     return {
         "slug": safe_slug,
         "dataset": safe_dataset,
+        "source_set": safe_source_set,
         "summary_path": str(out),
         "pruned_nodes": pipeline_result["pruned_nodes"],
         "pruned_edges": pipeline_result["pruned_edges"],
@@ -821,16 +975,40 @@ def _summary_slug_from_path(path: Path) -> str:
     return slugify(path.stem)
 
 
+def _source_summary_info_from_path(
+    path: Path,
+    summary_graph_root: Path = SUMMARY_GRAPH_ROOT,
+) -> tuple[str, str, str] | None:
+    try:
+        relative = path.relative_to(summary_graph_root)
+    except ValueError:
+        return None
+    parts = relative.parts
+    if len(parts) < 5:
+        return None
+    try:
+        dataset = validate_dataset(parts[0])
+    except ValueError:
+        return None
+    source_set = validate_source_set("/".join(parts[1:-4]))
+    if not source_set:
+        return None
+    return dataset, source_set, slugify(path.stem)
+
+
 def _summary_source_metadata(
     slug: str,
     dataset: str,
+    source_set: str,
     sng,
     root: Path,
     summary_root: Path,
     *,
     dataset_root: Path = DATASET_ROOT,
     custom_pt_root: Path = CUSTOM_PT_ROOT,
+    summary_graph_root: Path = SUMMARY_GRAPH_ROOT,
 ) -> tuple[str, str, str]:
+    safe_source_set = validate_source_set(source_set)
     prompt = str(sng.metadata.get("prompt") or "")
     model_name = ""
     transcoder = str(sng.metadata.get("scan") or "")
@@ -841,8 +1019,10 @@ def _summary_source_metadata(
             dataset,
             root,
             summary_root,
+            source_set=safe_source_set,
             dataset_root=dataset_root,
             custom_pt_root=custom_pt_root,
+            summary_graph_root=summary_graph_root,
         )
     except FileNotFoundError:
         record = None
@@ -853,6 +1033,7 @@ def _summary_source_metadata(
     pt_path = find_pt_path(
         slug,
         dataset,
+        source_set=safe_source_set,
         dataset_root=dataset_root,
         custom_pt_root=custom_pt_root,
     )
@@ -870,6 +1051,7 @@ def _storage_record_for_supernode(
     *,
     slug: str,
     dataset: str,
+    source_set: str,
     source_path: Path,
     source_mtime: float,
     supernode_index: int,
@@ -883,9 +1065,15 @@ def _storage_record_for_supernode(
     )
     if supernode.type != "features" or feature_count == 0:
         return None
+    safe_source_set = validate_source_set(source_set)
+    record_id_parts = [dataset]
+    if safe_source_set:
+        record_id_parts.append(safe_source_set)
+    record_id_parts.extend([slug, str(supernode_index)])
     return {
-        "record_id": f"{dataset}:{slug}:{supernode_index}",
+        "record_id": ":".join(record_id_parts),
         "source_dataset": dataset,
+        "source_set": safe_source_set,
         "source_slug": slug,
         "source_path": str(source_path),
         "source_mtime": source_mtime,
@@ -909,39 +1097,59 @@ def rebuild_supernode_storage(
     *,
     dataset_root: Path = DATASET_ROOT,
     custom_pt_root: Path = CUSTOM_PT_ROOT,
+    summary_graph_root: Path = SUMMARY_GRAPH_ROOT,
 ) -> dict[str, Any]:
     from summarization.summarize import SummaryGraph
 
     records: list[dict[str, Any]] = []
-    if summary_root.exists():
-        for path in sorted(summary_root.glob("*/*.sng.pt")):
-            dataset = validate_dataset(path.parent.name)
-            slug = _summary_slug_from_path(path)
+    legacy_paths = sorted(summary_root.glob("*/*.sng.pt")) if summary_root.exists() else []
+    scan_source_summaries = summary_graph_root != SUMMARY_GRAPH_ROOT or summary_root == SUMMARY_ROOT
+    source_paths = (
+        sorted(summary_graph_root.rglob("*.pt"))
+        if scan_source_summaries and summary_graph_root.exists()
+        else []
+    )
+    path_infos: list[tuple[Path, str, str, str]] = []
+    for path in legacy_paths:
+        path_infos.append((path, validate_dataset(path.parent.name), "", _summary_slug_from_path(path)))
+    for path in source_paths:
+        source_info = _source_summary_info_from_path(path, summary_graph_root)
+        if source_info is not None:
+            dataset, source_set, slug = source_info
+            path_infos.append((path, dataset, source_set, slug))
+
+    for path, dataset, source_set, slug in path_infos:
+        try:
             sng = SummaryGraph.load(str(path))
-            model_name, transcoder, prompt = _summary_source_metadata(
-                slug,
-                dataset,
-                sng,
-                root,
-                summary_root,
-                dataset_root=dataset_root,
-                custom_pt_root=custom_pt_root,
+        except (OSError, RuntimeError, ValueError, EOFError, pickle.UnpicklingError):
+            continue
+        model_name, transcoder, prompt = _summary_source_metadata(
+            slug,
+            dataset,
+            source_set,
+            sng,
+            root,
+            summary_root,
+            dataset_root=dataset_root,
+            custom_pt_root=custom_pt_root,
+            summary_graph_root=summary_graph_root,
+        )
+        source_mtime = path.stat().st_mtime
+        for supernode_index, supernode in enumerate(sng.supernodes):
+            record = _storage_record_for_supernode(
+                slug=slug,
+                dataset=dataset,
+                source_set=source_set,
+                source_path=path,
+                source_mtime=source_mtime,
+                supernode_index=supernode_index,
+                supernode=supernode,
+                model_name=model_name,
+                transcoder=transcoder,
+                prompt=prompt,
             )
-            source_mtime = path.stat().st_mtime
-            for supernode_index, supernode in enumerate(sng.supernodes):
-                record = _storage_record_for_supernode(
-                    slug=slug,
-                    dataset=dataset,
-                    source_path=path,
-                    source_mtime=source_mtime,
-                    supernode_index=supernode_index,
-                    supernode=supernode,
-                    model_name=model_name,
-                    transcoder=transcoder,
-                    prompt=prompt,
-                )
-                if record is not None:
-                    records.append(record)
+            if record is not None:
+                records.append(record)
 
     payload = {
         "version": SUPERNODE_STORAGE_VERSION,
@@ -983,13 +1191,16 @@ def upsert_summary_supernode_storage(
     root: Path = GRAPH_ROOT,
     summary_root: Path = SUMMARY_ROOT,
     *,
+    source_set: str = "",
     dataset_root: Path = DATASET_ROOT,
     custom_pt_root: Path = CUSTOM_PT_ROOT,
+    summary_graph_root: Path = SUMMARY_GRAPH_ROOT,
 ) -> dict[str, Any]:
     from summarization.summarize import SummaryGraph
 
     safe_slug = slugify(slug)
     safe_dataset = validate_dataset(dataset)
+    safe_source_set = validate_source_set(source_set)
     existing = load_supernode_storage(root, summary_root)
     records = [
         record
@@ -997,6 +1208,7 @@ def upsert_summary_supernode_storage(
         if not (
             str(record.get("source_slug") or "") == safe_slug
             and str(record.get("source_dataset") or "") == safe_dataset
+            and str(record.get("source_set") or "") == safe_source_set
         )
     ]
 
@@ -1004,17 +1216,20 @@ def upsert_summary_supernode_storage(
     model_name, transcoder, prompt = _summary_source_metadata(
         safe_slug,
         safe_dataset,
+        safe_source_set,
         sng,
         root,
         summary_root,
         dataset_root=dataset_root,
         custom_pt_root=custom_pt_root,
+        summary_graph_root=summary_graph_root,
     )
     source_mtime = summary_file.stat().st_mtime
     for supernode_index, supernode in enumerate(sng.supernodes):
         record = _storage_record_for_supernode(
             slug=safe_slug,
             dataset=safe_dataset,
+            source_set=safe_source_set,
             source_path=summary_file,
             source_mtime=source_mtime,
             supernode_index=supernode_index,
@@ -1108,25 +1323,37 @@ def steering_options(
     root: Path = GRAPH_ROOT,
     summary_root: Path = SUMMARY_ROOT,
     *,
+    source_set: str = "",
     dataset_root: Path = DATASET_ROOT,
     custom_pt_root: Path = CUSTOM_PT_ROOT,
+    summary_graph_root: Path = SUMMARY_GRAPH_ROOT,
 ) -> dict[str, Any]:
     from summarization.summarize import SummaryGraph
 
     safe_slug = slugify(slug)
     safe_dataset = validate_dataset(dataset)
+    safe_source_set = validate_source_set(source_set)
     record = load_graph_record(
         safe_slug,
         safe_dataset,
         root,
         summary_root,
+        source_set=safe_source_set,
         dataset_root=dataset_root,
         custom_pt_root=custom_pt_root,
+        summary_graph_root=summary_graph_root,
     )
-    summary_file = summary_path(safe_slug, safe_dataset, summary_root)
+    summary_file = app_summary_path(
+        safe_slug,
+        safe_dataset,
+        summary_root,
+        source_set=safe_source_set,
+        summary_graph_root=summary_graph_root,
+    )
     if not summary_file.exists():
+        graph_name = f"{safe_dataset}/{safe_source_set}/{safe_slug}" if safe_source_set else f"{safe_dataset}/{safe_slug}"
         raise FileNotFoundError(
-            f"Summary has not been generated for graph {safe_dataset}/{safe_slug!r}."
+            f"Summary has not been generated for graph {graph_name!r}."
         )
 
     sng = SummaryGraph.load(str(summary_file))
@@ -1137,6 +1364,7 @@ def steering_options(
     pt_path = find_pt_path(
         safe_slug,
         safe_dataset,
+        source_set=safe_source_set,
         dataset_root=dataset_root,
         custom_pt_root=custom_pt_root,
     )
@@ -1166,6 +1394,7 @@ def steering_options(
     return {
         "slug": safe_slug,
         "dataset": safe_dataset,
+        "source_set": safe_source_set,
         "prompt": prompt,
         "prompt_tokens": prompt_tokens,
         "model_name": inferred_model,
@@ -1341,6 +1570,7 @@ def run_steering(
     *,
     slug: str,
     dataset: str,
+    source_set: str = "",
     factors: dict[str, float],
     stored_supernodes: list[dict[str, Any]] | None = None,
     model_name: str = "",
@@ -1361,11 +1591,18 @@ def run_steering(
 
     safe_slug = slugify(slug)
     safe_dataset = validate_dataset(dataset)
+    safe_source_set = validate_source_set(source_set)
     stored_supernodes = stored_supernodes or []
     if not factors and not stored_supernodes:
         raise ValueError("Select at least one feature supernode to steer.")
 
-    options = steering_options(safe_slug, safe_dataset, root, summary_root)
+    options = steering_options(
+        safe_slug,
+        safe_dataset,
+        root,
+        summary_root,
+        source_set=safe_source_set,
+    )
     prompt = str(options["prompt"])
     if not prompt:
         raise ValueError("Summary graph metadata lacks a prompt; cannot run steering.")
@@ -1375,7 +1612,12 @@ def run_steering(
     if not resolved_model or not resolved_transcoder:
         raise ValueError("model_name and transcoder are required for steering.")
 
-    summary_file = summary_path(safe_slug, safe_dataset, summary_root)
+    summary_file = app_summary_path(
+        safe_slug,
+        safe_dataset,
+        summary_root,
+        source_set=safe_source_set,
+    )
     sng = SummaryGraph.load(str(summary_file))
     valid_names = {supernode.name for supernode in sng.supernodes if supernode.type == "features"}
     unknown = sorted(set(factors) - valid_names)
@@ -1465,6 +1707,7 @@ def run_steering(
     return {
         "slug": safe_slug,
         "dataset": safe_dataset,
+        "source_set": safe_source_set,
         "prompt": prompt,
         "model_name": resolved_model,
         "transcoder": resolved_transcoder,

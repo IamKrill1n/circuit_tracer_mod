@@ -1,6 +1,7 @@
 const state = {
   graphs: [],
   activeDataset: null,
+  activeSourceSet: "",
   activeSlug: null,
   datasetFilter: "",
   summary: null,
@@ -12,14 +13,17 @@ const state = {
 const el = (id) => document.getElementById(id);
 
 function graphKey(graph) {
-  return `${graph.dataset}/${graph.slug}`;
+  return [graph.dataset, graph.source_set, graph.slug].filter(Boolean).join("/");
 }
 
-function graphApiPath(dataset, slug, suffix = "") {
-  return `/api/graphs/${encodeURIComponent(dataset)}/${encodeURIComponent(slug)}${suffix}`;
+function graphApiPath(dataset, slug, suffix = "", sourceSet = "") {
+  const path = `/api/graphs/${encodeURIComponent(dataset)}/${encodeURIComponent(slug)}${suffix}`;
+  if (!sourceSet) return path;
+  return `${path}?source_set=${encodeURIComponent(sourceSet)}`;
 }
 
-function defaultShapPath(dataset) {
+function defaultShapPath(dataset, sourceSet = "") {
+  if (sourceSet) return `dataset/${dataset}/${sourceSet}/shap_values.json`;
   if (dataset === "analogies" || dataset === "multihop") {
     return `dataset/${dataset}/shap_values.json`;
   }
@@ -27,7 +31,11 @@ function defaultShapPath(dataset) {
 }
 
 function isActiveGraph(graph) {
-  return graph.dataset === state.activeDataset && graph.slug === state.activeSlug;
+  return (
+    graph.dataset === state.activeDataset &&
+    (graph.source_set || "") === state.activeSourceSet &&
+    graph.slug === state.activeSlug
+  );
 }
 
 async function api(path, options = {}) {
@@ -62,10 +70,12 @@ function renderGraphs() {
     const button = document.createElement("button");
     button.className = `graph-item ${isActiveGraph(graph) ? "active" : ""}`;
     button.innerHTML = `
-      <div class="graph-name">${graph.dataset}/${graph.slug}</div>
+      <div class="graph-name">${graphKey(graph)}</div>
       <div class="graph-meta">${graph.node_count} nodes - ${graph.link_count} edges - ${graph.has_pt ? ".pt" : "view-only"}${graph.has_summary ? " - summary" : ""}</div>
     `;
-    button.addEventListener("click", () => selectGraph(graph.dataset, graph.slug));
+    button.addEventListener("click", () =>
+      selectGraph(graph.dataset, graph.slug, false, graph.source_set || ""),
+    );
     list.appendChild(button);
   });
 }
@@ -80,13 +90,14 @@ function activeGraph() {
   return state.graphs.find((graph) => isActiveGraph(graph));
 }
 
-async function selectGraph(dataset, slug, useSummary = false) {
+async function selectGraph(dataset, slug, useSummary = false, sourceSet = "") {
   state.activeDataset = dataset;
+  state.activeSourceSet = sourceSet || "";
   state.activeSlug = slug;
   state.summary = null;
   renderGraphs();
   const graph = activeGraph();
-  el("activeTitle").textContent = `${dataset}/${slug}`;
+  el("activeTitle").textContent = [dataset, state.activeSourceSet, slug].filter(Boolean).join("/");
   el("activeMeta").textContent = graph ? `${graph.scan || "unknown scan"} - ${graph.prompt || "no prompt metadata"}` : "";
   el("summaryBtn").disabled = !graph?.has_pt;
   el("showSummaryBtn").disabled = !graph?.has_summary;
@@ -99,7 +110,12 @@ async function selectGraph(dataset, slug, useSummary = false) {
 async function openViewer(useSummary = false) {
   if (!state.activeDataset || !state.activeSlug) return;
   const payload = await api(
-    `${graphApiPath(state.activeDataset, state.activeSlug, "/viewer-url")}?summary=${useSummary ? "true" : "false"}`,
+    `${graphApiPath(
+      state.activeDataset,
+      state.activeSlug,
+      "/viewer-url",
+      state.activeSourceSet,
+    )}${state.activeSourceSet ? "&" : "?"}summary=${useSummary ? "true" : "false"}`,
   );
   el("viewerFrame").src = payload.url;
   state.summary = payload.summary;
@@ -242,7 +258,14 @@ async function openSteeringDialog() {
   el("supernodeStoragePanel").hidden = true;
   el("steeringDialog").showModal();
   try {
-    const payload = await api(graphApiPath(state.activeDataset, state.activeSlug, "/steering-options"));
+    const payload = await api(
+      graphApiPath(
+        state.activeDataset,
+        state.activeSlug,
+        "/steering-options",
+        state.activeSourceSet,
+      ),
+    );
     state.steeringOptions = payload;
     el("steerModel").value = payload.model_name || "";
     el("steerTranscoder").value = payload.transcoder || "";
@@ -567,7 +590,7 @@ el("newGraphBtn").addEventListener("click", () => el("generateDialog").showModal
 el("uploadBtn").addEventListener("click", () => el("uploadDialog").showModal());
 el("summaryBtn").addEventListener("click", () => {
   if (state.activeDataset) {
-    el("sumShapValuesPath").value = defaultShapPath(state.activeDataset);
+    el("sumShapValuesPath").value = defaultShapPath(state.activeDataset, state.activeSourceSet);
   }
   syncThetaModeInputs();
   el("summaryDialog").showModal();
@@ -644,7 +667,7 @@ el("startGenerateBtn").addEventListener("click", async () => {
   await pollJob(payload.job, status, async (result) => {
     await refreshGraphs();
     el("generateDialog").close();
-    await selectGraph(result.graph.dataset, result.graph.slug);
+    await selectGraph(result.graph.dataset, result.graph.slug, false, result.graph.source_set || "");
   });
 });
 
@@ -663,7 +686,7 @@ el("startUploadBtn").addEventListener("click", async () => {
   const payload = await api("/api/graphs/upload", { method: "POST", body: data });
   await refreshGraphs();
   el("uploadDialog").close();
-  await selectGraph(payload.graph.dataset, payload.graph.slug);
+  await selectGraph(payload.graph.dataset, payload.graph.slug, false, payload.graph.source_set || "");
 });
 
 el("startSummaryBtn").addEventListener("click", async () => {
@@ -678,15 +701,18 @@ el("startSummaryBtn").addEventListener("click", async () => {
   updateProgress(progressBar, progressText, 0);
   status.textContent = "Starting summary...";
   try {
-    const payload = await api(graphApiPath(state.activeDataset, state.activeSlug, "/summary"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(summaryPayload()),
-    });
+    const payload = await api(
+      graphApiPath(state.activeDataset, state.activeSlug, "/summary", state.activeSourceSet),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(summaryPayload()),
+      },
+    );
     await pollJob(payload.job, status, async () => {
       await refreshGraphs();
       el("summaryDialog").close();
-      await selectGraph(state.activeDataset, state.activeSlug, true);
+      await selectGraph(state.activeDataset, state.activeSlug, true, state.activeSourceSet);
     }, progressBar, progressText);
   } finally {
     startButton.disabled = false;
@@ -711,11 +737,14 @@ el("startSteeringBtn").addEventListener("click", async () => {
   updateProgress(progressBar, progressText, 0);
   status.textContent = "Starting steering...";
   try {
-    const payload = await api(graphApiPath(state.activeDataset, state.activeSlug, "/steer"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req),
-    });
+    const payload = await api(
+      graphApiPath(state.activeDataset, state.activeSlug, "/steer", state.activeSourceSet),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req),
+      },
+    );
     await pollJob(payload.job, status, async (result) => {
       renderSteeringResult(result);
     }, progressBar, progressText);
