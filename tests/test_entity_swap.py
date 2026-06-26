@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 import torch
@@ -27,6 +30,39 @@ from eval.eval_entity_swap import (
     _token_matches,
 )
 from summarization.summarize import Node, SummaryGraph, Supernode
+
+
+def test_help_does_not_import_torch(tmp_path: Path) -> None:
+    (tmp_path / "sitecustomize.py").write_text(
+        """
+import builtins
+
+_real_import = builtins.__import__
+
+def _blocked_import(name, *args, **kwargs):
+    if name == "torch" or name.startswith("torch."):
+        raise ModuleNotFoundError("No module named 'torch'")
+    return _real_import(name, *args, **kwargs)
+
+builtins.__import__ = _blocked_import
+""",
+        encoding="utf-8",
+    )
+    pythonpath = str(tmp_path)
+    if os.environ.get("PYTHONPATH"):
+        pythonpath = f"{pythonpath}{os.pathsep}{os.environ['PYTHONPATH']}"
+
+    result = subprocess.run(
+        [sys.executable, "eval/eval_entity_swap.py", "--help"],
+        cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, "PYTHONPATH": pythonpath},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--dtype {float32,float16,bfloat16}" in result.stdout
 
 
 def _node(

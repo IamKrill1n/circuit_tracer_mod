@@ -17,16 +17,17 @@ import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import torch
-import torch.nn.functional as F
+if TYPE_CHECKING:
+    import torch
 
-from circuit_tracer import ReplacementModel
-from summarization.summarize import Node, SummaryGraph, constrained_window
+    from circuit_tracer import ReplacementModel
+    from summarization.summarize import Node, SummaryGraph
 
 logger = logging.getLogger(__name__)
 
-DTYPE_MAP = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
+DTYPE_CHOICES = ("float32", "float16", "bfloat16")
 NUMERIC_SNG_RE = re.compile(r"^\d{3}\.sng\.pt$")
 
 RELATION_NAMES = [
@@ -298,6 +299,8 @@ def _constrained_intervention_groups(
     layers_below: int,
     layers_above: int,
 ) -> list[tuple[range, list[tuple[int, int, int, float]]]]:
+    from summarization.summarize import constrained_window
+
     by_layer: dict[int, list[tuple[int, int, int, float]]] = {}
     for layer, pos, feature, value in interventions:
         by_layer.setdefault(layer, []).append((layer, pos, feature, value))
@@ -308,6 +311,8 @@ def _constrained_intervention_groups(
 
 
 def _load_graph_records(graph_dir: Path, analogies_file: Path) -> list[GraphRecord]:
+    from summarization.summarize import SummaryGraph
+
     paths = _numeric_summary_paths(graph_dir)
     if len(paths) != 100:
         raise ValueError(f"expected 100 numeric .sng.pt files in {graph_dir}, found {len(paths)}")
@@ -358,6 +363,8 @@ def _last_logits(logits: torch.Tensor) -> torch.Tensor:
 
 
 def _last_probs(logits: torch.Tensor) -> torch.Tensor:
+    import torch.nn.functional as F
+
     return F.softmax(_last_logits(logits).float(), dim=-1)
 
 
@@ -825,7 +832,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=Path("eval_outputs/entity_swap"))
     parser.add_argument("--model-name", default="google/gemma-2-2b")
     parser.add_argument("--transcoder-set", default="mntss/clt-gemma-2-2b-2.5M")
-    parser.add_argument("--dtype", default="bfloat16", choices=list(DTYPE_MAP))
+    parser.add_argument("--dtype", default="bfloat16", choices=list(DTYPE_CHOICES))
     parser.add_argument("--device", default=None)
     parser.add_argument(
         "--backend", default="transformerlens", choices=["transformerlens", "nnsight"]
@@ -837,15 +844,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+
+    import torch
+
+    from circuit_tracer import ReplacementModel
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+    dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
     logger.info("loading model %s / transcoder %s", args.model_name, args.transcoder_set)
     model = ReplacementModel.from_pretrained(
         args.model_name,
         args.transcoder_set,
         backend=args.backend,
         lazy_encoder=True,
-        dtype=DTYPE_MAP[args.dtype],
+        dtype=dtype_map[args.dtype],
         device=torch.device(args.device) if args.device else None,
     )
     run_entity_swap(model, args)

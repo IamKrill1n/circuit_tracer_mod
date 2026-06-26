@@ -48,7 +48,8 @@ Output:
 Trash:
 - No consistent pattern exists.
 - Evidence is contradictory, noisy, or insufficient.
-- Use only when no meaningful interpretation can be supported.
+- Use only when absolutely no meaningful interpretation can be supported.
+- Even if a supernode is classify as Trash, take a guess on what it does.
 
 --------------------------------------------------
 ANALYSIS PROCEDURE
@@ -88,11 +89,11 @@ LABELING GUIDELINES
 Good labels:
 - France
 - Capital cities
-- Programming languages
-- Numeric quantities
+- child animals
+- ~50
 - Geographic locations
 - Subject-verb agreement
-- Paris prediction support
+- say Paris
 - Country-capital relation
 
 Bad labels:
