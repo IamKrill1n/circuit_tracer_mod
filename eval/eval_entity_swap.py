@@ -417,6 +417,26 @@ def _sample_ordered_pairs(
     return rng.sample(pairs, sample_pairs_per_relation)
 
 
+def _load_pair_list(path: Path | None) -> set[tuple[int, int]] | None:
+    if path is None:
+        return None
+    with path.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        required = {"source_idx", "donor_idx"}
+        if reader.fieldnames is None or not required <= set(reader.fieldnames):
+            raise ValueError(f"{path} must have source_idx and donor_idx columns")
+        return {(int(row["source_idx"]), int(row["donor_idx"])) for row in reader}
+
+
+def _filter_ordered_pairs(
+    pairs: list[tuple[GraphRecord, GraphRecord]],
+    pair_list: set[tuple[int, int]] | None,
+) -> list[tuple[GraphRecord, GraphRecord]]:
+    if pair_list is None:
+        return pairs
+    return [(source, donor) for source, donor in pairs if (source.idx, donor.idx) in pair_list]
+
+
 def _skip_row(
     source: GraphRecord,
     donor: GraphRecord,
@@ -640,13 +660,14 @@ def run_entity_swap(model: ReplacementModel, args: argparse.Namespace) -> None:
     layers_above = int(args.layers_above)
     sample_pairs_per_relation = getattr(args, "sample_pairs_per_relation", None)
     random_state = int(getattr(args, "random_state", 42))
+    pair_list = _load_pair_list(getattr(args, "pair_list", None))
 
     result_rows: list[dict] = []
     skip_rows: list[dict] = []
     for relation_idx in relations:
         relation_records = [r for r in records if r.relation_idx == relation_idx]
         pairs = _sample_ordered_pairs(
-            _eligible_ordered_pairs(relation_records),
+            _filter_ordered_pairs(_eligible_ordered_pairs(relation_records), pair_list),
             sample_pairs_per_relation,
             random_state,
             relation_idx,
@@ -670,6 +691,8 @@ def run_entity_swap(model: ReplacementModel, args: argparse.Namespace) -> None:
 
             for donor in relation_records:
                 if source.idx == donor.idx:
+                    continue
+                if pair_list is not None and (source.idx, donor.idx) not in pair_list:
                     continue
 
                 skip_reason = _skip_pair_reason(source, donor)
@@ -791,6 +814,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=_nonnegative_int,
         default=None,
         help="Randomly sample up to this many eligible ordered source->donor pairs per relation.",
+    )
+    parser.add_argument(
+        "--pair-list",
+        type=Path,
+        default=None,
+        help="Optional CSV with source_idx and donor_idx columns restricting eligible pairs.",
     )
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--output-dir", type=Path, default=Path("eval_outputs/entity_swap"))

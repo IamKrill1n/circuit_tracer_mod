@@ -49,6 +49,12 @@ formed, but does not assign roles or labels.
 
 The stage that partitions a pruned attribution graph into supernodes.
 
+## Labeled clustering baseline
+
+A comparison summary graph whose supernodes are produced by an alternative clustering method
+and then assigned names, roles, and descriptions by the same labeling scheme used for the main
+summary graph.
+
 ## Role vector
 
 A vector representation of one circuit node's upstream and downstream contribution pattern,

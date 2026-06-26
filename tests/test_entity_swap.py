@@ -15,6 +15,8 @@ from eval.eval_entity_swap import (
     _dedup_donor_features,
     _donor_interventions,
     _eligible_ordered_pairs,
+    _filter_ordered_pairs,
+    _load_pair_list,
     _numeric_summary_paths,
     _relation_idx,
     _sample_ordered_pairs,
@@ -198,6 +200,21 @@ def test_sample_ordered_pairs_uses_only_eligible_pairs_and_is_stable_by_relation
     assert len(sample) == 2
     assert sample == _sample_ordered_pairs(pairs, 2, random_state=42, relation_idx=3)
     assert sample != _sample_ordered_pairs(pairs, 2, random_state=42, relation_idx=4)
+
+
+def test_pair_list_filters_eligible_ordered_pairs(tmp_path: Path) -> None:
+    path = tmp_path / "pairs.csv"
+    path.write_text("source_idx,donor_idx\n0,2\n2,0\n9,8\n", encoding="utf-8")
+    pair_list = _load_pair_list(path)
+    records = [
+        _record(0, target_id=4, donor_features={(0, 1): 1.0}),
+        _record(1, target_id=5, donor_features={(0, 2): 1.0}),
+        _record(2, target_id=6, donor_features={(0, 3): 1.0}),
+    ]
+
+    filtered = _filter_ordered_pairs(_eligible_ordered_pairs(records), pair_list)
+
+    assert [(source.idx, donor.idx) for source, donor in filtered] == [(0, 2), (2, 0)]
 
 
 def test_summary_rows_group_by_relation_and_coefficient() -> None:
@@ -473,6 +490,87 @@ def test_run_entity_swap_samples_eligible_pairs_before_interventions(
         layers_above=1,
         sample_pairs_per_relation=1,
         random_state=42,
+    )
+
+    entity_swap.run_entity_swap(model, args)  # type: ignore[arg-type]
+
+    result_lines = (tmp_path / "out" / "swap_results.csv").read_text(encoding="utf-8").splitlines()
+    assert len(result_lines) == 2
+    assert model.intervention_count == 1
+
+
+def test_run_entity_swap_pair_list_restricts_interventions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = [
+        _record(
+            0,
+            target_id=4,
+            output_clt_nodes=[_node("0_1_1", 0)],
+            donor_features={(0, 1): 1.0},
+        ),
+        _record(
+            1,
+            target_id=5,
+            output_clt_nodes=[_node("0_2_1", 1)],
+            donor_features={(0, 2): 1.0},
+        ),
+        _record(
+            2,
+            target_id=6,
+            output_clt_nodes=[_node("0_3_1", 2)],
+            donor_features={(0, 3): 1.0},
+        ),
+    ]
+    monkeypatch.setattr(entity_swap, "_load_graph_records", lambda *_args: records)
+    pair_list = tmp_path / "pairs.csv"
+    pair_list.write_text("source_idx,donor_idx\n0,2\n", encoding="utf-8")
+
+    class FakeModel:
+        def __init__(self) -> None:
+            self.tokenizer = self
+            self.intervention_count = 0
+            self.activations = torch.ones((1, 2, 8))
+
+        def ensure_tokenized(self, prompt: str) -> torch.Tensor:
+            idx = int(prompt.split()[-1])
+            return torch.tensor([0, idx])
+
+        def decode(self, token_ids: list[int]) -> str:
+            return f" tok{token_ids[0]}"
+
+        def get_activations(
+            self, inputs: torch.Tensor, sparse: bool = False
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            logits = torch.zeros((1, 2, 8))
+            logits[0, -1, int(inputs[-1]) + 4] = 5.0
+            return logits, self.activations.clone()
+
+        def feature_intervention(
+            self,
+            inputs: torch.Tensor,
+            interventions: list[tuple[int, int, int, float]],
+            constrained_layers: range | None = None,
+            freeze_attention: bool = True,
+            return_activations: bool = False,
+        ) -> tuple[torch.Tensor, None]:
+            self.intervention_count += 1
+            logits = torch.zeros((1, 2, 8))
+            logits[0, -1, 6] = 6.0
+            return logits, None
+
+    model = FakeModel()
+    args = argparse.Namespace(
+        negation_coefficients="-2",
+        addition_coefficients="2",
+        relations="0",
+        graph_dir=tmp_path,
+        analogies_file=tmp_path / "bats.txt",
+        output_dir=tmp_path / "out",
+        layers_below=0,
+        layers_above=1,
+        pair_list=pair_list,
     )
 
     entity_swap.run_entity_swap(model, args)  # type: ignore[arg-type]

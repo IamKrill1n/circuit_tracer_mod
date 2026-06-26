@@ -26,8 +26,8 @@ relevance to the pruning score preserves graph completeness and replacement
 score at matched graph sizes. The ILP clusterer achieves the strongest
 structural preservation among the clustering baselines: at the $p65$ role-cosine
 threshold it obtains an internalized feature-edge mass of $0.0994$ and a DAG
-loss of $0.0359$, while retaining high signed role gaps. Finally, the final
-summary graphs obtain a sign consistency of $0.9361$ and a
+loss of $0.0359$, while retaining a high role gap. Finally, the final summary
+graphs obtain a sign consistency of $0.9361$ and a
 Spearman edge-effect correlation of $0.5633$, indicating that their signed edges
 largely agree with measured intervention responses.
 
@@ -308,34 +308,6 @@ Higher role gap means that members of the same supernode have more similar
 combined incoming and outgoing signed roles than features assigned to different
 supernodes.
 
-\paragraph{Signed upstream gap.}
-Signed upstream gap applies the same within-minus-cross comparison to the
-incoming role component $v_i^{\text{in}}$:
-\begin{equation}
-\mathrm{SignedUpGap}
-=
-\overline{\cos(v_i^{\text{in}},v_j^{\text{in}})}_{(i,j)\in\mathcal{Q}_{\text{same}}}
--
-\overline{\cos(v_i^{\text{in}},v_j^{\text{in}})}_{(i,j)\in\mathcal{Q}_{\text{diff}}}.
-\label{eq:metric-signed-up-gap}
-\end{equation}
-Higher signed upstream gap means that features grouped into one supernode receive
-causal input from more similar upstream sources.
-
-\paragraph{Signed downstream gap.}
-Signed downstream gap applies the comparison to the outgoing role component
-$v_i^{\text{out}}$:
-\begin{equation}
-\mathrm{SignedDownGap}
-=
-\overline{\cos(v_i^{\text{out}},v_j^{\text{out}})}_{(i,j)\in\mathcal{Q}_{\text{same}}}
--
-\overline{\cos(v_i^{\text{out}},v_j^{\text{out}})}_{(i,j)\in\mathcal{Q}_{\text{diff}}}.
-\label{eq:metric-signed-downgap}
-\end{equation}
-Higher signed downstream gap indicates that features grouped inside one
-supernode affect later nodes with more similar signed profiles.
-
 \paragraph{Internalized edge mass.}
 Internalized edge mass measures how much fine-grained causal weight disappears
 inside feature supernodes. Unlike a graph-wide edge fraction, this metric is
@@ -377,53 +349,58 @@ features unmerged.
 
 \subsection{Results}
 
-Table~\ref{tab:clustering-baseline-entmax} reports clustering metrics on 100
-pruned analogy graphs, including the matched-K baselines and two ILP ablations
-that vary the layer-span and causal-budget constraints. K-means obtains the
-largest role gap, signed upstream gap, and signed downstream gap among the main
-baseline rows. This result shows that direct geometric clustering can form
-compact role-vector groups. However, those groups hide substantially more
-feature--feature edge mass and require more backward-edge removal when converted
-into an acyclic summary graph.
+Table~\ref{tab:clustering-baseline-entmax} reports method means on 100 pruned
+analogy graphs. K-means obtains the largest role gap, which shows that direct
+geometric clustering can form compact role-vector groups. However, those groups
+hide more feature--feature edge mass and require more backward-edge removal than
+the proposed ILP summary when converted into an acyclic summary graph.
+
+The gain columns compare each method with the random same-size baseline.
+Positive values are better. Since the random baseline has a slightly negative
+role gap, the role-gain column reports the absolute difference
+$m-m_{\mathrm{rand}}$ rather than a percentage. For internalized mass and DAG
+loss, gain is the percentage reduction from the random baseline,
+$100(m_{\mathrm{rand}}-m)/m_{\mathrm{rand}}$.
 
 \begin{table}[ht]
 \centering
 \caption{Clustering evaluation on 100 pruned analogy graphs. Higher
-role gaps indicate more coherent signed causal roles inside supernodes. Lower
-internalized edge mass and lower DAG loss indicate better preservation of
-visible causal structure.}
+role gap indicates more coherent signed causal roles inside supernodes. Lower
+internalized edge mass and lower DAG loss indicate better preservation of visible
+causal structure. Gains are measured against the random same-size baseline.}
 \label{tab:clustering-baseline-entmax}
 \resizebox{\linewidth}{!}{%
-\begin{tabular}{lllrrrrr}
+\begin{tabular}{lrrrrrr}
 \toprule
-Method & Max layer span & $\epsilon_{\mathrm{causal}}$ & Role gap $\uparrow$ & Signed up gap $\uparrow$ & Signed down gap $\uparrow$ & Internalized mass $\downarrow$ & DAG loss $\downarrow$ \\
+& \multicolumn{3}{c}{Metric value} & \multicolumn{3}{c}{Gain vs. random} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+Method & Role gap $\uparrow$ & Internalized mass $\downarrow$ & DAG loss $\downarrow$ & Role $\Delta$ $\uparrow$ & Internalized $\uparrow$ & DAG loss $\uparrow$ \\
 \midrule
-Ours ILP & None & 0.050 & 0.680 & 0.625 & 0.474 & 0.050 & 0.087 \\
-Ours ILP & 7 & 0.050 & 0.663 & 0.604 & 0.541 & \textbf{0.049} & 0.062 \\
-Ours ILP & 7 & 0.090 & 0.680 & 0.601 & 0.541 & 0.083 & \textbf{0.061} \\
-K-means on role vectors & \textemdash{} & \textemdash{} & \textbf{0.696} & \textbf{0.631} & \textbf{0.593} & 0.086 & 0.090 \\
-Random same-size clusters & \textemdash{} & \textemdash{} & -0.014 & -0.008 & -0.005 & 0.086 & 0.125 \\
-Spectral on adjacency & \textemdash{} & \textemdash{} & 0.125 & 0.186 & -0.030 & 0.159 & 0.115 \\
-Spectral on role vectors & \textemdash{} & \textemdash{} & 0.575 & 0.542 & 0.210 & 0.109 & 0.078 \\
+Ours ILP & 0.675 & \textbf{0.048} & \textbf{0.056} & $+0.688$ & \textbf{$+41.1\%$} & \textbf{$+54.9\%$} \\
+K-means on role vectors & \textbf{0.713} & 0.084 & 0.092 & \textbf{$+0.726$} & $-2.3\%$ & $+25.9\%$ \\
+Random same-size clusters & -0.012 & 0.082 & 0.124 & $+0.000$ & $+0.0\%$ & $+0.0\%$ \\
+Spectral on adjacency & 0.108 & 0.187 & 0.114 & $+0.121$ & $-128.2\%$ & $+8.1\%$ \\
+Spectral on role vectors & 0.562 & 0.097 & 0.078 & $+0.575$ & $-18.1\%$ & $+37.4\%$ \\
 \bottomrule
 \end{tabular}
 }
 \end{table}
 
 The edge-mass metrics identify the intended advantage of the ILP formulation.
-The ILP rows have lower internalized feature-edge mass than the matched-K
-baselines, and the bounded layer-span variants also reduce DAG loss. The
-role-gap metrics therefore expose a tradeoff: K-means produces the tightest
-signed role-vector clusters, but the ILP gives up some role compactness to
+The ILP row has the lowest internalized feature-edge mass and DAG loss. Relative
+to random same-size clusters, it reduces internalized mass by $41.1\%$ and DAG
+loss by $54.9\%$, while increasing role gap by $0.688$. K-means gives the
+largest role-gap improvement, but it slightly increases internalized mass over
+the random baseline. The ILP therefore sacrifices some role-vector compactness to
 preserve more visible causal structure in the final summary graph.
 
 Table~\ref{tab:theta-sensitivity-entmax} reports the ILP sensitivity to the
 role-cosine threshold $\theta$. The $p50$, $p65$, and $p80$ settings correspond
 to the 50th, 65th, and 80th percentiles of allowed feature-pair cosine values on
-each graph. Increasing the threshold improves the role-gap metrics and reduces
-both internalized edge mass and DAG loss, but it also leaves more feature
-supernodes as singletons. Thus the stricter threshold preserves more local
-causal structure at the cost of lower compression.
+each graph. Increasing the threshold improves role gap and reduces both
+internalized edge mass and DAG loss, but it also leaves more feature supernodes
+as singletons. Thus the stricter threshold preserves more local causal structure
+at the cost of lower compression.
 
 \begin{table}[ht]
 \centering
@@ -432,13 +409,13 @@ pruned analogy graphs. Values are unweighted means across graphs. Singleton
 counts include only feature supernodes.}
 \label{tab:theta-sensitivity-entmax}
 \resizebox{\linewidth}{!}{%
-\begin{tabular}{lrrrrrr}
+\begin{tabular}{lrrrr}
 \toprule
-$\theta$ & Role gap $\uparrow$ & Signed up gap $\uparrow$ & Signed down gap $\uparrow$ & Internalized mass $\downarrow$ & DAG loss $\downarrow$ & Singletons $\downarrow$ \\
+$\theta$ & Role gap $\uparrow$ & Internalized mass $\downarrow$ & DAG loss $\downarrow$ & Singletons $\downarrow$ \\
 \midrule
-$p50$ & 0.6036 & 0.5412 & 0.4685 & 0.1056 & 0.0340 & \textbf{4.32} \\
-$p65$ & 0.6465 & 0.5652 & 0.5266 & 0.0994 & 0.0359 & 5.48 \\
-$p80$ & \textbf{0.6687} & \textbf{0.5969} & \textbf{0.5779} & \textbf{0.0849} & \textbf{0.0310} & 8.78 \\
+$p50$ & 0.6036 & 0.1056 & 0.0340 & \textbf{4.32} \\
+$p65$ & 0.6465 & 0.0994 & 0.0359 & 5.48 \\
+$p80$ & \textbf{0.6687} & \textbf{0.0849} & \textbf{0.0310} & 8.78 \\
 \bottomrule
 \end{tabular}
 }
