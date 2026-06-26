@@ -2,11 +2,11 @@
 \begin{document}
 
 \section{Summary}
-This thesis addressed the challenge of interpreting an attribution graph for circuit tracing task. It formalized the problem of summarizing an attribution graph and
+This thesis addressed the challenge of reading an attribution graph for circuit tracing task. It formalized the problem of summarizing an attribution graph and
 proposed an automated pipeline for producing compact, human-readable summary
 graphs. 
 
-The proposed method has three stages: prunning, clustering, and interpreting. The first stage, prunning, discards unimportant nodes and edges, leaving a smaller subgraph. The second stage, clustering, groups features with similar causal roles into supernodes. The third stage, interpreting, aggregates the clustered graph into a directed acyclic summary graph and assigns labels to its supernodes.
+The proposed method has three stages: prunning, clustering, and visualizing. The first stage, prunning, discards unimportant nodes and edges, leaving a smaller subgraph. The second stage, clustering, groups features with similar causal roles into supernodes. The third stage, visualizing, aggregates the clustered graph into a directed acyclic summary graph and assigns labels to its supernodes.
 The output is a compact summary graph, enabling researchers to inspect the causal story of the model's computation at a glance.
 
 Extensive experiments validated the faithfulness and interpretability of the

@@ -3,12 +3,12 @@
 
 \section{Overview}
 
-Chapter 2 established the foundation of the circuit tracing backbone that construct the attribution graphs, and the difficulty of interpreting them. Chapter 3 presents the proposed automated summarization method for
+Chapter 2 established the foundation of the circuit tracing backbone that construct the attribution graphs, and the difficulty of reading them. Chapter 3 presents the proposed automated summarization method for
 turning such an attribution graph into a smaller \emph{summary graph} whose nodes
 represent groups of related features and whose edges preserve the main causal
 flow. The method has three stages. \textbf{Pruning} removes unimportant attribution-graph
 nodes and edges. \textbf{Clustering}
-groups functionally similar features into supernodes, further reduce the complexity while preserving causal information. \textbf{Interpreting} aggregates
+groups functionally similar features into supernodes, further reduce the complexity while preserving causal information. \textbf{Visualizing} aggregates
 the clustered graph into a directed acyclic summary graph and assigns
 labels to its supernodes. Section~\ref{sec:problem} formalizes the input, output,
 and the desiderata of the summary. Section~\ref{sec:method}
@@ -24,17 +24,15 @@ Figure~\ref{fig:methodology-pipeline} gives an overview of the pipeline on the
 \subsection{Input}
 
 The attribution graph is a Directed Acyclic Graph (DAG) $G = (V, E, W)$ for one prompt and one model
-prediction. Its node set is partitioned as
+prediction. We name the non-error node sets as
 \[
-V = V_{\text{emb}} \cup V_{\text{feature}} \cup V_{\text{error}} \cup
-V_{\text{logit}},
+V_{\text{emb}} \cup V_{\text{feature}} \cup V_{\text{logit}} \subseteq V,
 \]
-where embedding nodes represent input-token sources, feature nodes represent
-transcoder features, error nodes represent reconstruction residuals, and logit
-nodes represent output targets. The weighted adjacency matrix
+Embedding nodes represent input-token
+sources, feature nodes represent transcoder features and logit nodes represent output targets. The weighted adjacency matrix
 $W \in \mathbb{R}^{N \times N}$, with $N := |V|$, follows the convention
 that $W_{ij}$ is the signed linear influence from source node $i$ to target
-node $j$. Embedding and error
+node $j$. Embedding
 nodes are sources with no incoming edges, logit nodes are sinks with no outgoing
 edges, and feature nodes carry signal between them.
 
@@ -53,9 +51,9 @@ single-target case.
 
 The output is a \emph{summary graph} $H = (V_H, E_H, W_H)$. Its node set
 $V_H = \{C_1, C_2, \dots, C_K\}$ consists of \emph{supernodes}, where each
-supernode is a nonempty subset of the non-error attribution-graph nodes:
+supernode is a nonempty subset of the attribution-graph nodes:
 \begin{equation}
-V_H \subseteq \mathcal{P}\!\left(V \setminus V_{\text{error}}\right)
+V_H \subseteq \mathcal{P}\!\left(V\right)
 \setminus \{\emptyset\}.
 \label{eq:summary-node-set}
 \end{equation}
@@ -67,8 +65,8 @@ C_i \cap C_j = \emptyset \quad (i \ne j),
 \forall v \in U_H \cap (V_{\text{emb}} \cup V_{\text{logit}}),\; \{v\} \in V_H.
 \label{eq:supernode-conditions}
 \end{equation}
-Therefore $V_H$ forms a partition of the represented subset
-$U_H \subseteq V \setminus V_{\text{error}}$. Embedding and logit nodes are
+Therefore $V_H$ forms a partition of the represented subset of non-error nodes
+$U_H \subseteq V$. Embedding and logit nodes are
 represented only as singleton supernodes, so only feature nodes may be grouped.
 The edge set $E_H$ and signed weights $W_H$ describe the net causal influence
 between supernodes.
@@ -179,10 +177,7 @@ influence and relevance to $[0,1]$ across nodes, the node importance score is
 \end{equation}
 where $\widehat{\,\cdot\,}$ denotes the rank normalized score. The geometric mean is
 used because it assigns a low score to nodes with small influence or relevance.
-Embedding and error nodes have no incoming edges, so their incoming-normalized
-columns are zero; since $\tau$ is supported only on selected embedding nodes and
-error nodes have no incoming path from those tokens, error nodes have relevance
-$0$ and therefore zero geometric importance. Edges are scored by applying the
+Edges are scored by applying the
 same influence--relevance principle to their edge scores:
 \begin{equation}
 \mathrm{Imp}_{ij} =
@@ -384,10 +379,10 @@ that these components define a valid partition. Embedding and logit nodes are th
 added as singleton supernodes, so the clustering output satisfies the output
 conditions of Eq.~\eqref{eq:supernode-conditions}.
 
-\subsection{Interpreting}
+\subsection{Visualizing}
 \label{sec:stage3}
 
-Interpreting converts the clustered pruned graph into the final summary graph.
+Visualizing converts the clustered pruned graph into the final summary graph.
 This stage takes the partition $f$ from clustering, aggregates retained edges
 between supernodes, removes cycles introduced by aggregation, and assigns
 human-readable labels. It ensures D4 is satisfied, so that a human reader can understand the summary clearly.
@@ -456,7 +451,7 @@ This taxonomy follows \cite{lindsey2025biology} and fits the detokenization--abs
 This chapter formalized attribution-graph summarization and defined the proposed
 three-stage method. The input is a signed directed acyclic attribution graph, and
 the output is a directed acyclic summary graph whose supernodes partition a
-retained subset of non-error nodes. The method first prunes the attribution graph
+retained subset of nodes. The method first prunes the attribution graph
 using influence, relevance, and the pruning loss $L_{\text{prune}}$. It then
 clusters retained feature nodes by a binary ILP whose pair variables encode
 same-supernode assignments. The ILP minimizes a signed-cosine atomicity objective

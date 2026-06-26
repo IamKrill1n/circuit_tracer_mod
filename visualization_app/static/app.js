@@ -120,6 +120,7 @@ async function openViewer(useSummary = false) {
   el("viewerFrame").src = payload.url;
   state.summary = payload.summary;
   renderSummaryDetails(payload.summary);
+  renderClusterViz(payload.summary);
 }
 
 function renderSummaryDetails(summaryPayload) {
@@ -142,6 +143,14 @@ function renderSummaryDetails(summaryPayload) {
     `;
     container.appendChild(card);
   });
+}
+
+function renderClusterViz(summaryPayload) {
+  const panel = el("clusterVizPanel");
+  const frame = el("clusterVizFrame");
+  const figureHtml = summaryPayload?.figure_html || "";
+  panel.hidden = !figureHtml;
+  frame.srcdoc = figureHtml;
 }
 
 function updateProgress(progressEl, textEl, progress) {

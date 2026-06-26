@@ -158,6 +158,28 @@ iframe {
   background: #ffffff;
 }
 
+.viewer-stack {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-rows: minmax(520px, 1fr) auto;
+}
+
+.cluster-viz-panel {
+  border-top: 1px solid #d8e0ea;
+  padding: 12px;
+}
+
+.cluster-viz-panel[hidden] {
+  display: none;
+}
+
+#clusterVizFrame {
+  min-height: 820px;
+  border: 1px solid #d8e0ea;
+  border-radius: 7px;
+}
+
 .summary-details {
   display: grid;
   gap: 10px;

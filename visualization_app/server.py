@@ -465,6 +465,7 @@ def get_viewer_url(
         summary_data = {
             "stats": stats,
             "summary": services.summary_metadata(sng),
+            "figure_html": services.summary_figure_html(sng),
         }
 
     return {

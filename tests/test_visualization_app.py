@@ -817,6 +817,66 @@ def test_run_summary_delegates_core_work_to_pipeline(
     assert [record["label"] for record in storage["records"]] == ["SN_0"]
 
 
+def test_summary_figure_html_renders_cluster_visualization() -> None:
+    emb = Supernode(
+        "SN_EMB_0",
+        [
+            Node(
+                node_id="E_0",
+                node_idx=0,
+                feature=0,
+                layer="E",
+                ctx_idx=0,
+                feature_type="embedding",
+                clerp="Emb: A",
+            )
+        ],
+        "emb",
+        -1,
+        -1,
+    )
+    mid = Supernode(
+        "Relation",
+        [_node("1_0_0", 1)],
+        "features",
+        1,
+        1,
+        role="Abstract",
+    )
+    logit = Supernode(
+        "SN_LOGIT_0",
+        [
+            Node(
+                node_id="L_0",
+                node_idx=2,
+                feature=2,
+                layer="27",
+                ctx_idx=0,
+                feature_type="logit",
+                token_prob=0.7,
+                is_target_logit=True,
+                clerp='Output "B" (p=0.700)',
+            )
+        ],
+        "logit",
+        27,
+        27,
+    )
+    sng = SummaryGraph(
+        [emb, mid, logit],
+        torch.zeros((3, 3)),
+        metadata={"prompt": "A is to", "prompt_tokens": ["A", " is", " to"]},
+    )
+
+    html = services.summary_figure_html(sng)
+
+    assert "Summarization supernode graph" in html
+    assert "Emb: A" in html
+    assert "Abstract:" in html
+    assert "Relation" in html
+    assert "Logit: B" in html
+
+
 def test_run_steering_uses_current_and_stored_supernodes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

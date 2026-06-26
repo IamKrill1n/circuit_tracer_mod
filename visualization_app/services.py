@@ -968,6 +968,24 @@ def summary_metadata(sng) -> list[dict[str, Any]]:
     ]
 
 
+def summary_figure_html(sng) -> str:
+    from summarization.cluster_viz import supernode_graph_figure
+
+    prompt = str(sng.metadata.get("prompt") or "")
+    prompt_tokens = [str(token) for token in (sng.metadata.get("prompt_tokens") or [])]
+    fig = supernode_graph_figure(
+        sng=sng,
+        title="Summarization supernode graph",
+        prompt_tokens=prompt_tokens or None,
+        prompt=prompt or None,
+    )
+    return fig.to_html(
+        include_plotlyjs="cdn",
+        full_html=True,
+        config={"responsive": True, "displaylogo": False},
+    )
+
+
 def _summary_slug_from_path(path: Path) -> str:
     name = path.name
     if name.endswith(".sng.pt"):

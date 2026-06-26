@@ -130,8 +130,7 @@ Replacement score measures the fraction of end-to-end influence from input
 tokens to output logits that flows through the retained part of the graph. Let
 $V'$ and $E'$ be the retained node and edge sets from the pruning stage. The
 complement $V \setminus V'$ denotes attribution-graph nodes outside the pruned
-graph; when the metric is computed, their mass is accumulated into the
-corresponding error or complement node. Let $W'$ be the adjacency after this
+graph. Let $W'$ be the adjacency after this
 merge, and let $\mathrm{Inf}'_v$ be the influence score computed from $W'$ using
 Eq.~\eqref{eq:inf}. The score is
 \begin{equation}

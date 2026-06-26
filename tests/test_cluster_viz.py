@@ -17,6 +17,7 @@ def _node(
     feature_type: str,
     *,
     is_target_logit: bool = False,
+    clerp: str | None = None,
 ) -> Node:
     return Node(
         node_id=node_id,
@@ -27,12 +28,18 @@ def _node(
         feature_type=feature_type,
         token_prob=0.7 if is_target_logit else 0.0,
         is_target_logit=is_target_logit,
-        clerp='Output "red" (p=0.700)' if is_target_logit else node_id,
+        clerp=clerp or ('Output "red" (p=0.700)' if is_target_logit else node_id),
     )
 
 
 def _summary_graph() -> SummaryGraph:
-    emb = Supernode("SN_EMB_0", [_node("E_0", 0, "E", 0, "embedding")], "emb", -1, -1)
+    emb = Supernode(
+        "SN_EMB_0",
+        [_node("E_0", 0, "E", 0, "embedding", clerp="Emb: The")],
+        "emb",
+        -1,
+        -1,
+    )
     mid = Supernode("SN_0", [_node("1_0", 1, "1", 4, "sae_feature")], "features", 1, 1)
     logit = Supernode(
         "SN_LOGIT_0",
@@ -50,7 +57,7 @@ def _summary_graph() -> SummaryGraph:
 def test_logit_layout_uses_output_anchor_not_logit_ctx() -> None:
     sng = _summary_graph()
     mapping = sng.to_mapping()
-    pos, _top_y = _supernode_layout(
+    pos, _top_y, _layer_y = _supernode_layout(
         sng.sn_names,
         mapping,
         attr=None,
@@ -61,6 +68,21 @@ def test_logit_layout_uses_output_anchor_not_logit_ctx() -> None:
     assert pos["SN_LOGIT_0"][0] == pytest.approx(8.0)
     assert pos["SN_EMB_0"][0] == pytest.approx(0.0)
     assert pos["SN_0"][0] == pytest.approx(4.0)
+
+
+def test_same_layer_supernodes_have_extra_horizontal_spacing() -> None:
+    first = Supernode("SN_A", [_node("1_0", 0, "1", 1, "sae_feature")], "features", 1, 1)
+    second = Supernode("SN_B", [_node("1_1", 1, "1", 1, "sae_feature")], "features", 1, 1)
+    sng = SummaryGraph([first, second], torch.zeros((2, 2), dtype=torch.float32))
+
+    pos, _top_y, _layer_y = _supernode_layout(
+        sng.sn_names,
+        sng.to_mapping(),
+        attr=None,
+        node_by_name=sng.node_by_name(),
+    )
+
+    assert pos["SN_B"][0] - pos["SN_A"][0] == pytest.approx(1.45)
 
 
 def test_edge_paths_are_complete_within_axis_range() -> None:
@@ -109,9 +131,13 @@ def test_hover_text_includes_supernode_label_role_and_description() -> None:
     assert "Description: Combines object and color evidence." in hover_text
 
 
-def test_steering_overlay_adds_intervention_ratio_outputs_and_stored_notes() -> None:
+def test_display_labels_use_node_kind_role_and_ignore_steering_overlays() -> None:
+    sng = _summary_graph()
+    sng.supernodes[1].name = "Hue"
+    sng.supernodes[1].role = "Abstract"
+
     fig = supernode_graph_figure(
-        _summary_graph(),
+        sng,
         prompt_tokens=["<bos>", "The", "sky", "is"],
         prompt="<bos>The sky is",
         steering_factors={"SN_0": -1.0},
@@ -129,13 +155,17 @@ def test_steering_overlay_adds_intervention_ratio_outputs_and_stored_notes() -> 
     )
 
     annotation_text = "\n".join(str(annotation.text) for annotation in fig.layout.annotations)
-    assert "-1x" in annotation_text
-    assert "20%" in annotation_text
-    assert "blue 0.420" in annotation_text
-    assert "External interventions" in annotation_text
-    assert "Stored color: 2x at pos 2 (3 feats)" in annotation_text
+    assert "Emb: The" in annotation_text
+    assert "Abstract: Hue" in annotation_text
+    assert "Logit: red" in annotation_text
+    assert "red" in annotation_text
+    assert "-1x" not in annotation_text
+    assert "20%" not in annotation_text
+    assert "blue 0.420" not in annotation_text
+    assert "External interventions" not in annotation_text
+    assert "Stored color" not in annotation_text
 
     hover_trace = next(trace for trace in fig.data if getattr(trace, "hovertext", None))
     hover_text = "<br>".join(str(item) for item in hover_trace.hovertext)
-    assert "Intervention: -1x" in hover_text
-    assert "Activation ratio: 20%" in hover_text
+    assert "Intervention: -1x" not in hover_text
+    assert "Activation ratio: 20%" not in hover_text

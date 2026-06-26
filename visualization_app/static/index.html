@@ -47,7 +47,13 @@
             <button id="showRawBtn" class="secondary" disabled>Show Raw</button>
           </div>
         </div>
-        <iframe id="viewerFrame" title="circuit_tracer dashboard"></iframe>
+        <div class="viewer-stack">
+          <iframe id="viewerFrame" title="circuit_tracer dashboard"></iframe>
+          <section id="clusterVizPanel" class="cluster-viz-panel" hidden>
+            <div class="section-title">Cluster Visualization</div>
+            <iframe id="clusterVizFrame" title="summary cluster visualization"></iframe>
+          </section>
+        </div>
       </section>
 
       <aside class="summary-panel">

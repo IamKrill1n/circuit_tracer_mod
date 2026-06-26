@@ -11,7 +11,7 @@ one prompt --- into a small, human-readable \emph{summary graph} of supernodes. 
 pipeline has three stages. \textbf{Pruning} discards the nodes and edges that do not
 carry the model's behaviour, including every reconstruction-error node, leaving a compact
 subgraph. \textbf{Clustering} groups the surviving feature nodes into supernodes that each
-read as a single mechanism. \textbf{Interpreting} forces the supernode graph to be a
+read as a single mechanism. \textbf{Visualizing} forces the supernode graph to be a
 directed acyclic graph and labels each supernode, so the reader can follow the causal
 story at a glance. Section~\ref{sec:problem} first formalizes the task as finding a summary
 graph of an attribution graph and states the desiderata and constraints each
@@ -25,10 +25,11 @@ Figure~\ref{fig:methodology-pipeline} previews the whole pipeline on the running
 \label{sec:problem}
 
 \subsection{Input}
-An attribution graph is a directed acyclic graph $G = (V, E, W)$ whose vertex
-set is partitioned into
-$V = V_{\text{emb}} \cup V_{\text{feature}} \cup V_{\text{error}} \cup V_{\text{logit}}$
-(embedding, feature, error, and logit nodes), with signed weights
+An attribution graph is a directed acyclic graph $G = (V, E, W)$ whose non-error
+node sets are
+$V_{\text{emb}} \cup V_{\text{feature}} \cup V_{\text{logit}} \subseteq V$
+(embedding, feature, and logit nodes), with the remaining error nodes left
+unnamed. It has signed weights
 $W \in \mathbb{R}^{N \times N}$ on $N := |V|$ nodes, where $W_{ij}$ is the linear
 influence of source node $j$ on target node $i$. Embedding and error nodes are
 sources (no incoming edges), logit nodes are sinks (no outgoing edges), and each
@@ -43,7 +44,7 @@ A \emph{summary graph} is a directed acyclic graph $H = (V_H,\, E_H,\, W_H)$.
 The node set $V_H = \{C_1, C_2, \dots, C_K\}$ consists of \emph{supernodes}, each
 of which is a nonempty subset of the non-error nodes,
 \begin{equation}
-V_H \subseteq \mathcal{P}\!\left(V \setminus V_{\text{error}}\right)
+V_H \subseteq \mathcal{P}\!\left(\{v \in V : v \text{ is not an error node}\}\right)
 \setminus \{\emptyset\}.
 \label{eq:summary-node-set}
 \end{equation}
@@ -55,8 +56,8 @@ C_i \cap C_j = \emptyset \quad (i \ne j),
 \forall v \in U_H \cap (V_{\text{emb}} \cup V_{\text{logit}}),\; \{v\} \in V_H.
 \label{eq:supernode-conditions}
 \end{equation}
-Thus $V_H$ forms a partition of the covered subset $U_H \subseteq
-V \setminus V_{\text{error}}$, and any represented embedding or logit node appears
+Thus $V_H$ forms a partition of the covered subset of non-error nodes
+$U_H \subseteq V$, and any represented embedding or logit node appears
 as a singleton supernode. Only feature nodes may therefore be grouped. The edge set
 $E_H$ and signed weights $W_H$ describe the net causal influence between supernodes.
 
@@ -93,7 +94,7 @@ they are enforced rather than minimized.
 \begin{description}[leftmargin=2.0em,style=nextline,topsep=2pt,itemsep=3pt]
 \item[(C1) Acyclicity.] $H$ must be a directed acyclic graph: its edge set $E_H$
 induces no directed cycle. Causal relationships cannot be read off a graph that
-contains cycles; this constraint is enforced in the interpreting stage.
+contains cycles; this constraint is enforced in the visualizing stage.
 \item[(C2) Complexity budget.] The number of supernodes is capped at a budget
 $K_{\max}$: $K = |V_H| \le K_{\max}$, so the reader can inspect $H$ in one sitting.
 \end{description}
@@ -112,7 +113,7 @@ the pruning loss $L_{\text{prune}}$ (D1), a faithfulness proxy; clustering minim
 the atomicity loss $L_{\text{atom}}$ (D2), an interpretability proxy, while bounding
 the causal-preservation loss $L_{\text{causal}}$ (D3), a faithfulness proxy. Each
 loss is defined with the stage that uses it. The three stages are solved in sequence
---- pruning fixes $V'$, clustering partitions it, and interpreting builds $H$ from
+--- pruning fixes $V'$, clustering partitions it, and visualizing builds $H$ from
 that partition --- so each proxy is optimized given the output of the stage before it.
 
 \subsection{Prune}\label{sec:stage1}
@@ -292,7 +293,7 @@ over-merging directly and discourages under-merging by making aligned merges low
 the objective. The \emph{causal-preservation loss} $L_{\text{causal}}$ (D3) keeps
 causal edge weight visible between supernodes instead of hidden inside them; it is
 the fraction of pruned edge weight absorbed \emph{inside} a supernode --- weight
-between two members of the same supernode, which the interpreting stage collapses
+between two members of the same supernode, which the visualizing stage collapses
 into the node and which therefore never appears in $H$:
 \begin{equation}
 L_{\text{causal}}(f)
@@ -319,7 +320,7 @@ and the layer-span mask.
 
 \paragraph{Exact ILP solver.}
 The exact solver chooses the partition $f$ by solving Eq.~\eqref{eq:Lstage2} on the
-signed cosine; the acyclicity constraint (C1) is deferred to the interpreting stage.
+signed cosine; the acyclicity constraint (C1) is deferred to the visualizing stage.
 The objective and the causal constraint are both linear in same-cluster indicators:
 $L_{\text{atom}}$ is linear by Eq.~\eqref{eq:Latom}, and the numerator of
 $L_{\text{causal}}$ is
@@ -372,8 +373,8 @@ where $L_{\text{atom,norm}}$ is the normalized signed-cosine disagreement fracti
 This score is used for approximate search and reporting; it is not the objective of
 the exact ILP in Eq.~\eqref{eq:Lstage2}.
 
-\subsection{Interpret}\label{sec:stage3}
-Interpreting turns the partitioned pruned graph into the acyclic summary graph $H$ and
+\subsection{Visualizing}\label{sec:stage3}
+Visualizing turns the partitioned pruned graph into the acyclic summary graph $H$ and
 labels its supernodes. It aggregates the pruned edges into a supernode adjacency,
 then removes the cycles that aggregation can introduce in two passes --- collapsing
 antiparallel pairs, then deleting back-edges against a depth ordering --- so that
@@ -438,7 +439,7 @@ minimizing a signed-cosine correlation-clustering loss, while D3 enters the exac
 as a hard bound on hidden edge mass and C2 enters as an optional supernode budget.
 Four role-similarity variants were given: the signed cosine consumed by the exact ILP
 and the three nonnegative multi-kernel means consumed by the scalable spectral and
-agglomerative clusterers. Interpreting meets D4 by aggregating the pruned edges into a
+agglomerative clusterers. Visualizing meets D4 by aggregating the pruned edges into a
 block-sum adjacency and removing cycles, yielding the DAG $H$. The next chapter
 analyzes the method's theoretical properties, and Chapter~5 tests directly whether
 these proxies yield faithful, interpretable summary graphs.

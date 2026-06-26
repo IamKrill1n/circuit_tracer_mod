@@ -27,10 +27,8 @@ _KIND_STYLE = {
 _CARD_W = 0.92
 _CARD_H = 0.58
 _BAR_H = 0.52
-# Injected donor supernodes use an orange "active intervention" fill (matches the
-# highlighted "California" card in the Anthropic steering figure).
-_ADDED_FILL = "#FBE3CB"
-_ADDED_LINE = "#C2570C"
+_MIN_CARD_X_GAP = 1.45
+_LAYER_Y_GAP = 1.35
 
 
 def _sn_kind(sn_name: str, node_by_name: dict[str, Supernode]) -> str:
@@ -124,14 +122,61 @@ def _layer_and_ctx_for_supernode(
     return (min(layers) if layers else 0, float(np.mean(ctx_idx) if ctx_idx else 0.0))
 
 
-def _sn_label(sn: str, members: list[str], attr: dict[str, dict[str, Any]] | None) -> str:
-    if attr is None:
-        return sn
-    for nid in members:
-        clerp = str(attr.get(nid, {}).get("clerp", "") or "").strip()
-        if clerp:
-            return clerp[:70] + ("..." if len(clerp) > 70 else "")
-    return sn
+def _member_clerp(
+    members: list[str],
+    attr: dict[str, dict[str, Any]] | None,
+    supernode: Supernode | None = None,
+) -> str:
+    if attr is not None:
+        for nid in members:
+            clerp = str(attr.get(nid, {}).get("clerp", "") or "").strip()
+            if clerp:
+                return clerp
+    if supernode is not None:
+        for node in supernode.features:
+            clerp = str(node.clerp or "").strip()
+            if clerp:
+                return clerp
+    return ""
+
+
+def _token_from_clerp(text: str) -> str:
+    if '"' in text:
+        parts = text.split('"')
+        if len(parts) >= 3:
+            return _clean_token(parts[1])
+    if ":" in text:
+        return _clean_token(text.split(":", 1)[1])
+    return _clean_token(text)
+
+
+def _node_label(
+    sn: str,
+    members: list[str],
+    attr: dict[str, dict[str, Any]] | None,
+    supernode: Supernode | None,
+) -> str:
+    kind = supernode.type if supernode is not None else _sn_kind(sn, {})
+    clerp = _member_clerp(members, attr, supernode)
+    if kind == "emb":
+        token = _token_from_clerp(clerp) if clerp else sn
+        return f"Emb: {token}"
+    if kind == "logit":
+        token = _token_from_clerp(clerp) if clerp else sn
+        return f"Logit: {token}"
+
+    label = supernode.name if supernode is not None else sn
+    role = supernode.role if supernode is not None else ""
+    return f"{role}: {label}" if role else str(label)
+
+
+def _logit_output_label(
+    members: list[str],
+    attr: dict[str, dict[str, Any]] | None,
+    supernode: Supernode | None,
+) -> str:
+    clerp = _member_clerp(members, attr, supernode)
+    return _token_from_clerp(clerp) if clerp else ""
 
 
 def _wrap_label(text: str, width: int = 14, max_lines: int = 4) -> str:
@@ -168,58 +213,6 @@ def _edge_style(weight: float, max_abs_w: float) -> tuple[float, str]:
     else:
         color = f"rgba(203,24,29,{alpha:.3f})"
     return width, color
-
-
-def _format_factor(factor: float) -> str:
-    return f"{factor:g}x"
-
-
-def _format_signed_factor(factor: float) -> str:
-    """Badge text with an explicit sign so added (+2x) and ablated (-2x) read distinctly."""
-    return f"+{factor:g}x" if factor >= 0 else f"{factor:g}x"
-
-
-def _format_ratio(ratio: float) -> str:
-    return f"{ratio * 100:.0f}%" if 0.0 <= ratio <= 2.0 else f"{ratio:.2g}x"
-
-
-def _steering_ratio_color(ratio: float) -> tuple[str, str]:
-    if ratio <= 0.25:
-        return "#F1F3F5", "#8A8F98"
-    if ratio < 0.80:
-        return "#FFF3CD", "#B7791F"
-    if ratio > 1.20:
-        return "#E6F4EA", "#2E7D32"
-    return "#FFFFFF", "#6B7280"
-
-
-def _top_output_label(top_outputs: list[Any] | None) -> str:
-    if not top_outputs:
-        return ""
-    first = top_outputs[0]
-    if isinstance(first, dict):
-        token = str(first.get("token", ""))
-        probability = float(first.get("probability", 0.0))
-    else:
-        token, probability = first
-        token = str(token)
-        probability = float(probability)
-    return f"{_clean_token(token)} {probability:.3f}"
-
-
-def _steering_hover_lines(
-    sn: str,
-    steering_factors: dict[str, float] | None,
-    activation_ratios: dict[str, float | None] | None,
-) -> list[str]:
-    lines: list[str] = []
-    if steering_factors is not None and sn in steering_factors:
-        lines.append(f"Intervention: {_format_factor(float(steering_factors[sn]))}")
-    ratio_value = activation_ratios.get(sn) if activation_ratios is not None else None
-    if ratio_value is not None:
-        ratio = float(ratio_value)
-        lines.append(f"Activation ratio: {_format_ratio(ratio)}")
-    return lines
 
 
 def _rounded_rect_path(x0: float, y0: float, x1: float, y1: float, rx: float, ry: float) -> str:
@@ -289,20 +282,19 @@ def _supernode_layout(
         rows.setdefault(layer, []).append((sn, float(logit_x)))
 
     ordered_layers = sorted(rows)
-    layer_y = {layer: idx + 1 for idx, layer in enumerate(ordered_layers)}
+    layer_y = {layer: (idx + 1) * _LAYER_Y_GAP for idx, layer in enumerate(ordered_layers)}
 
     pos: dict[str, tuple[float, float]] = {}
-    min_gap = 1.0
     for layer in ordered_layers:
         items = sorted(rows[layer], key=lambda p: (p[1], p[0]))
         last_x: float | None = None
         for sn, ctx in items:
             x = float(ctx)
-            if last_x is not None and x - last_x < min_gap:
-                x = last_x + min_gap
+            if last_x is not None and x - last_x < _MIN_CARD_X_GAP:
+                x = last_x + _MIN_CARD_X_GAP
             last_x = x
             pos[sn] = (x, float(layer_y[layer]))
-    top_y = len(ordered_layers) + 1
+    top_y = (len(ordered_layers) + 1) * _LAYER_Y_GAP
     return pos, top_y, layer_y
 
 
@@ -443,13 +435,10 @@ def supernode_graph_figure(
     ``edge_threshold`` (0-1) hides edges whose magnitude is below that fraction of
     the largest edge weight. ``top_k_logits`` keeps only the k highest-probability
     logit supernodes (and their edges); ``None`` shows all.
-
-    Steering overlays are optional and leave the summary graph unchanged:
-    ``steering_factors`` labels directly intervened supernodes, ``activation_ratios``
-    annotates cards whose activation changed relative to the clean run, ``top_outputs``
-    replaces the output-bar token with post-steering probabilities, and
-    ``stored_interventions`` records donor supernodes injected from other graphs.
     """
+    # Kept for callers that still pass the old display/steering overlay options.
+    _ = (use_supernode_names, steering_factors, activation_ratios, top_outputs, stored_interventions)
+
     # Duck-typing rather than isinstance so this survives Streamlit hot-reload,
     # which re-imports SummaryGraph and breaks isinstance on session-state objects.
     if hasattr(sng, "sn_names") and hasattr(sng, "adj_matrix"):
@@ -481,7 +470,7 @@ def supernode_graph_figure(
 
     layout_names = [sn for sn in sn_names if sn not in hidden]
     output_x = float(len(prompt_tokens)) if prompt_tokens else None
-    pos, top_y, layer_y = _supernode_layout(
+    pos, top_y, _layer_y = _supernode_layout(
         layout_names, mapping, attr, node_by_name, right_x=output_x
     )
     k = len(sn_names)
@@ -490,7 +479,7 @@ def supernode_graph_figure(
     geom: dict[str, tuple[float, float, float, float]] = {}  # sn -> (cx, cy, w, h)
     kinds: dict[str, str] = {}
     emb_ctx: set[int] = set()
-    logit_labels: list[str] = []
+    output_labels: list[str] = []
     for sn in sn_names:
         if sn not in pos:
             continue
@@ -504,7 +493,7 @@ def supernode_graph_figure(
         if kind == "emb":
             emb_ctx.add(int(round(cx)))
         elif kind == "logit":
-            logit_labels.append(_sn_label(sn, members, attr))
+            output_labels.append(_logit_output_label(members, attr, node_by_name.get(sn)))
 
     fig = go.Figure()
 
@@ -579,17 +568,8 @@ def supernode_graph_figure(
         cx, cy, w, h = geom[sn]
         members = mapping.get(sn, [])
         fill, line_color = _KIND_STYLE.get(kinds[sn], _KIND_STYLE["middle"])
-        ratio = activation_ratios.get(sn) if activation_ratios is not None else None
-        if ratio is not None and ratio <= 0.25:
-            fill = "#F3F4F6"
-            line_color = "#D1D5DB"
         _add_card(fig, cx, cy, w, h, fill, line_color, stacked=len(members) > 1)
-        # Labeled middle cards show the LLM-generated supernode name; emb/logit keep
-        # their clerp ("Emb: France", 'Output "Paris"') since those aren't relabeled.
-        if use_supernode_names and kinds[sn] == "middle":
-            label_text = sn
-        else:
-            label_text = _sn_label(sn, members, attr)
+        label_text = _node_label(sn, members, attr, node_by_name.get(sn))
         fig.add_annotation(
             x=cx,
             y=cy,
@@ -598,39 +578,9 @@ def supernode_graph_figure(
             font=dict(size=9, color="#1a1a1a"),
             align="center",
         )
-        if steering_factors is not None and sn in steering_factors:
-            fig.add_annotation(
-                x=cx + w / 2,
-                y=cy + h / 2,
-                text=_format_signed_factor(float(steering_factors[sn])),
-                showarrow=False,
-                xanchor="right",
-                yanchor="bottom",
-                font=dict(size=10, color="white"),
-                bgcolor="#C2570C",
-                bordercolor="#C2570C",
-                borderpad=3,
-            )
-        if ratio is not None and (abs(float(ratio) - 1.0) > 0.05 or float(ratio) <= 0.25):
-            badge_fill, badge_color = _steering_ratio_color(float(ratio))
-            fig.add_annotation(
-                x=cx - w / 2,
-                y=cy + h / 2,
-                text=_format_ratio(float(ratio)),
-                showarrow=False,
-                xanchor="left",
-                yanchor="bottom",
-                font=dict(size=10, color=badge_color),
-                bgcolor=badge_fill,
-                bordercolor=badge_color,
-                borderpad=3,
-            )
         hover_x.append(cx)
         hover_y.append(cy)
-        hover_lines = _steering_hover_lines(sn, steering_factors, activation_ratios)
         hover_title = _sn_title(sn, members, attr, node_by_name.get(sn))
-        if hover_lines:
-            hover_title = "<br>".join([hover_title, *hover_lines])
         hover_text.append(hover_title)
 
     # Invisible markers carry the rich hover (composite members).
@@ -649,7 +599,7 @@ def supernode_graph_figure(
     # --- Prompt bars + input/output arrows ---
     if prompt_tokens:
         _token_bar(fig, prompt_tokens, emb_ctx, y=0.0)
-        out_label = _top_output_label(top_outputs) or (logit_labels[0] if logit_labels else "")
+        out_label = output_labels[0] if output_labels else ""
         _output_bar(fig, prompt_tokens, prompt, out_label, y=float(top_y))
         # Token cell -> embedding card.
         for sn, kind in kinds.items():
@@ -694,85 +644,10 @@ def supernode_graph_figure(
                 text="",
             )
 
-    # --- Injected donor supernodes (the "added" intervention) as highlighted cards ---
-    # These are not part of the summary graph, so they have no layout slot or edges; we
-    # place each at the injection token column (target_pos) and the row of its nearest
-    # decode layer, then nudge right into a free slot so the card never overlaps an
-    # existing supernode (or another donor).
-    min_dx, min_dy = 1.05, 0.9  # card-center separation needed to avoid visual overlap
-    occupied_centers: list[tuple[float, float]] = [(g[0], g[1]) for g in geom.values()]
-    donor_coords: list[tuple[float, float]] = []
-    donor_hover_x: list[float] = []
-    donor_hover_y: list[float] = []
-    donor_hover_text: list[str] = []
-    for item in stored_interventions or []:
-        cx = float(item.get("target_pos", 0))
-        layer = int(item.get("layer", 0))
-        if layer_y:
-            nearest_layer = min(layer_y, key=lambda lyr: abs(lyr - layer))
-            cy = float(layer_y[nearest_layer])
-        else:
-            cy = float(top_y) - 1.0
-        while any(abs(cx - ox) < min_dx and abs(cy - oy) < min_dy for ox, oy in occupied_centers):
-            cx += 1.0
-        occupied_centers.append((cx, cy))
-
-        _add_card(fig, cx, cy, _CARD_W, _CARD_H, _ADDED_FILL, _ADDED_LINE, stacked=True)
-        label = str(item.get("label") or item.get("record_id") or "stored")
-        fig.add_annotation(
-            x=cx,
-            y=cy,
-            text=_wrap_label(label),
-            showarrow=False,
-            font=dict(size=9, color="#1a1a1a"),
-            align="center",
-        )
-        fig.add_annotation(
-            x=cx + _CARD_W / 2,
-            y=cy + _CARD_H / 2,
-            text=_format_signed_factor(float(item.get("factor", 0.0))),
-            showarrow=False,
-            xanchor="right",
-            yanchor="bottom",
-            font=dict(size=10, color="white"),
-            bgcolor="#C2570C",
-            bordercolor="#C2570C",
-            borderpad=3,
-        )
-        donor_coords.append((cx, cy))
-        donor_hover_x.append(cx)
-        donor_hover_y.append(cy)
-        donor_hover_text.append(
-            "<br>".join(
-                [
-                    f"<b>Injected supernode: {html.escape(label)}</b>",
-                    f"Source: {html.escape(str(item.get('source_slug') or ''))}",
-                    f"Intervention: {_format_signed_factor(float(item.get('factor', 0.0)))}",
-                    f"Target position: {int(item.get('target_pos', 0))}",
-                    f"Features: {int(item.get('n_features', 0))}",
-                ]
-            )
-        )
-
-    if donor_hover_x:
-        fig.add_trace(
-            go.Scatter(
-                x=donor_hover_x,
-                y=donor_hover_y,
-                mode="markers",
-                marker=dict(size=18, color="rgba(0,0,0,0)"),
-                hovertext=donor_hover_text,
-                hoverinfo="text",
-                showlegend=False,
-            )
-        )
-
     # --- Layout / ranges ---
     n_tokens = len(prompt_tokens) if prompt_tokens else 0
-    donor_xs = [c[0] for c in donor_coords]
-    donor_ys = [c[1] for c in donor_coords]
-    xs_for_range = [g[0] for g in geom.values()] + edge_xs + donor_xs + [0.0, float(n_tokens)]
-    ys_for_range = [g[1] for g in geom.values()] + edge_ys + donor_ys + [0.0, float(top_y)]
+    xs_for_range = [g[0] for g in geom.values()] + edge_xs + [0.0, float(n_tokens)]
+    ys_for_range = [g[1] for g in geom.values()] + edge_ys + [0.0, float(top_y)]
     x_min = min(xs_for_range) - 1.5
     x_max = max(xs_for_range) + 1.5
     y_min = min(ys_for_range) - 0.7
