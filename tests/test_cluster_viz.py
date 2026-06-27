@@ -5,7 +5,7 @@ import re
 import pytest
 import torch
 
-from summarization.cluster_viz import _supernode_layout, supernode_graph_figure
+from summarization.cluster_viz import _CARD_W, _supernode_layout, _wrap_label, supernode_graph_figure
 from summarization.summarize import Node, SummaryGraph, Supernode
 
 
@@ -82,7 +82,79 @@ def test_same_layer_supernodes_have_extra_horizontal_spacing() -> None:
         node_by_name=sng.node_by_name(),
     )
 
-    assert pos["SN_B"][0] - pos["SN_A"][0] == pytest.approx(1.45)
+    assert pos["SN_B"][0] - pos["SN_A"][0] > _CARD_W
+
+
+def test_topological_layout_orders_chain_bottom_to_top() -> None:
+    sng = _summary_graph()
+
+    pos, _top_y, _rank_y = _supernode_layout(
+        sng.sn_names,
+        sng.to_mapping(),
+        attr=None,
+        node_by_name=sng.node_by_name(),
+        visible_edges=[
+            ("SN_EMB_0", "SN_0", 1.0),
+            ("SN_0", "SN_LOGIT_0", 1.0),
+        ],
+    )
+
+    assert pos["SN_EMB_0"][1] < pos["SN_0"][1] < pos["SN_LOGIT_0"][1]
+
+
+def test_skip_edge_preserves_longest_path_topological_ordering() -> None:
+    sng = _summary_graph()
+
+    pos, _top_y, _rank_y = _supernode_layout(
+        sng.sn_names,
+        sng.to_mapping(),
+        attr=None,
+        node_by_name=sng.node_by_name(),
+        visible_edges=[
+            ("SN_EMB_0", "SN_0", 1.0),
+            ("SN_0", "SN_LOGIT_0", 1.0),
+            ("SN_EMB_0", "SN_LOGIT_0", 0.5),
+        ],
+    )
+
+    assert pos["SN_EMB_0"][1] < pos["SN_0"][1] < pos["SN_LOGIT_0"][1]
+
+
+def test_cycle_does_not_force_visible_edges_downward() -> None:
+    first = Supernode("SN_A", [_node("1_0", 0, "1", 1, "sae_feature")], "features", 1, 1)
+    second = Supernode("SN_B", [_node("2_0", 1, "2", 2, "sae_feature")], "features", 2, 2)
+    logit = Supernode(
+        "SN_LOGIT_0",
+        [_node("27_0", 2, "27", 0, "logit", is_target_logit=True)],
+        "logit",
+        27,
+        27,
+    )
+    sng = SummaryGraph([first, second, logit], torch.zeros((3, 3), dtype=torch.float32))
+    visible_edges = [
+        ("SN_A", "SN_B", 1.0),
+        ("SN_B", "SN_A", 1.0),
+        ("SN_B", "SN_LOGIT_0", 1.0),
+    ]
+
+    pos, _top_y, _rank_y = _supernode_layout(
+        sng.sn_names,
+        sng.to_mapping(),
+        attr=None,
+        node_by_name=sng.node_by_name(),
+        visible_edges=visible_edges,
+    )
+
+    for source, target, _weight in visible_edges:
+        assert pos[target][1] >= pos[source][1]
+    assert pos["SN_LOGIT_0"][1] > pos["SN_B"][1]
+
+
+def test_long_role_label_wraps_for_wider_card() -> None:
+    wrapped = _wrap_label("Abstract: National associations")
+
+    assert wrapped == "Abstract: National<br>associations"
+    assert _CARD_W > 2.0
 
 
 def test_edge_paths_are_complete_within_axis_range() -> None:
@@ -109,6 +181,32 @@ def test_edge_paths_are_complete_within_axis_range() -> None:
         assert max(xs) <= x_max
         assert min(ys) >= y_min
         assert max(ys) <= y_max
+
+
+def test_prompt_tokens_render_as_top_strip_without_old_bar_labels() -> None:
+    prompt_tokens = ["<bos>", "The", "saying", "goes", ":", "ab", "uja"]
+    fig = supernode_graph_figure(
+        _summary_graph(),
+        prompt_tokens=prompt_tokens,
+        prompt="<bos>The saying goes: abuja",
+    )
+
+    annotations = list(fig.layout.annotations)
+    annotation_text = "\n".join(str(annotation.text) for annotation in annotations)
+
+    assert "Input Tokens" not in annotation_text
+    assert "Outputs / Logits" not in annotation_text
+
+    token_annotations = [
+        annotation for annotation in annotations if str(annotation.text) in {"<bos>", "saying", "ab"}
+    ]
+    assert len(token_annotations) == 3
+    token_y = {float(annotation.y) for annotation in token_annotations}
+    assert len(token_y) == 1
+    assert next(iter(token_y)) == max(
+        float(annotation.y) for annotation in annotations if annotation.text
+    )
+    assert next(iter(token_y)) > 0.0
 
 
 def test_hover_text_includes_supernode_label_role_and_description() -> None:

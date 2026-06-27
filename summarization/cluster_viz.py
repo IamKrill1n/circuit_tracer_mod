@@ -2,8 +2,8 @@
 
 Renders the supernode graph in the style of the Anthropic attribution-graph
 figure: supernodes as rounded "card" boxes (with a stacked-paper shadow for
-composites), curved green/red connectors, and full-width Input-Tokens (bottom)
-and Outputs/Logits (top) bars showing the prompt.
+composites), curved green/red connectors, and a tokenized prompt strip above
+the graph.
 """
 
 from __future__ import annotations
@@ -24,11 +24,11 @@ _KIND_STYLE = {
     "logit": ("#EDE9DD", "#FF9800"),
     "middle": ("#EDE9DD", "#5B6B7B"),
 }
-_CARD_W = 0.92
-_CARD_H = 0.58
+_CARD_W = 2.35
+_CARD_H = 0.92
 _BAR_H = 0.52
-_MIN_CARD_X_GAP = 1.45
-_LAYER_Y_GAP = 1.35
+_MIN_CARD_X_GAP = 2.75
+_RANK_Y_GAP = 1.55
 
 
 def _sn_kind(sn_name: str, node_by_name: dict[str, Supernode]) -> str:
@@ -170,16 +170,7 @@ def _node_label(
     return f"{role}: {label}" if role else str(label)
 
 
-def _logit_output_label(
-    members: list[str],
-    attr: dict[str, dict[str, Any]] | None,
-    supernode: Supernode | None,
-) -> str:
-    clerp = _member_clerp(members, attr, supernode)
-    return _token_from_clerp(clerp) if clerp else ""
-
-
-def _wrap_label(text: str, width: int = 14, max_lines: int = 4) -> str:
+def _wrap_label(text: str, width: int = 18, max_lines: int = 5) -> str:
     """Hard-wrap a label with <br> (Plotly annotations don't auto-wrap)."""
     words = str(text).split()
     lines: list[str] = []
@@ -255,47 +246,216 @@ def _add_card(
     )
 
 
+def _rendered_edges(
+    sn_names: list[str],
+    sn_adj: np.ndarray,
+    visible_names: list[str],
+    edge_threshold: float,
+) -> tuple[list[tuple[str, str, float]], float]:
+    """Return visible source -> target edges after logit and weight filtering."""
+    max_abs_w = float(np.max(np.abs(sn_adj))) if sn_adj.size else 1.0
+    visible = set(visible_names)
+    rendered: list[tuple[str, str, float]] = []
+    k = len(sn_names)
+    for target_idx in range(k):
+        for source_idx in range(k):
+            if target_idx == source_idx:
+                continue
+            weight = float(sn_adj[target_idx, source_idx])
+            if weight == 0.0 or abs(weight) < edge_threshold * max_abs_w:
+                continue
+            source, target = sn_names[source_idx], sn_names[target_idx]
+            if source in visible and target in visible:
+                rendered.append((source, target, weight))
+    return rendered, max_abs_w
+
+
+def _fallback_rank_rows(
+    sn_names: list[str],
+    mapping: dict[str, list[str]],
+    attr: dict[str, dict[str, Any]] | None,
+    node_by_name: dict[str, Supernode],
+) -> dict[int, list[str]]:
+    ranked: list[tuple[tuple[int, int, float, str], str]] = []
+    for sn in sn_names:
+        layer, ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
+        kind = _sn_kind(sn, node_by_name)
+        kind_rank = {"emb": 0, "middle": 1, "logit": 2}.get(kind, 1)
+        ranked.append(((kind_rank, layer, ctx_mean, sn), sn))
+
+    rows: dict[int, list[str]] = {}
+    last_key: tuple[int, int] | None = None
+    rank = -1
+    for (kind_rank, layer, _ctx_mean, _sn), sn in sorted(ranked):
+        key = (kind_rank, layer)
+        if key != last_key:
+            rank += 1
+            last_key = key
+        rows.setdefault(rank, []).append(sn)
+    return rows
+
+
+def _strongly_connected_components(
+    sn_names: list[str],
+    outgoing: dict[str, list[str]],
+) -> list[list[str]]:
+    index = 0
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    indices: dict[str, int] = {}
+    lowlink: dict[str, int] = {}
+    components: list[list[str]] = []
+
+    def visit(sn: str) -> None:
+        nonlocal index
+        indices[sn] = index
+        lowlink[sn] = index
+        index += 1
+        stack.append(sn)
+        on_stack.add(sn)
+
+        for target in outgoing[sn]:
+            if target not in indices:
+                visit(target)
+                lowlink[sn] = min(lowlink[sn], lowlink[target])
+            elif target in on_stack:
+                lowlink[sn] = min(lowlink[sn], indices[target])
+
+        if lowlink[sn] != indices[sn]:
+            return
+
+        component: list[str] = []
+        while stack:
+            member = stack.pop()
+            on_stack.remove(member)
+            component.append(member)
+            if member == sn:
+                break
+        components.append(component)
+
+    for sn in sn_names:
+        if sn not in indices:
+            visit(sn)
+    return components
+
+
+def _topological_rank_rows(
+    sn_names: list[str],
+    edges: list[tuple[str, str, float]],
+    mapping: dict[str, list[str]],
+    attr: dict[str, dict[str, Any]] | None,
+    node_by_name: dict[str, Supernode],
+) -> dict[int, list[str]]:
+    """Group visible supernodes by source-to-sink longest-path depth."""
+    if not edges:
+        return _fallback_rank_rows(sn_names, mapping, attr, node_by_name)
+
+    name_set = set(sn_names)
+    outgoing = {sn: [] for sn in sn_names}
+    for source, target, _weight in edges:
+        if source not in name_set or target not in name_set:
+            continue
+        outgoing[source].append(target)
+
+    components = _strongly_connected_components(sn_names, outgoing)
+    component_idx: dict[str, int] = {}
+    for idx, component in enumerate(components):
+        for sn in component:
+            component_idx[sn] = idx
+
+    component_outgoing = {idx: set() for idx in range(len(components))}
+    component_indegree = {idx: 0 for idx in range(len(components))}
+    for source, targets in outgoing.items():
+        source_component = component_idx[source]
+        for target in targets:
+            target_component = component_idx[target]
+            if source_component == target_component:
+                continue
+            if target_component not in component_outgoing[source_component]:
+                component_outgoing[source_component].add(target_component)
+                component_indegree[target_component] += 1
+
+    def component_key(idx: int) -> tuple[float, int, str]:
+        layers_and_ctx = [
+            _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
+            for sn in components[idx]
+        ]
+        ctx_mean = float(np.mean([ctx for _layer, ctx in layers_and_ctx]))
+        min_layer = min(layer for layer, _ctx in layers_and_ctx)
+        return (ctx_mean, min_layer, min(components[idx]))
+
+    component_depth = {idx: 0 for idx in range(len(components))}
+    ready = sorted(
+        [idx for idx, degree in component_indegree.items() if degree == 0],
+        key=component_key,
+    )
+    while ready:
+        source = ready.pop(0)
+        for target in sorted(component_outgoing[source], key=component_key):
+            component_depth[target] = max(component_depth[target], component_depth[source] + 1)
+            component_indegree[target] -= 1
+            if component_indegree[target] == 0:
+                ready.append(target)
+                ready.sort(key=lambda idx: (component_depth[idx], *component_key(idx)))
+
+    depth = {sn: component_depth[component_idx[sn]] for sn in sn_names}
+    non_logit_depths = [
+        rank for sn, rank in depth.items() if _sn_kind(sn, node_by_name) != "logit"
+    ]
+    if non_logit_depths:
+        min_logit_depth = max(non_logit_depths) + 1
+        for sn in sn_names:
+            if _sn_kind(sn, node_by_name) == "logit" and not outgoing[sn]:
+                depth[sn] = max(depth[sn], min_logit_depth)
+
+    rows: dict[int, list[str]] = {}
+    for sn, rank in depth.items():
+        rows.setdefault(rank, []).append(sn)
+    return rows
+
+
 def _supernode_layout(
     sn_names: list[str],
     mapping: dict[str, list[str]],
     attr: dict[str, dict[str, Any]] | None,
     node_by_name: dict[str, Supernode],
     right_x: float | None = None,
-) -> tuple[dict[str, tuple[float, float]], int, dict[int, int]]:
-    """x = token position (ctx mean); y = layer rank (row 0 reserved for token bar)."""
-    rows: dict[int, list[tuple[str, float]]] = {}
+    visible_edges: list[tuple[str, str, float]] | None = None,
+) -> tuple[dict[str, tuple[float, float]], float, dict[int, float]]:
+    """x = token position (ctx mean); y = topological rank below the prompt strip."""
+    rows = _topological_rank_rows(sn_names, visible_edges or [], mapping, attr, node_by_name)
     non_logit_ctx: list[float] = []
     for sn in sn_names:
-        layer, ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
         if _sn_kind(sn, node_by_name) == "logit":
             continue
+        _layer, ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
         non_logit_ctx.append(ctx_mean)
-        rows.setdefault(layer, []).append((sn, ctx_mean))
 
     logit_x = right_x
     if logit_x is None:
         logit_x = (max(non_logit_ctx) + 1.5) if non_logit_ctx else 0.0
-    for sn in sn_names:
-        if _sn_kind(sn, node_by_name) != "logit":
-            continue
-        layer, _ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
-        rows.setdefault(layer, []).append((sn, float(logit_x)))
 
-    ordered_layers = sorted(rows)
-    layer_y = {layer: (idx + 1) * _LAYER_Y_GAP for idx, layer in enumerate(ordered_layers)}
+    ordered_ranks = sorted(rows)
+    rank_y = {rank: (rank + 1) * _RANK_Y_GAP for rank in ordered_ranks}
 
     pos: dict[str, tuple[float, float]] = {}
-    for layer in ordered_layers:
-        items = sorted(rows[layer], key=lambda p: (p[1], p[0]))
+    for rank in ordered_ranks:
+        items: list[tuple[str, float, int]] = []
+        for sn in rows[rank]:
+            layer, ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
+            x0 = float(logit_x) if _sn_kind(sn, node_by_name) == "logit" else ctx_mean
+            items.append((sn, x0, layer))
+        items = sorted(items, key=lambda p: (p[1], p[2], p[0]))
         last_x: float | None = None
-        for sn, ctx in items:
+        for sn, ctx, _layer in items:
             x = float(ctx)
             if last_x is not None and x - last_x < _MIN_CARD_X_GAP:
                 x = last_x + _MIN_CARD_X_GAP
             last_x = x
-            pos[sn] = (x, float(layer_y[layer]))
-    top_y = (len(ordered_layers) + 1) * _LAYER_Y_GAP
-    return pos, top_y, layer_y
+            pos[sn] = (x, float(rank_y[rank]))
+    max_rank = max(ordered_ranks, default=-1)
+    top_y = (max_rank + 2) * _RANK_Y_GAP
+    return pos, top_y, rank_y
 
 
 def _rect_boundary_point(
@@ -317,7 +477,7 @@ def _rect_boundary_point(
     return cx + dx * scale, cy + dy * scale
 
 
-def _token_bar(
+def _prompt_token_strip(
     fig: go.Figure,
     prompt_tokens: list[str],
     emb_ctx: set[int],
@@ -341,72 +501,6 @@ def _token_bar(
             showarrow=False,
             font=dict(size=9, color="#333"),
         )
-    fig.add_annotation(
-        xref="paper",
-        x=0.0,
-        xanchor="right",
-        xshift=-8,
-        yref="y",
-        y=y,
-        text="<b>Input Tokens →</b>",
-        showarrow=False,
-        font=dict(size=11, color="#C2570C"),
-    )
-
-
-def _output_bar(
-    fig: go.Figure,
-    prompt_tokens: list[str],
-    prompt: str | None,
-    out_label: str,
-    y: float,
-) -> None:
-    n = len(prompt_tokens)
-    cellh = _BAR_H
-    text = (prompt or "".join(_clean_token(t) for t in prompt_tokens)).strip()
-    if len(text) > 70:
-        text = text[:67] + "…"
-    # Wide prompt bar.
-    fig.add_shape(
-        type="path",
-        path=_rounded_rect_path(-0.5, y - cellh / 2, n - 1 + 0.5, y + cellh / 2, 0.06, 0.08),
-        fillcolor="#F4F2EB",
-        line=dict(color="#B9B29A", width=1),
-    )
-    fig.add_annotation(
-        x=-0.4,
-        xanchor="left",
-        y=y,
-        text=text,
-        showarrow=False,
-        font=dict(size=10, color="#333"),
-    )
-    # Highlighted predicted-token cell at the right.
-    if out_label:
-        fig.add_shape(
-            type="path",
-            path=_rounded_rect_path(n - 0.5, y - cellh / 2, n + 0.5, y + cellh / 2, 0.06, 0.08),
-            fillcolor="#D8D2BF",
-            line=dict(color="#B9B29A", width=1),
-        )
-        fig.add_annotation(
-            x=n,
-            y=y,
-            text=_clean_token(out_label),
-            showarrow=False,
-            font=dict(size=10, color="#333"),
-        )
-    fig.add_annotation(
-        xref="paper",
-        x=0.0,
-        xanchor="right",
-        xshift=-8,
-        yref="y",
-        y=y,
-        text="<b>Outputs / Logits →</b>",
-        showarrow=False,
-        font=dict(size=11, color="#C2570C"),
-    )
 
 
 def supernode_graph_figure(
@@ -428,7 +522,7 @@ def supernode_graph_figure(
     """
     Build an interactive Plotly figure in the Anthropic attribution-graph style:
     supernodes as rounded cards, directed edges as curved green/red arrows, and
-    (when ``prompt_tokens`` is given) Input-Tokens / Outputs-Logits prompt bars.
+    (when ``prompt_tokens`` is given) a tokenized prompt strip above the graph.
 
     `sng` may be a `SummaryGraph` instance or the legacy dict.
 
@@ -470,16 +564,20 @@ def supernode_graph_figure(
 
     layout_names = [sn for sn in sn_names if sn not in hidden]
     output_x = float(len(prompt_tokens)) if prompt_tokens else None
+    rendered_edges, max_abs_w = _rendered_edges(sn_names, sn_adj, layout_names, edge_threshold)
     pos, top_y, _layer_y = _supernode_layout(
-        layout_names, mapping, attr, node_by_name, right_x=output_x
+        layout_names,
+        mapping,
+        attr,
+        node_by_name,
+        right_x=output_x,
+        visible_edges=rendered_edges,
     )
-    k = len(sn_names)
 
     # Per-card geometry, colors, kinds.
     geom: dict[str, tuple[float, float, float, float]] = {}  # sn -> (cx, cy, w, h)
     kinds: dict[str, str] = {}
     emb_ctx: set[int] = set()
-    output_labels: list[str] = []
     for sn in sn_names:
         if sn not in pos:
             continue
@@ -492,71 +590,61 @@ def supernode_graph_figure(
         kinds[sn] = kind
         if kind == "emb":
             emb_ctx.add(int(round(cx)))
-        elif kind == "logit":
-            output_labels.append(_logit_output_label(members, attr, node_by_name.get(sn)))
 
     fig = go.Figure()
 
     # --- Curved edges (drawn first so cards sit on top) ---
-    max_abs_w = float(np.max(np.abs(sn_adj))) if sn_adj.size else 1.0
     edge_xs: list[float] = []
     edge_ys: list[float] = []
-    for i in range(k):
-        for j in range(k):
-            if i == j:
-                continue
-            w = float(sn_adj[i, j])  # source j -> target i
-            if w == 0.0 or abs(w) < edge_threshold * max_abs_w:
-                continue
-            u, v = sn_names[j], sn_names[i]
-            if u not in geom or v not in geom:
-                continue
-            uc, vc = geom[u], geom[v]
-            xs, ys = _rect_boundary_point(uc[0], uc[1], uc[2], uc[3], vc[0], vc[1])
-            xt, yt = _rect_boundary_point(vc[0], vc[1], vc[2], vc[3], uc[0], uc[1])
-            dx, dy = xt - xs, yt - ys
-            length = math.hypot(dx, dy) or 1.0
-            px, py = -dy / length, dx / length  # perpendicular
-            bow = 0.18 * length
-            cxm, cym = (xs + xt) / 2 + px * bow, (ys + yt) / 2 + py * bow
-            width, color = _edge_style(w, max_abs_w)
-            edge_xs.extend((xs, cxm, xt))
-            edge_ys.extend((ys, cym, yt))
-            fig.add_shape(
-                type="path",
-                path=f"M {xs},{ys} Q {cxm},{cym} {xt},{yt}",
-                line=dict(width=width, color=color),
+    for u, v, w in rendered_edges:
+        if u not in geom or v not in geom:
+            continue
+        uc, vc = geom[u], geom[v]
+        xs, ys = _rect_boundary_point(uc[0], uc[1], uc[2], uc[3], vc[0], vc[1])
+        xt, yt = _rect_boundary_point(vc[0], vc[1], vc[2], vc[3], uc[0], uc[1])
+        dx, dy = xt - xs, yt - ys
+        length = math.hypot(dx, dy) or 1.0
+        px, py = -dy / length, dx / length  # perpendicular
+        bow = 0.18 * length
+        cxm, cym = (xs + xt) / 2 + px * bow, (ys + yt) / 2 + py * bow
+        width, color = _edge_style(w, max_abs_w)
+        edge_xs.extend((xs, cxm, xt))
+        edge_ys.extend((ys, cym, yt))
+        fig.add_shape(
+            type="path",
+            path=f"M {xs},{ys} Q {cxm},{cym} {xt},{yt}",
+            line=dict(width=width, color=color),
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[xs, cxm, xt],
+                y=[ys, cym, yt],
+                mode="markers",
+                marker=dict(size=16, color="rgba(0,0,0,0)"),
+                hovertemplate=f"{u} -> {v}<br>weight={w:.4f}<extra></extra>",
+                showlegend=False,
             )
-            fig.add_trace(
-                go.Scatter(
-                    x=[xs, cxm, xt],
-                    y=[ys, cym, yt],
-                    mode="markers",
-                    marker=dict(size=16, color="rgba(0,0,0,0)"),
-                    hovertemplate=f"{u} -> {v}<br>weight={w:.4f}<extra></extra>",
-                    showlegend=False,
-                )
-            )
-            # Arrowhead at the target end, tangent to the incoming curve.
-            tangent_len = math.hypot(xt - cxm, yt - cym) or 1.0
-            ax = xt - (xt - cxm) / tangent_len * min(0.28, 0.18 * length)
-            ay = yt - (yt - cym) / tangent_len * min(0.28, 0.18 * length)
-            fig.add_annotation(
-                x=xt,
-                y=yt,
-                ax=ax,
-                ay=ay,
-                xref="x",
-                yref="y",
-                axref="x",
-                ayref="y",
-                showarrow=True,
-                arrowhead=2,
-                arrowsize=1.0,
-                arrowwidth=max(1.0, width * 0.6),
-                arrowcolor=color,
-                text="",
-            )
+        )
+        # Arrowhead at the target end, tangent to the incoming curve.
+        tangent_len = math.hypot(xt - cxm, yt - cym) or 1.0
+        ax = xt - (xt - cxm) / tangent_len * min(0.28, 0.18 * length)
+        ay = yt - (yt - cym) / tangent_len * min(0.28, 0.18 * length)
+        fig.add_annotation(
+            x=xt,
+            y=yt,
+            ax=ax,
+            ay=ay,
+            xref="x",
+            yref="y",
+            axref="x",
+            ayref="y",
+            showarrow=True,
+            arrowhead=2,
+            arrowsize=1.0,
+            arrowwidth=max(1.0, width * 0.6),
+            arrowcolor=color,
+            text="",
+        )
 
     # --- Cards + labels ---
     hover_x: list[float] = []
@@ -596,58 +684,18 @@ def supernode_graph_figure(
         )
     )
 
-    # --- Prompt bars + input/output arrows ---
+    # --- Tokenized prompt strip ---
     if prompt_tokens:
-        _token_bar(fig, prompt_tokens, emb_ctx, y=0.0)
-        out_label = output_labels[0] if output_labels else ""
-        _output_bar(fig, prompt_tokens, prompt, out_label, y=float(top_y))
-        # Token cell -> embedding card.
-        for sn, kind in kinds.items():
-            if kind != "emb":
-                continue
-            cx, cy, _w, h = geom[sn]
-            fig.add_annotation(
-                x=cx,
-                y=cy - h / 2,
-                ax=cx,
-                ay=_BAR_H / 2,
-                xref="x",
-                yref="y",
-                axref="x",
-                ayref="y",
-                showarrow=True,
-                arrowhead=2,
-                arrowsize=0.9,
-                arrowwidth=1.0,
-                arrowcolor="#9a9a9a",
-                text="",
-            )
-        # Logit card -> output bar.
-        for sn, kind in kinds.items():
-            if kind != "logit":
-                continue
-            cx, cy, _w, h = geom[sn]
-            fig.add_annotation(
-                x=cx,
-                y=float(top_y) - _BAR_H / 2,
-                ax=cx,
-                ay=cy + h / 2,
-                xref="x",
-                yref="y",
-                axref="x",
-                ayref="y",
-                showarrow=True,
-                arrowhead=2,
-                arrowsize=0.9,
-                arrowwidth=1.0,
-                arrowcolor="#9a9a9a",
-                text="",
-            )
+        _prompt_token_strip(fig, prompt_tokens, emb_ctx, y=float(top_y))
 
     # --- Layout / ranges ---
-    n_tokens = len(prompt_tokens) if prompt_tokens else 0
-    xs_for_range = [g[0] for g in geom.values()] + edge_xs + [0.0, float(n_tokens)]
-    ys_for_range = [g[1] for g in geom.values()] + edge_ys + [0.0, float(top_y)]
+    token_xs = [float(i) for i in range(len(prompt_tokens or []))]
+    xs_for_range = [g[0] for g in geom.values()] + edge_xs + token_xs + [0.0]
+    ys_for_range = [g[1] for g in geom.values()] + edge_ys
+    if prompt_tokens:
+        ys_for_range.append(float(top_y))
+    if not ys_for_range:
+        ys_for_range.append(0.0)
     x_min = min(xs_for_range) - 1.5
     x_max = max(xs_for_range) + 1.5
     y_min = min(ys_for_range) - 0.7
@@ -657,7 +705,7 @@ def supernode_graph_figure(
         showlegend=False,
         xaxis=dict(visible=False, range=[x_min, x_max]),
         yaxis=dict(visible=False, range=[y_min, y_max]),
-        margin=dict(l=150, r=30, t=50, b=20),
+        margin=dict(l=30, r=30, t=50, b=20),
         plot_bgcolor="white",
         paper_bgcolor="white",
         height=760,
