@@ -327,6 +327,37 @@ def test_graph_user_message_uses_layer_not_feature_ids(monkeypatch) -> None:
     assert '1: " capital"' not in user_message
 
 
+def test_graph_user_message_passes_features_dir_to_feature_fetch(monkeypatch) -> None:
+    feature = Node(
+        node_id="20_777_1",
+        node_idx=0,
+        feature=777,
+        layer="20",
+        ctx_idx=1,
+        feature_type="cross layer transcoder",
+    )
+    sng = SummaryGraph(
+        supernodes=[Supernode("SN_0", [feature], "features", 20, 20)],
+        pruned_adj=torch.zeros((1, 1)),
+        metadata={"scan": "scan", "prompt": "The capital is"},
+    )
+    calls = {}
+
+    def fake_fetch_feature_info(scan, node_id, **kwargs):
+        calls["scan"] = scan
+        calls["node_id"] = node_id
+        calls.update(kwargs)
+        return None
+
+    monkeypatch.setattr("summarization.label.fetch_feature_info", fake_fetch_feature_info)
+
+    _build_graph_user_message(sng, " Paris", LabelScheme(), features_dir="downloads/features")
+
+    assert calls["scan"] == "scan"
+    assert calls["node_id"] == "20_777_1"
+    assert calls["features_dir"] == "downloads/features"
+
+
 def test_single_supernode_message_has_no_supernode_context() -> None:
     user_message = _build_single_supernode_user_message(
         {"prompt": "The capital is"},

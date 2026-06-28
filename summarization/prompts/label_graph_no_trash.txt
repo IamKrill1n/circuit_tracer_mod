@@ -1,0 +1,790 @@
+<role>
+You are a meticulous AI researcher. Your job is to explain a summary graph of a language model's computation.
+</role>
+
+<instructions>
+You will be given:
+
+- The prompt processed by the model.
+- The token predicted by the model.
+- A set of supernodes.
+- A set of features belonging to each supernode.
+
+Each feature is described only by:
+- Layer
+- Position
+- <MAX_ACTIVATING_TOKENS>
+- <TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+- <TOP_POSITIVE_LOGITS>
+- <TOP_ACTIVATING_TEXTS>
+
+Your goal is NOT to explain what the features do in general.
+
+Your goal is to explain what information each supernode contributes to THIS computation.
+
+Always interpret the supernodes in the context of:
+
+1. The prompt.
+2. The predicted token.
+3. The layer and position evidence for each feature.
+</instructions>
+
+<role_definitions>
+Input:
+- Activates on a token directly present in the prompt.
+- Recognizes entities, words, phrases, syntax, or local patterns.
+- Extracts evidence from the prompt.
+- Usually appears early in the computation.
+
+Abstract:
+- Represents concepts, relations, themes, reasoning steps, or intermediate computations.
+- Combines or transforms information from other supernodes.
+- Usually appears in the middle of the computation.
+
+Output:
+- Supports prediction of the next token.
+- Promotes candidate outputs.
+- Often reflected in top positive logits.
+- Usually appears near the end of the computation.
+</role_definitions>
+
+<procedures>
+1. Read the prompt and predicted token carefully.
+
+2. Examine ALL supernodes before labeling any individual supernode.
+
+3. Identify major information sources in the prompt.
+
+4. Identify major concepts required to predict the next token.
+
+5. For each supernode:
+   - Inspect its features.
+   - Inspect each feature's layer and position.
+   - Determine what information it contributes to this computation.
+
+6. Prefer explanations that make the set of supernodes coherent as a whole.
+
+7. If evidence is weak or noisy, choose the closest role and state the uncertainty in the description
+</procedures>
+
+<labeling_guide>
+Labels should represent information carried by the supernode.
+
+Prefer:
+- Specific concepts over broad themes.
+- Labels that distinguish related supernodes.
+- Information relevant to the prompt.
+- Computation-relevant explanations.
+- Roles in this computation rather than global neuron behavior.
+</labeling_guide>
+
+<output_format>
+Return JSON only.
+
+{
+  "supernodes": [
+    {
+      "id": "<supernode id>",
+      "role": "Input | Abstract | Output",
+      "label": "<1-5 word description>",
+      "description": "<one short sentence describing the contribution to the prediction>"
+    }
+  ]
+}
+</output_format>
+
+<examples>
+<input>
+These features were active while a language model processed this prompt:
+"<bos>Fact: The capital of the state containing Dallas is"
+The model's predicted next token is " Austin".
+
+Supernode [0]:
+[Feature]
+Layer: 0 of 26 (early reasoning stage)
+Position: token index 9
+<MAX_ACTIVATING_TOKENS>
+ Nebraska
+ Tanzania
+ Tanzania
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ Aircraft
+ this
+,
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ County
+ State
+ City
+’
+'
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ only instructor. There was no ground school connected to the flying course he obtained at<< Nebraska>> Aircraft Corporation. Instead, he worked around the factory to learn the ins and
+ economic growth -- far beyond their health benefits.⏎I am reminded of this in<< Tanzania>> this week, where my organization, the GAVI Alliance, is hosting a
+ Without payment systems, for example, the private and public sector cannot operate. In<< Tanzania>>, I was told that a teacher must sometimes leave her work for two weeks
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 1 of 26 (early reasoning stage)
+Position: token index 9
+<MAX_ACTIVATING_TOKENS>
+ Dallas
+ Dallas
+ Dallas
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ has
+ and
+ Cowboys
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ purpoſe
+ pleaſure
+ County
+pä
+Personensuche
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ street networks of any major U.S. area. With a similar population,<< Dallas>> has 10,000 lane miles. Detroit has a smaller
+ to change laws and save lives.⏎After helping to push through policies in the<< Dallas>> and Fort Worth school districts, as well as a few others around the state
+ 56 years ago today.⏎Coach Jimmy Johnson quit his position with the<< Dallas>> Cowboys 19 years ago today.⏎Information provided by http://www
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 7 of 26 (early reasoning stage)
+Position: token index 9
+<MAX_ACTIVATING_TOKENS>
+ CHRIST
+acana
+ Brown
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+I
+,
+,
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ Independiente
+ paroisse
+ Palacios
+ ISD
+SharedDtor
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+<bos>CORPUS<< CHRIST>>I — Blackened lungs and the threat of cancer never scared eight-year smoker Skylar Massey into quitting the habit.⏎It was her
+29). Benjamin Franklin Yoakum, railroad executive, was born near Tehu<<acana>>,<< Texas>>, in<< Limestone>> County on August 20, 18
+ (1841), and in the Mexican War at the battles of Fort<< Brown>>, Resaca de la Palma, Monterey and Buena Vista, receiving three promotions
+</TOP_ACTIVATING_TEXTS>
+
+Supernode [1]:
+[Feature]
+Layer: 16 of 26 (middle reasoning stage)
+Position: token index 9
+<MAX_ACTIVATING_TOKENS>
+1
+ §
+chapter
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+8
+3
+ D
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ Texan
+Texas
+ Texas
+ TX
+ Lubbock
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ Creek and its tributaries were occupied by the Quarter Circle Heart Ranch, but in <<1>>880 Alfred Rowe added them to his RO Ranch. The area is
+ are shown with and without students excluded for state accountability purposes (see<< Texas Education Code §39.053(>>g<<->>1)). Some data are masked
+<<204>>;⏎- an effective acknowledgment of paternity by the man under<< Subchapter D,>> unless the acknowledgment has been rescinded or successfully challenged;⏎-
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 22 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+,
+ of
+ (
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ Albuquerque
+ Corpus
+7
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ encomp
+ Réponses
+ []:
+ lenker
+MessageTagHelper
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ miles from Chicago through St. Louis<<,>> Joplin MO<<,>> Oklahoma City<<,>> Amarillo TX<<,>> Albuquerque NM<<,>> and Flagstaff AZ, before ending in Los Angeles.⏎Route
+ traveled Monday to Alice, a town of 20,000 west<< of>> Corpus Christi, to stem the outbreak, said CDC spokesman Bob Howard. There
+umanos.⏎Carlos E. Castañeda, Our Catholic Heritage in Texas<< (>>7 vols<<.,>> Austin: Von Boeckmann-Jones, 19
+</TOP_ACTIVATING_TEXTS>
+
+Supernode [2]:
+[Feature]
+Layer: 17 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+ modern
+ in
+ and
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ Om
+ most
+ Northampton
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+#+#
+ '\\;'
+ Wikimedijinoj
+cestry
+曖昧さ回避
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ have finally entered the quieter stretches of the upper Fox, passing<< through>> the site<< of modern>> Omro before<< reaching>> the large Indian town<< near>> present-<<day>> Berlin, Wis
+March, dropping 50 inches of snow in Middletown, 30 inches<< in>> most parts<< of>> Connecticut, and its sustained 45 mph winds produced towering
+ next two decades, Springfield is projected to decrease in population by nearly 5 percent<< and>> Northampton by almost 11 percent<<.>> Boston<<,>> on the other hand,
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 18 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+ to
+ in
+ from
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ the
+ Washington
+ the
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ Delhi
+ London
+ Beijing
+ Canberra
+ Washington
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+). At the political level, some call for more independence of the States in relation<< to>> the federal government, while others wish for more control<< by>> the Union. The
+ on and near the river are working to make sure their neighbors, and policy<< makers in Washington>>, get a complete picture of how critical this river is. Traveling through
+, which are best addressed in partnerships between local communities and state governments. The view<< from the>> federal bureaucracy is simply too distant to be effective.⏎— The Cull
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 18 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+,
+,
+ from
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ Dallas
+ Phoenix
+ St
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ Los
+ Salt
+ estekak
+ Austin
+ San
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ surface street networks of any major U.S. area. With a similar population<<,>> Dallas has 10,000 lane miles<<.>> Detroit has a
+ from property crime scenes in five jurisdictions<<:>> Los Angeles<<,⏎>>Topeka<<,>> Denver<<,>> Phoenix<< and>> Orange County (Calif.).⏎Inspired by the United Kingdom's
+ their questions.⏎At the last Drug Facts Chat Day, “Boxy”<< from>> St. Henry District High School in Kentucky asked:⏎What are designer drugs
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 20 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+ the
+ the
+s
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ state
+ capital
+ capital
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ cap
+ state
+protoimpl
+cap
+ capital
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ in neighboring Illinois for three weeks while progressives and union supporters marched<< on>> Madison,<< the state>> capital. Walker’s opponents first organized a recall of some state senators
+IS feature ID||0758233|⏎Jefferson City is<< the>> capital of the U.S. state of Missouri. It is also county
+) -- Inside the Gahaya Links workshop on the outskirts of Kigali, Rwanda'<<s>> capital, a group of women sit side by side against a brightly-painted
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 21 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+ with
+,
+,
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ Brooklyn
+ Los
+ Phoenix
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ SAC
+Tus
+ Little
+ TUL
+ Tus
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+27 dog attacks last year, Portland ranked 13th (ty<<ing with>> Brooklyn, N.Y.) out of the U.S.P.
+ Houston<< and>> Dallas-Ft. Worth. Belize is also served from Atlanta<<,>> Charlotte<<,>> Los Angeles<<,>> New York<< and>> Washington, DC, as well as Toronto,
+. If you're a gardener in Tampa, Gainesville<<,>> New Orleans<<,>> Houston<<,>> Phoenix<<,>> Los Angeles<<,>> San Francisco, Seattle, or any other mild-
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 21 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+ of
+ of
+ in
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ Te
+ Central
+ Cameron
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+Round
+ Temple
+ wa
+ Round
+tanleria
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+<bos>TEHUACANA HILLS. The Tehuacana Hills are northwest<< of>> Tehuacana<< in northeastern>> Limestone County (at 31°45' N
+ prevent complications. We are also dedicated to being a diabetes educational resource in the heart<< of>> Central Texas.⏎What is Diabetes?⏎Diabetes (diabetes mellitus) is
+y Creek Bridge on County Road 440 was relocated to Ledbetter Park<< in>> Cameron,where it was restored and placed over part of a lake.⏎
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 21 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+ in
+ and
+ in
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ a
+ with
+ Helsinki
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+LookAnd
+ Amman
+CopyWith
+httphttps
+ كومونز
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ and safety since the department intensified enforcement measures at the mines," Shabangu said<< in>> a speech to the National Council of Provinces dated 3 May, which was
+ are in the news again as the Obama Administration—much to the anger of London<< and>> with no support<< from>> the Falkland Islanders themselves—urges Britain to enter into
+ feed,⏎but the Finnish case could be an exception.⏎- The government<< in>> Helsinki announced that it would increase⏎its annual testing budget by about 6
+</TOP_ACTIVATING_TEXTS>
+
+Supernode [3]:
+[Feature]
+Layer: 18 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+,
+ the
+ and
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ the
+ Dallas
+ Frisco
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+FT
+tvguidetime
+ ***!
+ Forth
+ FT
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+<< in>> the form of<< the Margaret>> Hunt Hill Bridge<<, the>> Santa Fe Trestle Trail<<, the Dallas>> Wave<<, the P>>avaho Pump Station<<,>> and<< the>> mowed
+ big date for Tekin and Kobi, the two koala bears on loan<< to the Dallas>> Zoo from San Diego.⏎Once a year, they join all the
+ of DISD students were white. Now, 43 years later, Allen<< and>> Frisco ISDs look like DISD in <<1>>970. Both
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 18 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+ in
+ from
+ except
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ the
+ his
+ the
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ nargin
+ kasarigan
+PerformLayout
+ виправивши
+AndEndTag
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ 1863, Henry Flaugher was murdered by Confederate vigilantes<< in>> the Hill Country<< of>> Texas because he remained loyal to the Union. His body
+ 59, Issue 4⏎Gazing up at the Texas night sky<< from>> his ranch, Senator Lyndon B. Johnson did not know what to make of
+ California through southern Arizona and southern New Mexico. They continue into all of Texas,<< except the extreme>> north and east, and northward to southwestern Oklahoma. In Mexico,
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 22 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+ at
+ at
+ at
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ UT
+ UT
+ UT
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+]--;
+ImageContext
+Personendaten
+出版年
+addPreferredGap
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ oxygen to prevent brain damage caused by oxygen deprivation may actually inflict additional harm, researchers<< at>> UT Southwestern Medical Center have found.⏎Brain damage caused by oxygen deprivation,
+ help them grow into the adult monsters responsible for packing on the extra pounds, researchers<< at>> UT Southwestern Medical Center have found in mice.⏎Researchers have long known that
+ role in keeping stem cells from differentiating and in helping blood cancer cells grow, researchers<< at UT>> Southwestern Medical Center report today in the journal Nature.⏎“Cancer cells
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 22 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+ ways
+ of
+ where
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ we
+ the
+ women
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ становника
+ Abreu
+ contextLoads
+ Arenas
+ MUNDO
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+00s, and contemporary journals<< of>> the East Texas landscape to explore the many<< ways>> we connect<< with>> our environment.⏎In the late seventeenth century, Franciscan priests
+ Railroad⏎Originally named Springtown in the 1850s. One<< of>> the⏎many small towns located on the Katy Railroad, the town was renamed
+ women's voting rights in Texas⏎Pamphlet<< explaining how>>, when and<< where>> women can vote<< in>> the July, 1918 Democratic primary election
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 22 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+ told
+*,
+ in
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ local
+ Houston
+ the
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+LogFactory
+ aiz
+ zealand
+CloseOperation
++#+#
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+." So, if you are someone like local resident Jack Fendrick, who<< told>> local news KPRC, "I think most people, kids especially, will
+ and ranking in the top 10 as recently as 2010<<*,>> Houston could stand to shed quite a few pounds on the road to becoming a
+⏎The district as a whole also met the requirements, one of only<< eight>> schools<< in the>> 51-<<school>> Region 4 area to do so.<< Only>>
+</TOP_ACTIVATING_TEXTS>
+
+Supernode [4]:
+[Feature]
+Layer: 19 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+,
+ of
+ Capital
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ Graz
+ the
+ City
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ровок
+ metav
+ äta
+loroethene
+trägen
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+bern’s father’s career caused the family to move to two provincial capitals<<,>> Graz<< and>> Klagenfurt, and then back<< to>> Vienna. Webern received his
+ 1901.⏎Thorshov and Cerny, Inc.<< of>> the Twin Cities designed the courthouse's replacement, which was completed by Dean
+ It is only about 8 to 10 hours drive<< from>> the South Sulawesi<< Capital City,>> Makasar. A contributor writer from the Jakarta Post wrote a quite
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 19 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+town
+ and
+ major
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ metro
+ Cleveland
+ U
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ Las
+ San
+ Dallas
+ Phoenix
+ Los
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ population of approximately 6.1 million,<< the>> Houston-Sugar<< Land>>-Bay<<town>> metro area is located along the Gulf of Mexico coastline. To the east,
+s population grew half as fast<<, while>> Pittsburgh’s declined 15 percent<< and>> Cleveland’s declined 10 percent.⏎Columbus also differs<< from>> other
+00 lane miles, has one of the most underdeveloped surface street networks<< of any major>> U.<<S.>> area. With a similar population<<,>> Dallas has 1
+</TOP_ACTIVATING_TEXTS>
+
+Supernode [5]:
+[Feature]
+Layer: 20 of 26 (late reasoning stage)
+Position: token index 9
+<MAX_ACTIVATING_TOKENS>
+8
+ in
+:
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+3
+ Texas
+ Kerr
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+SharedDtor
+λευτα
+ referenties
+ Wim
+Билгалдахарш
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ independence in 1821; lost Texas<< to>> the US in<< >>1<<83>>6 and California and New Mexico in 1848. It
+borough and Pec<<an>> Point share the distinction of being the first Anglo-American settlements<< in>> Texas. Located just<< above the>> mouth<< of Lower>> Pine Creek<< upon the>> site of
+. It was formed in<< 1>>862<< from>> the following county/ies<<:>> Kerr<</>>Blanco. Kendall began keeping birth records in 1903
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 20 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+8
+ in
+:
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+3
+ Texas
+ Kerr
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+SharedDtor
+λευτα
+ referenties
+ Wim
+Билгалдахарш
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ independence in 1821; lost Texas<< to>> the US in<< >>1<<83>>6 and California and New Mexico in 1848. It
+borough and Pec<<an>> Point share the distinction of being the first Anglo-American settlements<< in>> Texas. Located just<< above the>> mouth<< of Lower>> Pine Creek<< upon the>> site of
+. It was formed in<< 1>>862<< from>> the following county/ies<<:>> Kerr<</>>Blanco. Kendall began keeping birth records in 1903
+</TOP_ACTIVATING_TEXTS>
+
+[Feature]
+Layer: 23 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+ and
+ in
+ like
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ Rochester
+ the
+ Charlotte
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ doInBackground
+ModelAdmin
+webElementXpaths
+__':↵
+__':
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+1.2 percent<<), and>> Raleigh-Durham<<->>Chapel Hill, North Carolina,<< and>> Rochester, Minnesota (both 1.3 percent). Six of the eight
+ had had their way after the Revolutionary War, the national capital would now<< be>> located<< in>> the vicinity<< of>> the Jefferson County community of Shepherdstown. That may seem hard
+ chemicals.⏎Restored urban floodplains⏎have many benefits⏎In urban areas<< like>> Charlotte-Mecklenburg, floodplains are well-suited for greenway
+</TOP_ACTIVATING_TEXTS>
+
+Supernode [6]:
+[Feature]
+Layer: 22 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+ in
+(
+.,
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ both
+Columbia
+ Sacramento
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ hjem
+ובת
+ tjen
+invokeLater
+WebMethod
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ 1.⏎Ohioans have other options for amending the constitution. Legislators<< in>> both the Ohio House of Representatives and the Ohio Senate can suggest changes and the
+ Coincide⏎Marked by governorís proclamation and unique tree dedication at Statehouse<<⏎(>>Columbia, SC) --The South Carolina Forestry Commission in cooperation with the Richland
+ Health Services, Office of Vital Records<<,>> 304 “S” St<<.,>> Sacramento, CA 95819 (Mailing address: P.
+</TOP_ACTIVATING_TEXTS>
+
+Supernode [7]:
+[Feature]
+Layer: 24 of 26 (late reasoning stage)
+Position: token index 10
+<MAX_ACTIVATING_TOKENS>
+ OF
+ PAY
+ATE
+</MAX_ACTIVATING_TOKENS>
+<TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+ EARLY
+ ATTENTION
+ MASS
+</TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
+<TOP_POSITIVE_LOGITS>
+ SIDE
+ WORK
+ SOUND
+ CHILD
+ STAGE
+</TOP_POSITIVE_LOGITS>
+<TOP_ACTIVATING_TEXTS>
+ on the ground to grow more food.⏎Table 40. TIM<<ELINE OF EARLY FARMING>>⏎Before farming, people lived by hunting wild animals and gathering
+ I just might give you the answer to a quiz⏎question or two, so<< PAY ATTENTION>>!⏎Before we begin today, I'd just like to welcome
+ the distances were short, by truck or on foot.⏎OFFIC<<IALS>> COORDIN<<ATE MASS TRANSPORT BY TRAIN>>⏎At the Wannsee Conference on January 20
+</TOP_ACTIVATING_TEXTS>
+</input>
+
+<output>
+{
+  "supernodes": [
+    {
+      "id": 0,
+      "role": "Input",
+      "label": "Dallas",
+      "description": "Activated on Dallas and US state like Nebraska"
+    },
+    {
+      "id": 1,
+      "role": "Abstract",
+      "label": "Texas and Austin",
+      "description": "Activated on Texas context and slightly promote output Texas or Austin"
+    },
+    {
+      "id": 2,
+      "role": "Output",
+      "label": "Say a capital or major US city",
+      "description": "Promote saying a capital or a major US city like Washington"
+    },
+    {
+      "id": 3,
+      "role": "Abstract",
+      "label": "Texas",
+      "description": "Carries evidence that the state containing Dallas is Texas."
+    },
+    {
+      "id": 4,
+      "role": "Abstract",
+      "label": "capital",
+      "description": "Activated on capital contexts and promote saying a city"
+    },
+    {
+      "id": 5,
+      "role": "Abstract",
+      "label": "Texas",
+      "description": "Activated on Texas related context"
+    },
+    {
+      "id": 6,
+      "role": "Output",
+      "label": "say a US city",
+      "description": "Promotes saying a US city like Columbia or Sacramento"
+    },
+    {
+      "id": 7,
+      "role": "Output",
+      "label": "say an uppercase word",
+      "description": "Promotes saying the next word in uppercase"
+    }
+  ]
+}
+</output>
+
+</examples>
