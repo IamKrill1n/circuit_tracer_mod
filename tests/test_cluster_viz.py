@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import re
 
+import numpy as np
 import pytest
 import torch
 
-from summarization.cluster_viz import _CARD_W, _supernode_layout, _wrap_label, supernode_graph_figure
+from summarization.cluster_viz import (
+    _CARD_W,
+    _select_edge_indices,
+    _supernode_layout,
+    _wrap_label,
+    supernode_graph_figure,
+)
 from summarization.summarize import Node, SummaryGraph, Supernode
 
 
@@ -120,7 +127,7 @@ def test_skip_edge_preserves_longest_path_topological_ordering() -> None:
     assert pos["SN_EMB_0"][1] < pos["SN_0"][1] < pos["SN_LOGIT_0"][1]
 
 
-def test_cycle_does_not_force_visible_edges_downward() -> None:
+def test_cycle_visible_edges_layout_without_validation() -> None:
     first = Supernode("SN_A", [_node("1_0", 0, "1", 1, "sae_feature")], "features", 1, 1)
     second = Supernode("SN_B", [_node("2_0", 1, "2", 2, "sae_feature")], "features", 2, 2)
     logit = Supernode(
@@ -145,9 +152,107 @@ def test_cycle_does_not_force_visible_edges_downward() -> None:
         visible_edges=visible_edges,
     )
 
-    for source, target, _weight in visible_edges:
-        assert pos[target][1] >= pos[source][1]
-    assert pos["SN_LOGIT_0"][1] > pos["SN_B"][1]
+    assert set(pos) == set(sng.sn_names)
+
+
+def test_legacy_cyclic_sn_adj_renders_without_validation() -> None:
+    legacy = {
+        "sn_names": ["SN_A", "SN_B"],
+        "sn_adj": np.array([[0.0, 1.0], [1.0, 0.0]]),
+    }
+
+    fig = supernode_graph_figure(legacy, final_supernodes={"SN_A": ["a"], "SN_B": ["b"]})
+
+    assert fig.data
+
+
+def test_figure_uses_summary_adj_when_raw_pruned_adj_is_empty() -> None:
+    first = Supernode("SN_A", [_node("1_0", 0, "1", 1, "sae_feature")], "features", 1, 1)
+    second = Supernode("SN_B", [_node("2_0", 1, "2", 2, "sae_feature")], "features", 2, 2)
+    sng = SummaryGraph(
+        [first, second],
+        torch.zeros((2, 2), dtype=torch.float32),
+        adj=np.array([[0.0, 0.0], [2.0, 0.0]]),
+    )
+
+    fig = supernode_graph_figure(sng)
+    edge_hovertemplates = [
+        str(trace.hovertemplate)
+        for trace in fig.data
+        if getattr(trace, "hovertemplate", None) and "->" in str(trace.hovertemplate)
+    ]
+
+    assert any("SN_A -> SN_B" in hovertemplate for hovertemplate in edge_hovertemplates)
+
+
+def test_select_edge_indices_keeps_top_k_per_source_and_positive_only() -> None:
+    edges = [
+        ("A", "B", 1.0),
+        ("A", "C", -4.0),
+        ("A", "D", 2.0),
+        ("B", "C", 3.0),
+        ("B", "D", -5.0),
+    ]
+
+    assert _select_edge_indices(edges, top_k=2) == {1, 2, 3, 4}
+    assert _select_edge_indices(edges, top_k=1, positive_only=True) == {2, 3}
+
+
+def test_supernode_figure_adds_edge_filter_controls() -> None:
+    emb = Supernode(
+        "SN_EMB_0",
+        [_node("E_0", 0, "E", 0, "embedding", clerp="Emb: The")],
+        "emb",
+        -1,
+        -1,
+    )
+    first = Supernode("SN_A", [_node("1_0", 1, "1", 1, "sae_feature")], "features", 1, 1)
+    second = Supernode("SN_B", [_node("2_0", 2, "2", 2, "sae_feature")], "features", 2, 2)
+    third = Supernode("SN_C", [_node("3_0", 3, "3", 3, "sae_feature")], "features", 3, 3)
+    adj = np.zeros((4, 4), dtype=np.float64)
+    adj[1, 0] = 1.0
+    adj[2, 0] = 2.0
+    adj[3, 0] = -3.0
+    sng = SummaryGraph([emb, first, second, third], torch.zeros((4, 4)), adj=adj)
+
+    fig = supernode_graph_figure(sng)
+
+    assert fig.layout.sliders
+    assert fig.layout.updatemenus
+    assert fig.layout.sliders[0].currentvalue.prefix == "Top k edges per node: "
+    button_labels = [button.label for button in fig.layout.updatemenus[0].buttons]
+    assert button_labels == ["All edges", "Positive only"]
+
+
+def test_duplicate_supernode_labels_do_not_create_render_self_loops() -> None:
+    first = Supernode(
+        "Unrelated text",
+        [_node("1_0", 0, "1", 1, "sae_feature")],
+        "features",
+        1,
+        1,
+    )
+    second = Supernode(
+        "Unrelated text",
+        [_node("2_0", 1, "2", 2, "sae_feature")],
+        "features",
+        2,
+        2,
+    )
+    sng = SummaryGraph(
+        [first, second],
+        torch.zeros((2, 2), dtype=torch.float32),
+        adj=np.array([[0.0, 0.0], [1.0, 0.0]]),
+    )
+
+    fig = supernode_graph_figure(sng)
+
+    edge_hovertemplates = [
+        str(trace.hovertemplate)
+        for trace in fig.data
+        if getattr(trace, "hovertemplate", None) and "->" in str(trace.hovertemplate)
+    ]
+    assert any("Unrelated text -> Unrelated text (2)" in text for text in edge_hovertemplates)
 
 
 def test_long_role_label_wraps_for_wider_card() -> None:

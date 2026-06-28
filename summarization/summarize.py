@@ -220,10 +220,15 @@ class SummaryGraph:
     metadata: dict = field(
         default_factory=dict
     )  # provenance: prompt, target token, scan, prompt_tokens
+    adj: Any | None = None
     adj_matrix: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self.adj_matrix = get_adj(self.supernodes, self.pruned_adj)
+        raw_adj = get_adj(self.supernodes, self.pruned_adj) if self.adj is None else self.adj
+        if hasattr(raw_adj, "detach"):
+            raw_adj = raw_adj.detach().cpu().numpy()
+        self.adj = np.asarray(raw_adj, dtype=np.float64)
+        self.adj_matrix = self.adj
 
     @property
     def sn_names(self) -> list[str]:
@@ -236,11 +241,12 @@ class SummaryGraph:
         return {n.name: n for n in self.supernodes}
 
     def save(self, path: str) -> None:
-        """Pickle supernodes + pruned_adj + metadata to ``path`` (.pt). adj_matrix is re-derived on load."""
+        """Pickle supernodes + raw pruned_adj + canonical summary adj to ``path`` (.pt)."""
         torch.save(
             {
                 "supernodes": self.supernodes,
                 "pruned_adj": self.pruned_adj,
+                "adj": self.adj,
                 "metadata": self.metadata,
             },
             path,
@@ -248,7 +254,7 @@ class SummaryGraph:
 
     @classmethod
     def load(cls, path: str) -> "SummaryGraph":
-        """Inverse of ``save``; ``__post_init__`` rebuilds the post-π adjacency.
+        """Inverse of ``save``; legacy files without ``adj`` recompute it from ``pruned_adj``.
 
         Pre-metadata ``.pt`` files load with empty metadata (see ADR 0001).
         """
@@ -257,6 +263,7 @@ class SummaryGraph:
             supernodes=d["supernodes"],
             pruned_adj=d["pruned_adj"],
             metadata=d.get("metadata", {}),
+            adj=d.get("adj"),
         )
 
 

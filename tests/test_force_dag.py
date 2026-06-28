@@ -82,6 +82,60 @@ def _is_dag(sn_adj: np.ndarray) -> bool:
     return nx.is_directed_acyclic_graph(g)
 
 
+# --- SummaryGraph persistence -------------------------------------------------
+
+
+def test_summary_graph_save_persists_canonical_adj(tmp_path) -> None:
+    a = Supernode("A", [_feat_node("a", 0, layer=1)], "features", 1, 1)
+    b = Supernode("B", [_feat_node("b", 1, layer=2)], "features", 2, 2)
+    block = np.array([[0.0, 1.0], [3.0, 0.0]])
+    sng = _sng_from_blocks([a, b], block)
+
+    path = tmp_path / "summary_graph.pt"
+    sng.save(str(path))
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+
+    assert "adj" in payload
+    assert "pruned_adj" in payload
+    np.testing.assert_array_equal(payload["adj"], sng.adj)
+    assert payload["pruned_adj"].shape == (2, 2)
+
+
+def test_summary_graph_load_uses_stored_adj(tmp_path) -> None:
+    a = Supernode("A", [_feat_node("a", 0, layer=1)], "features", 1, 1)
+    b = Supernode("B", [_feat_node("b", 1, layer=2)], "features", 2, 2)
+    stored_adj = np.array([[0.0, 0.0], [4.0, 0.0]])
+    path = tmp_path / "summary_graph.pt"
+    torch.save(
+        {
+            "supernodes": [a, b],
+            "pruned_adj": torch.zeros((2, 2), dtype=torch.float32),
+            "adj": stored_adj,
+            "metadata": {"prompt": "stored"},
+        },
+        path,
+    )
+
+    loaded = SummaryGraph.load(str(path))
+
+    np.testing.assert_array_equal(loaded.adj, stored_adj)
+    np.testing.assert_array_equal(loaded.adj_matrix, stored_adj)
+    assert loaded.metadata == {"prompt": "stored"}
+
+
+def test_summary_graph_load_legacy_payload_recomputes_adj(tmp_path) -> None:
+    a = Supernode("A", [_feat_node("a", 0, layer=1)], "features", 1, 1)
+    b = Supernode("B", [_feat_node("b", 1, layer=2)], "features", 2, 2)
+    pruned_adj = torch.tensor([[0.0, 1.0], [3.0, 0.0]], dtype=torch.float32)
+    path = tmp_path / "legacy_summary_graph.pt"
+    torch.save({"supernodes": [a, b], "pruned_adj": pruned_adj, "metadata": {}}, path)
+
+    loaded = SummaryGraph.load(str(path))
+
+    assert loaded.adj[1, 0] == pytest.approx(2.0)
+    assert loaded.adj[0, 1] == 0.0
+
+
 # --- Stage A: antiparallel collapse ------------------------------------------
 
 
@@ -247,7 +301,7 @@ def test_compute_C_causal_zero_for_all_singletons() -> None:
 
 
 def test_edge_mass_metrics_report_dag_loss_for_cycle() -> None:
-    from eval.eval_cluster import compute_edge_mass_metrics
+    from eval.eval_cluster import compute_dag_loss, compute_edge_mass_metrics, compute_external_loss
 
     a = Supernode("A", [_feat_node("a", 0, layer=5)], "features", 5, 5)
     b = Supernode("B", [_feat_node("b", 1, layer=5)], "features", 5, 5)
@@ -263,11 +317,13 @@ def test_edge_mass_metrics_report_dag_loss_for_cycle() -> None:
     assert metrics["raw_superedge_mass"] == pytest.approx(3.0)
     assert metrics["final_superedge_mass"] == pytest.approx(2.0)
     assert metrics["dag_removed_mass_fraction"] == pytest.approx(1.0 / 3.0)
+    assert compute_dag_loss(sng) == pytest.approx(1.0 / 3.0)
+    assert compute_external_loss(sng) == pytest.approx(1.0 / 3.0)
     assert metrics["final_retained_mass_fraction"] == pytest.approx(2.0 / 3.0)
 
 
 def test_edge_mass_metrics_zero_dag_loss_for_acyclic_input() -> None:
-    from eval.eval_cluster import compute_edge_mass_metrics
+    from eval.eval_cluster import compute_dag_loss, compute_edge_mass_metrics, compute_external_loss
 
     a = Supernode("A", [_feat_node("a", 0, layer=1)], "features", 1, 1)
     b = Supernode("B", [_feat_node("b", 1, layer=2)], "features", 2, 2)
@@ -283,6 +339,21 @@ def test_edge_mass_metrics_zero_dag_loss_for_acyclic_input() -> None:
     assert metrics["raw_superedge_mass"] == pytest.approx(4.5)
     assert metrics["final_superedge_mass"] == pytest.approx(4.5)
     assert metrics["dag_removed_mass_fraction"] == pytest.approx(0.0)
+    assert compute_dag_loss(sng) == pytest.approx(0.0)
+    assert compute_external_loss(sng) == pytest.approx(0.0)
+
+
+def test_external_loss_counts_antiparallel_mass_separately_from_dag_loss() -> None:
+    from eval.eval_cluster import compute_dag_loss, compute_external_loss
+
+    a = Supernode("A", [_feat_node("a", 0, layer=1)], "features", 1, 1)
+    b = Supernode("B", [_feat_node("b", 1, layer=2)], "features", 2, 2)
+    block = np.array([[0.0, 1.0], [3.0, 0.0]])
+    sng = _sng_from_blocks([a, b], block)
+
+    assert sng.adj_matrix[1, 0] == pytest.approx(2.0)
+    assert compute_dag_loss(sng) == pytest.approx(0.25)
+    assert compute_external_loss(sng) == pytest.approx(0.5)
 
 
 # --- Plain block-sum sanity --------------------------------------------------

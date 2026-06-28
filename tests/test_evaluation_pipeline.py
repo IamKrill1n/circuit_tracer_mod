@@ -100,6 +100,7 @@ def test_evaluation_pipeline_writes_summary_and_runs_all_solvers(tmp_path) -> No
             "signed_down_gap",
             "C_causal",
             "dag_loss",
+            "external_loss",
             "L_atom",
             "final_retained_mass_fraction",
         ):

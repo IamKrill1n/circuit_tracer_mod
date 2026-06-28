@@ -29,6 +29,7 @@ _CARD_H = 0.92
 _BAR_H = 0.52
 _MIN_CARD_X_GAP = 2.75
 _RANK_Y_GAP = 1.55
+_EDGE_TOP_K_VALUES = (1, 2, 3, 5, 10)
 
 
 def _sn_kind(sn_name: str, node_by_name: dict[str, Supernode]) -> str:
@@ -270,6 +271,53 @@ def _rendered_edges(
     return rendered, max_abs_w
 
 
+def _select_edge_indices(
+    edges: list[tuple[str, str, float]],
+    *,
+    top_k: int | None = None,
+    positive_only: bool = False,
+) -> set[int]:
+    """Select visible edges, keeping each source node's top-|weight| outgoing edges."""
+    by_source: dict[str, list[tuple[int, str, str, float]]] = {}
+    for idx, (source, target, weight) in enumerate(edges):
+        if positive_only and weight <= 0.0:
+            continue
+        by_source.setdefault(source, []).append((idx, source, target, weight))
+
+    selected: set[int] = set()
+    for source_edges in by_source.values():
+        ranked = sorted(
+            source_edges,
+            key=lambda item: (-abs(item[3]), item[1], item[2], item[0]),
+        )
+        keep = ranked if top_k is None else ranked[: max(int(top_k), 0)]
+        selected.update(idx for idx, _source, _target, _weight in keep)
+    return selected
+
+
+def _edge_filter_k_values(edges: list[tuple[str, str, float]]) -> list[int | None]:
+    max_outdegree = 0
+    counts: dict[str, int] = {}
+    for source, _target, _weight in edges:
+        counts[source] = counts.get(source, 0) + 1
+        max_outdegree = max(max_outdegree, counts[source])
+    values: list[int | None] = [None]
+    values.extend(k for k in _EDGE_TOP_K_VALUES if k < max_outdegree)
+    if max_outdegree > 0:
+        values.append(max_outdegree)
+    return values
+
+
+def _unique_names(names: list[str]) -> list[str]:
+    counts: dict[str, int] = {}
+    out: list[str] = []
+    for name in names:
+        count = counts.get(name, 0) + 1
+        counts[name] = count
+        out.append(name if count == 1 else f"{name} ({count})")
+    return out
+
+
 def _fallback_rank_rows(
     sn_names: list[str],
     mapping: dict[str, list[str]],
@@ -295,50 +343,6 @@ def _fallback_rank_rows(
     return rows
 
 
-def _strongly_connected_components(
-    sn_names: list[str],
-    outgoing: dict[str, list[str]],
-) -> list[list[str]]:
-    index = 0
-    stack: list[str] = []
-    on_stack: set[str] = set()
-    indices: dict[str, int] = {}
-    lowlink: dict[str, int] = {}
-    components: list[list[str]] = []
-
-    def visit(sn: str) -> None:
-        nonlocal index
-        indices[sn] = index
-        lowlink[sn] = index
-        index += 1
-        stack.append(sn)
-        on_stack.add(sn)
-
-        for target in outgoing[sn]:
-            if target not in indices:
-                visit(target)
-                lowlink[sn] = min(lowlink[sn], lowlink[target])
-            elif target in on_stack:
-                lowlink[sn] = min(lowlink[sn], indices[target])
-
-        if lowlink[sn] != indices[sn]:
-            return
-
-        component: list[str] = []
-        while stack:
-            member = stack.pop()
-            on_stack.remove(member)
-            component.append(member)
-            if member == sn:
-                break
-        components.append(component)
-
-    for sn in sn_names:
-        if sn not in indices:
-            visit(sn)
-    return components
-
-
 def _topological_rank_rows(
     sn_names: list[str],
     edges: list[tuple[str, str, float]],
@@ -351,54 +355,32 @@ def _topological_rank_rows(
         return _fallback_rank_rows(sn_names, mapping, attr, node_by_name)
 
     name_set = set(sn_names)
-    outgoing = {sn: [] for sn in sn_names}
+    outgoing = {sn: set() for sn in sn_names}
+    indegree = {sn: 0 for sn in sn_names}
     for source, target, _weight in edges:
         if source not in name_set or target not in name_set:
             continue
-        outgoing[source].append(target)
+        if target not in outgoing[source]:
+            outgoing[source].add(target)
+            indegree[target] += 1
 
-    components = _strongly_connected_components(sn_names, outgoing)
-    component_idx: dict[str, int] = {}
-    for idx, component in enumerate(components):
-        for sn in component:
-            component_idx[sn] = idx
+    def node_key(sn: str) -> tuple[float, int, str]:
+        layer, ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
+        return (ctx_mean, layer, sn)
 
-    component_outgoing = {idx: set() for idx in range(len(components))}
-    component_indegree = {idx: 0 for idx in range(len(components))}
-    for source, targets in outgoing.items():
-        source_component = component_idx[source]
-        for target in targets:
-            target_component = component_idx[target]
-            if source_component == target_component:
-                continue
-            if target_component not in component_outgoing[source_component]:
-                component_outgoing[source_component].add(target_component)
-                component_indegree[target_component] += 1
-
-    def component_key(idx: int) -> tuple[float, int, str]:
-        layers_and_ctx = [
-            _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
-            for sn in components[idx]
-        ]
-        ctx_mean = float(np.mean([ctx for _layer, ctx in layers_and_ctx]))
-        min_layer = min(layer for layer, _ctx in layers_and_ctx)
-        return (ctx_mean, min_layer, min(components[idx]))
-
-    component_depth = {idx: 0 for idx in range(len(components))}
-    ready = sorted(
-        [idx for idx, degree in component_indegree.items() if degree == 0],
-        key=component_key,
-    )
+    depth = {sn: 0 for sn in sn_names}
+    seen: set[str] = set()
+    ready = sorted([sn for sn, degree in indegree.items() if degree == 0], key=node_key)
     while ready:
         source = ready.pop(0)
-        for target in sorted(component_outgoing[source], key=component_key):
-            component_depth[target] = max(component_depth[target], component_depth[source] + 1)
-            component_indegree[target] -= 1
-            if component_indegree[target] == 0:
+        seen.add(source)
+        for target in sorted(outgoing[source], key=node_key):
+            depth[target] = max(depth[target], depth[source] + 1)
+            indegree[target] -= 1
+            if indegree[target] == 0:
                 ready.append(target)
-                ready.sort(key=lambda idx: (component_depth[idx], *component_key(idx)))
+                ready.sort(key=lambda sn: (depth[sn], *node_key(sn)))
 
-    depth = {sn: component_depth[component_idx[sn]] for sn in sn_names}
     non_logit_depths = [
         rank for sn, rank in depth.items() if _sn_kind(sn, node_by_name) != "logit"
     ]
@@ -503,6 +485,96 @@ def _prompt_token_strip(
         )
 
 
+def _jsonify_plotly_items(items: list[Any]) -> list[dict[str, Any]]:
+    return [
+        item.to_plotly_json() if hasattr(item, "to_plotly_json") else dict(item)
+        for item in items
+    ]
+
+
+def _edge_filter_controls(
+    *,
+    edges: list[tuple[str, str, float]],
+    edge_shapes: list[dict[str, Any]],
+    edge_annotations: list[dict[str, Any]],
+    static_shapes: list[Any],
+    static_annotations: list[Any],
+    n_traces: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    edge_count = len(edges)
+    static_shape_json = _jsonify_plotly_items(static_shapes)
+    static_annotation_json = _jsonify_plotly_items(static_annotations)
+    k_values = _edge_filter_k_values(edges)
+
+    def state(top_k: int | None, positive_only: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+        selected = _select_edge_indices(edges, top_k=top_k, positive_only=positive_only)
+        visible = [idx in selected for idx in range(edge_count)]
+        visible.extend([True for _idx in range(edge_count, n_traces)])
+        layout = {
+            "shapes": [
+                *[edge_shapes[idx] for idx in sorted(selected)],
+                *static_shape_json,
+            ],
+            "annotations": [
+                *[edge_annotations[idx] for idx in sorted(selected)],
+                *static_annotation_json,
+            ],
+        }
+        return {"visible": visible}, layout
+
+    def slider(positive_only: bool, active: int = 0) -> dict[str, Any]:
+        steps = []
+        for top_k in k_values:
+            label = "all" if top_k is None else str(top_k)
+            data_update, layout_update = state(top_k, positive_only)
+            steps.append(
+                {
+                    "label": label,
+                    "method": "update",
+                    "args": [data_update, layout_update],
+                }
+            )
+        return {
+            "active": active,
+            "currentvalue": {"prefix": "Top k edges per node: "},
+            "pad": {"t": 42},
+            "x": 0.08,
+            "xanchor": "left",
+            "y": 1.04,
+            "yanchor": "top",
+            "len": 0.52,
+            "steps": steps,
+        }
+
+    all_data, all_layout = state(None, False)
+    positive_data, positive_layout = state(None, True)
+    all_layout = {**all_layout, "sliders": [slider(False)]}
+    positive_layout = {**positive_layout, "sliders": [slider(True)]}
+    updatemenus = [
+        {
+            "type": "buttons",
+            "direction": "right",
+            "x": 0.70,
+            "xanchor": "left",
+            "y": 1.08,
+            "yanchor": "top",
+            "buttons": [
+                {
+                    "label": "All edges",
+                    "method": "update",
+                    "args": [all_data, all_layout],
+                },
+                {
+                    "label": "Positive only",
+                    "method": "update",
+                    "args": [positive_data, positive_layout],
+                },
+            ],
+        }
+    ]
+    return updatemenus, [slider(False)]
+
+
 def supernode_graph_figure(
     sng: SummaryGraph | dict[str, Any],
     final_supernodes: dict[str, list[str]] | None = None,
@@ -535,17 +607,28 @@ def supernode_graph_figure(
 
     # Duck-typing rather than isinstance so this survives Streamlit hot-reload,
     # which re-imports SummaryGraph and breaks isinstance on session-state objects.
-    if hasattr(sng, "sn_names") and hasattr(sng, "adj_matrix"):
+    if hasattr(sng, "sn_names") and (hasattr(sng, "adj") or hasattr(sng, "adj_matrix")):
         graph = cast(Any, sng)
-        sn_names = graph.sn_names
-        sn_adj = np.asarray(graph.adj_matrix, dtype=np.float64)
-        mapping = final_supernodes if final_supernodes is not None else graph.to_mapping()
-        node_by_name = graph.node_by_name()
+        sn_names = _unique_names(list(graph.sn_names))
+        raw_adj = graph.adj if hasattr(graph, "adj") else graph.adj_matrix
+        sn_adj = np.asarray(raw_adj, dtype=np.float64)
+        if hasattr(graph, "supernodes"):
+            supernodes = list(graph.supernodes)
+            mapping = {
+                sn_name: supernode.member_node_ids()
+                for sn_name, supernode in zip(sn_names, supernodes)
+            }
+            node_by_name = {
+                sn_name: supernode for sn_name, supernode in zip(sn_names, supernodes)
+            }
+        else:
+            mapping = final_supernodes if final_supernodes is not None else graph.to_mapping()
+            node_by_name = graph.node_by_name()
     else:
         if final_supernodes is None:
             raise ValueError("final_supernodes is required when sng is a plain dict.")
         legacy = cast(dict[str, Any], sng)
-        sn_names = list(legacy["sn_names"])
+        sn_names = _unique_names(list(legacy["sn_names"]))
         sn_adj = np.asarray(legacy["sn_adj"], dtype=np.float64)
         mapping = final_supernodes
         node_by_name = {}
@@ -594,6 +677,8 @@ def supernode_graph_figure(
     fig = go.Figure()
 
     # --- Curved edges (drawn first so cards sit on top) ---
+    edge_shapes: list[dict[str, Any]] = []
+    edge_annotations: list[dict[str, Any]] = []
     edge_xs: list[float] = []
     edge_ys: list[float] = []
     for u, v, w in rendered_edges:
@@ -610,10 +695,12 @@ def supernode_graph_figure(
         width, color = _edge_style(w, max_abs_w)
         edge_xs.extend((xs, cxm, xt))
         edge_ys.extend((ys, cym, yt))
-        fig.add_shape(
-            type="path",
-            path=f"M {xs},{ys} Q {cxm},{cym} {xt},{yt}",
-            line=dict(width=width, color=color),
+        edge_shapes.append(
+            {
+                "type": "path",
+                "path": f"M {xs},{ys} Q {cxm},{cym} {xt},{yt}",
+                "line": {"width": width, "color": color},
+            }
         )
         fig.add_trace(
             go.Scatter(
@@ -629,21 +716,23 @@ def supernode_graph_figure(
         tangent_len = math.hypot(xt - cxm, yt - cym) or 1.0
         ax = xt - (xt - cxm) / tangent_len * min(0.28, 0.18 * length)
         ay = yt - (yt - cym) / tangent_len * min(0.28, 0.18 * length)
-        fig.add_annotation(
-            x=xt,
-            y=yt,
-            ax=ax,
-            ay=ay,
-            xref="x",
-            yref="y",
-            axref="x",
-            ayref="y",
-            showarrow=True,
-            arrowhead=2,
-            arrowsize=1.0,
-            arrowwidth=max(1.0, width * 0.6),
-            arrowcolor=color,
-            text="",
+        edge_annotations.append(
+            {
+                "x": xt,
+                "y": yt,
+                "ax": ax,
+                "ay": ay,
+                "xref": "x",
+                "yref": "y",
+                "axref": "x",
+                "ayref": "y",
+                "showarrow": True,
+                "arrowhead": 2,
+                "arrowsize": 1.0,
+                "arrowwidth": max(1.0, width * 0.6),
+                "arrowcolor": color,
+                "text": "",
+            }
         )
 
     # --- Cards + labels ---
@@ -688,6 +777,20 @@ def supernode_graph_figure(
     if prompt_tokens:
         _prompt_token_strip(fig, prompt_tokens, emb_ctx, y=float(top_y))
 
+    static_shapes = list(fig.layout.shapes or [])
+    static_annotations = list(fig.layout.annotations or [])
+    updatemenus: list[dict[str, Any]] = []
+    sliders: list[dict[str, Any]] = []
+    if rendered_edges:
+        updatemenus, sliders = _edge_filter_controls(
+            edges=rendered_edges,
+            edge_shapes=edge_shapes,
+            edge_annotations=edge_annotations,
+            static_shapes=static_shapes,
+            static_annotations=static_annotations,
+            n_traces=len(fig.data),
+        )
+
     # --- Layout / ranges ---
     token_xs = [float(i) for i in range(len(prompt_tokens or []))]
     xs_for_range = [g[0] for g in geom.values()] + edge_xs + token_xs + [0.0]
@@ -700,14 +803,20 @@ def supernode_graph_figure(
     x_max = max(xs_for_range) + 1.5
     y_min = min(ys_for_range) - 0.7
     y_max = max(ys_for_range) + 0.7
+    fig.layout.shapes = ()
+    fig.layout.annotations = ()
     fig.update_layout(
         title=title,
         showlegend=False,
         xaxis=dict(visible=False, range=[x_min, x_max]),
         yaxis=dict(visible=False, range=[y_min, y_max]),
-        margin=dict(l=30, r=30, t=50, b=20),
+        margin=dict(l=30, r=30, t=95, b=20),
         plot_bgcolor="white",
         paper_bgcolor="white",
         height=760,
+        shapes=[*edge_shapes, *_jsonify_plotly_items(static_shapes)],
+        annotations=[*edge_annotations, *_jsonify_plotly_items(static_annotations)],
+        updatemenus=updatemenus,
+        sliders=sliders,
     )
     return fig
