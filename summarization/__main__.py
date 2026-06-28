@@ -39,13 +39,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-feature-nodes", type=int, default=8192)
     parser.add_argument("--batch-size", type=int, default=256)
 
-    # Token weights: uniform (default), an explicit JSON list, or SHAP token attribution.
+    # Token weights: SHAP token attribution by default, or an explicit JSON list.
     parser.add_argument(
         "--token-weights", type=str, default=None, help="JSON list string, e.g. '[0,0,0.5,0.5]'."
     )
     parser.add_argument(
         "--auto-token-weights",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Compute SHAP token weights from the prompt (token_attribution stage).",
     )
     parser.add_argument(
@@ -105,6 +106,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--act-density-lb", type=float, default=2e-5)
     parser.add_argument("--act-density-ub", type=float, default=0.1)
+    parser.add_argument(
+        "--features-dir",
+        "--features_dir",
+        dest="features_dir",
+        type=str,
+        default=None,
+        help="Local feature dashboard mirror used by activation-density filtering and labeling.",
+    )
 
     # Cluster.
     parser.add_argument(
@@ -121,8 +130,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-k", action="store_true")
     parser.add_argument("--k-min", type=int, default=None)
     parser.add_argument("--k-max", type=int, default=None)
-    parser.add_argument("--max-layer-span", type=int, default=4)
-    parser.add_argument("--max-sn", type=int, default=None)
+    parser.add_argument("--max-layer-span", type=int, default=7)
+    parser.add_argument("--max-sn", type=int, default=20)
     parser.add_argument(
         "--ilp-time-limit", type=float, default=30.0, help="HiGHS time limit (s) for --method ilp."
     )
@@ -138,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Stage-2 causal control. ILP always minimizes L_atom; --eps-causal adds
     # the hard constraint C_causal <= eps_causal.
-    parser.add_argument("--eps-causal", type=float, default=None)
+    parser.add_argument("--eps-causal", type=float, default=0.05)
 
     # Outputs.
     parser.add_argument(
