@@ -183,16 +183,16 @@ nohup.out
 runs/
 pruned_graph/
 pruned_graphs/
-summary_graphs/
-labeled_summary/
+# summary_graphs/
+# labeled_summary/
 temp_graph_files/
-eval_outputs/
+# eval_outputs/
 analogy_graphs/
 multihop_graphs/
 graphs/
 graph_files/
 generated_graphs/
-summary/
+# summary/
 reports/
 figures/
 # agent

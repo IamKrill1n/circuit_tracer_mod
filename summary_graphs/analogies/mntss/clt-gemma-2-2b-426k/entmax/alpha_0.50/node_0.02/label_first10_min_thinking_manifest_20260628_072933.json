@@ -1,0 +1,182 @@
+[
+  {
+    "stage": "label",
+    "stem": "000",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/000.pt",
+    "prompt_path": "summarization/prompts/label_graph_no_trash.txt",
+    "model_name": "gemma-4-31b-it",
+    "temperature": 0.2,
+    "thinking_effort": "low",
+    "use_default_thinking_effort": false,
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 10,
+    "labelled_feature_supernodes": 10,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "label",
+    "stem": "001",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/001.pt",
+    "prompt_path": "summarization/prompts/label_graph_no_trash.txt",
+    "model_name": "gemma-4-31b-it",
+    "temperature": 0.2,
+    "thinking_effort": "low",
+    "use_default_thinking_effort": false,
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 12,
+    "labelled_feature_supernodes": 12,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "label",
+    "stem": "002",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/002.pt",
+    "prompt_path": "summarization/prompts/label_graph_no_trash.txt",
+    "model_name": "gemma-4-31b-it",
+    "temperature": 0.2,
+    "thinking_effort": "low",
+    "use_default_thinking_effort": false,
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 10,
+    "labelled_feature_supernodes": 10,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "label",
+    "stem": "003",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/003.pt",
+    "prompt_path": "summarization/prompts/label_graph_no_trash.txt",
+    "model_name": "gemma-4-31b-it",
+    "temperature": 0.2,
+    "thinking_effort": "low",
+    "use_default_thinking_effort": false,
+    "status": "ok",
+    "num_supernodes": 18,
+    "feature_supernodes": 14,
+    "labelled_feature_supernodes": 14,
+    "adj_shape": [
+      18,
+      18
+    ]
+  },
+  {
+    "stage": "label",
+    "stem": "004",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/004.pt",
+    "prompt_path": "summarization/prompts/label_graph_no_trash.txt",
+    "model_name": "gemma-4-31b-it",
+    "temperature": 0.2,
+    "thinking_effort": "low",
+    "use_default_thinking_effort": false,
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 10,
+    "labelled_feature_supernodes": 10,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "label",
+    "stem": "005",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/005.pt",
+    "prompt_path": "summarization/prompts/label_graph_no_trash.txt",
+    "model_name": "gemma-4-31b-it",
+    "temperature": 0.2,
+    "thinking_effort": "low",
+    "use_default_thinking_effort": false,
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 8,
+    "labelled_feature_supernodes": 8,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "label",
+    "stem": "006",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/006.pt",
+    "prompt_path": "summarization/prompts/label_graph_no_trash.txt",
+    "model_name": "gemma-4-31b-it",
+    "temperature": 0.2,
+    "thinking_effort": "low",
+    "use_default_thinking_effort": false,
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 11,
+    "labelled_feature_supernodes": 11,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "label",
+    "stem": "007",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/007.pt",
+    "prompt_path": "summarization/prompts/label_graph_no_trash.txt",
+    "model_name": "gemma-4-31b-it",
+    "temperature": 0.2,
+    "thinking_effort": "low",
+    "use_default_thinking_effort": false,
+    "status": "ok",
+    "num_supernodes": 17,
+    "feature_supernodes": 14,
+    "labelled_feature_supernodes": 14,
+    "adj_shape": [
+      17,
+      17
+    ]
+  },
+  {
+    "stage": "label",
+    "stem": "008",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/008.pt",
+    "prompt_path": "summarization/prompts/label_graph_no_trash.txt",
+    "model_name": "gemma-4-31b-it",
+    "temperature": 0.2,
+    "thinking_effort": "low",
+    "use_default_thinking_effort": false,
+    "status": "ok",
+    "num_supernodes": 16,
+    "feature_supernodes": 14,
+    "labelled_feature_supernodes": 14,
+    "adj_shape": [
+      16,
+      16
+    ]
+  },
+  {
+    "stage": "label",
+    "stem": "009",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/009.pt",
+    "prompt_path": "summarization/prompts/label_graph_no_trash.txt",
+    "model_name": "gemma-4-31b-it",
+    "temperature": 0.2,
+    "thinking_effort": "low",
+    "use_default_thinking_effort": false,
+    "status": "ok",
+    "num_supernodes": 16,
+    "feature_supernodes": 13,
+    "labelled_feature_supernodes": 13,
+    "adj_shape": [
+      16,
+      16
+    ]
+  }
+]

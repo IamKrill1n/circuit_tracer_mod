@@ -1,0 +1,1280 @@
+[
+  {
+    "stage": "rerun_summary",
+    "stem": "004",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/004.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/004.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 10,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "005",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/005.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/005.pt",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "006",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/006.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/006.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "007",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/007.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/007.pt",
+    "status": "ok",
+    "num_supernodes": 17,
+    "feature_supernodes": 14,
+    "adj_shape": [
+      17,
+      17
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "008",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/008.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/008.pt",
+    "status": "ok",
+    "num_supernodes": 16,
+    "feature_supernodes": 14,
+    "adj_shape": [
+      16,
+      16
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "009",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/009.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/009.pt",
+    "status": "ok",
+    "num_supernodes": 16,
+    "feature_supernodes": 13,
+    "adj_shape": [
+      16,
+      16
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "010",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/010.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/010.pt",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "011",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/011.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/011.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 9,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "012",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/012.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/012.pt",
+    "status": "ok",
+    "num_supernodes": 20,
+    "feature_supernodes": 15,
+    "adj_shape": [
+      20,
+      20
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "013",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/013.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/013.pt",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "014",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/014.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/014.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 9,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "015",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/015.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/015.pt",
+    "status": "ok",
+    "num_supernodes": 23,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      23,
+      23
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "016",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/016.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/016.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 10,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "017",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/017.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/017.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "018",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/018.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/018.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 9,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "019",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/019.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/019.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 9,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "020",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/020.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/020.pt",
+    "status": "ok",
+    "num_supernodes": 20,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      20,
+      20
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "021",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/021.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/021.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "022",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/022.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/022.pt",
+    "status": "ok",
+    "num_supernodes": 20,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      20,
+      20
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "023",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/023.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/023.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 10,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "024",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/024.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/024.pt",
+    "status": "ok",
+    "num_supernodes": 16,
+    "feature_supernodes": 14,
+    "adj_shape": [
+      16,
+      16
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "025",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/025.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/025.pt",
+    "status": "ok",
+    "num_supernodes": 23,
+    "feature_supernodes": 13,
+    "adj_shape": [
+      23,
+      23
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "026",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/026.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/026.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "027",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/027.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/027.pt",
+    "status": "ok",
+    "num_supernodes": 17,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      17,
+      17
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "028",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/028.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/028.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "029",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/029.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/029.pt",
+    "status": "ok",
+    "num_supernodes": 19,
+    "feature_supernodes": 13,
+    "adj_shape": [
+      19,
+      19
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "030",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/030.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/030.pt",
+    "status": "ok",
+    "num_supernodes": 9,
+    "feature_supernodes": 7,
+    "adj_shape": [
+      9,
+      9
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "031",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/031.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/031.pt",
+    "status": "ok",
+    "num_supernodes": 19,
+    "feature_supernodes": 13,
+    "adj_shape": [
+      19,
+      19
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "032",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/032.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/032.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "033",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/033.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/033.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 10,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "034",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/034.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/034.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "035",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/035.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/035.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 10,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "036",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/036.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/036.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 10,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "037",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/037.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/037.pt",
+    "status": "ok",
+    "num_supernodes": 10,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "038",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/038.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/038.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 9,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "039",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/039.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/039.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "040",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/040.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/040.pt",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "041",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/041.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/041.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 10,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "042",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/042.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/042.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 9,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "043",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/043.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/043.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "044",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/044.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/044.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "045",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/045.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/045.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "046",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/046.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/046.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "047",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/047.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/047.pt",
+    "status": "ok",
+    "num_supernodes": 11,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      11,
+      11
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "048",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/048.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/048.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 9,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "049",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/049.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/049.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 10,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "050",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/050.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/050.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "051",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/051.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/051.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 10,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "052",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/052.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/052.pt",
+    "status": "ok",
+    "num_supernodes": 16,
+    "feature_supernodes": 14,
+    "adj_shape": [
+      16,
+      16
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "053",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/053.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/053.pt",
+    "status": "ok",
+    "num_supernodes": 11,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      11,
+      11
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "054",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/054.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/054.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 9,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "055",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/055.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/055.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "056",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/056.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/056.pt",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "057",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/057.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/057.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "058",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/058.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/058.pt",
+    "status": "ok",
+    "num_supernodes": 16,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      16,
+      16
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "059",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/059.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/059.pt",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "060",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/060.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/060.pt",
+    "status": "ok",
+    "num_supernodes": 16,
+    "feature_supernodes": 14,
+    "adj_shape": [
+      16,
+      16
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "061",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/061.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/061.pt",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "062",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/062.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/062.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 9,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "063",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/063.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/063.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "064",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/064.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/064.pt",
+    "status": "ok",
+    "num_supernodes": 16,
+    "feature_supernodes": 14,
+    "adj_shape": [
+      16,
+      16
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "065",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/065.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/065.pt",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "066",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/066.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/066.pt",
+    "status": "ok",
+    "num_supernodes": 16,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      16,
+      16
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "067",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/067.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/067.pt",
+    "status": "ok",
+    "num_supernodes": 17,
+    "feature_supernodes": 13,
+    "adj_shape": [
+      17,
+      17
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "068",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/068.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/068.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "069",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/069.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/069.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 9,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "070",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/070.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/070.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "071",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/071.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/071.pt",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 13,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "072",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/072.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/072.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 10,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "073",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/073.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/073.pt",
+    "status": "ok",
+    "num_supernodes": 16,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      16,
+      16
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "074",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/074.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/074.pt",
+    "status": "ok",
+    "num_supernodes": 16,
+    "feature_supernodes": 13,
+    "adj_shape": [
+      16,
+      16
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "075",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/075.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/075.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 9,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "076",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/076.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/076.pt",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 9,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "077",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/077.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/077.pt",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "078",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/078.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/078.pt",
+    "status": "ok",
+    "num_supernodes": 17,
+    "feature_supernodes": 14,
+    "adj_shape": [
+      17,
+      17
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "079",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/079.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/079.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "080",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/080.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/080.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "081",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/081.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/081.pt",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "082",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/082.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/082.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "083",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/083.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/083.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 10,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "084",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/084.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/084.pt",
+    "status": "ok",
+    "num_supernodes": 9,
+    "feature_supernodes": 5,
+    "adj_shape": [
+      9,
+      9
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "085",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/085.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/085.pt",
+    "status": "ok",
+    "num_supernodes": 10,
+    "feature_supernodes": 7,
+    "adj_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "086",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/086.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/086.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 9,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "087",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/087.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/087.pt",
+    "status": "ok",
+    "num_supernodes": 12,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "088",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/088.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/088.pt",
+    "status": "ok",
+    "num_supernodes": 11,
+    "feature_supernodes": 7,
+    "adj_shape": [
+      11,
+      11
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "089",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/089.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/089.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "090",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/090.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/090.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "091",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/091.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/091.pt",
+    "status": "ok",
+    "num_supernodes": 14,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      14,
+      14
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "092",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/092.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/092.pt",
+    "status": "ok",
+    "num_supernodes": 10,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "093",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/093.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/093.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 10,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "094",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/094.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/094.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "095",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/095.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/095.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "096",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/096.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/096.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 10,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "097",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/097.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/097.pt",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 12,
+    "adj_shape": [
+      15,
+      15
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "098",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/098.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/098.pt",
+    "status": "ok",
+    "num_supernodes": 10,
+    "feature_supernodes": 8,
+    "adj_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "stage": "rerun_summary",
+    "stem": "099",
+    "prune_path": "pruned_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/099.pt",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/099.pt",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 11,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "label",
+    "stem": "000",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/000.pt",
+    "prompt_path": "summarization/prompts/label_graph_no_trash.txt",
+    "model_name": "gemma-4-31b-it",
+    "status": "ok",
+    "num_supernodes": 13,
+    "feature_supernodes": 10,
+    "labelled_feature_supernodes": 10,
+    "adj_shape": [
+      13,
+      13
+    ]
+  },
+  {
+    "stage": "label",
+    "stem": "001",
+    "summary_path": "summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/001.pt",
+    "prompt_path": "summarization/prompts/label_graph_no_trash.txt",
+    "model_name": "gemma-4-31b-it",
+    "status": "ok",
+    "num_supernodes": 15,
+    "feature_supernodes": 12,
+    "labelled_feature_supernodes": 12,
+    "adj_shape": [
+      15,
+      15
+    ]
+  }
+]

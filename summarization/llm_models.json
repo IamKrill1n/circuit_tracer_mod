@@ -29,6 +29,6 @@
     "base_url": null,
     "api_key_env": "GOOGLE_API_KEY",
     "supports_thinking_level": true,
-    "defaults": {"temperature": 0.2, "thinking_effort": "high"}
+    "defaults": {"temperature": 0.2, "thinking_effort": "low"}
   }
 }

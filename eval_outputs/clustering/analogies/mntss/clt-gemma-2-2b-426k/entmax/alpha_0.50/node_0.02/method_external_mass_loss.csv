@@ -1,0 +1,6 @@
+method,n_graphs,external_mass_loss
+ours-ilp,100,0.08569538922990012
+baseline-kmeans,100,0.14925356493005829
+baseline-random-same-size,100,0.19415368226660104
+baseline-spectral-adj,100,0.18662029926418938
+baseline-spectral-cosine,100,0.125723794991241
