@@ -753,6 +753,8 @@ def run_summary(
         scaled = None if value is None else 0.05 + 0.78 * value
         report(message, scaled)
 
+    features_dir = str(setting("features_dir", "") or "").strip() or None
+
     pipeline_args = Namespace(
         **{
             "prompt": None,
@@ -780,6 +782,7 @@ def run_summary(
             "edge_threshold": float(setting("edge_threshold", 0.9)),
             "keep_all_tokens_and_logits": bool(setting("keep_all_tokens_and_logits", False)),
             "filter_act_density": bool(setting("filter_act_density", True)),
+            "features_dir": features_dir,
             "classify_filter": False,
             "model_id": str(setting("model_id", "gemma-2-2b")),
             "act_density_lb": float(setting("act_density_lb", 2e-5)),
@@ -838,6 +841,7 @@ def run_summary(
                 use_default_thinking_effort=thinking_raw == "default",
             ),
             scheme=LabelScheme(scheme="one_pass"),
+            features_dir=features_dir,
         )
         sng.save(str(out))
 

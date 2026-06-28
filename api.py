@@ -67,6 +67,7 @@ def _parse_bin_payload(raw: bytes) -> bytes:
 # Cache it so a graph's worth of feature lookups downloads it once, not once per feature.
 # Value is the parsed index, or None for scans not hosted on HF (→ Cloudfront fallback).
 _HF_INDEX_CACHE: dict[str, list | dict | None] = {}
+_LOCAL_HF_INDEX_CACHE: dict[str, list | dict] = {}
 
 
 def _get_hf_index(scan: str) -> list | dict | None:
@@ -77,6 +78,27 @@ def _get_hf_index(scan: str) -> list | dict | None:
         else:
             _HF_INDEX_CACHE[scan] = None
     return _HF_INDEX_CACHE[scan]
+
+
+def _local_feature_path(features_dir: Path, path: str) -> Path:
+    direct_path = features_dir / path
+    if direct_path.exists():
+        return direct_path
+    return features_dir / "features" / path
+
+
+def _get_local_hf_index(features_dir: Path) -> list | dict | None:
+    index_path = _local_feature_path(features_dir, "index.json.gz")
+    if not index_path.exists():
+        return None
+
+    cache_key = str(index_path.resolve())
+    if cache_key not in _LOCAL_HF_INDEX_CACHE:
+        raw = index_path.read_bytes()
+        _LOCAL_HF_INDEX_CACHE[cache_key] = json.loads(
+            zlib.decompress(raw, wbits=zlib.MAX_WBITS | 32)
+        )
+    return _LOCAL_HF_INDEX_CACHE[cache_key]
 
 
 def get_feature_dashboard(
@@ -101,6 +123,19 @@ def get_feature_dashboard(
         if local_path.exists():
             return FeatureDashboard.model_validate_json(local_path.read_text())
 
+        index_data = _get_local_hf_index(Path(features_dir))
+        if index_data is not None:
+            entry = index_data[layer] if isinstance(index_data, list) else index_data[str(layer)]
+            offsets = entry["offsets"]
+            bin_filename = entry["filename"]
+            start, end = offsets[feat_idx], offsets[feat_idx + 1]
+            bin_path = _local_feature_path(Path(features_dir), bin_filename)
+            with bin_path.open("rb") as f:
+                f.seek(start)
+                raw = f.read(end - start)
+            decoded = _parse_bin_payload(raw)
+            return FeatureDashboard.model_validate_json(decoded)
+
     # 2) HuggingFace binary chunks (preferred for HF-hosted scans like mntss/clt-gemma-2-2b-2.5M)
     index_data = _get_hf_index(scan)
     if index_data is not None:
@@ -110,7 +145,7 @@ def get_feature_dashboard(
         bin_filename = entry["filename"]
         start, end = offsets[feat_idx], offsets[feat_idx + 1]
         bin_url = _hf_features_url(scan, bin_filename)
-        resp = requests.get(bin_url, headers={"Range": f"bytes={start}-{end}"}, timeout=30)
+        resp = requests.get(bin_url, headers={"Range": f"bytes={start}-{end - 1}"}, timeout=30)
         resp.raise_for_status()
         decoded = _parse_bin_payload(resp.content)
         return FeatureDashboard.model_validate_json(decoded)

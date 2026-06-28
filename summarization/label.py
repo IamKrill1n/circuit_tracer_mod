@@ -306,10 +306,21 @@ def _is_fetchable_feature(node: Node) -> bool:
 
 
 def _fetch_feature_context(
-    scan: str, node_id: str, *, top_examples: int, top_logits: int
+    scan: str,
+    node_id: str,
+    *,
+    features_dir: str | Path | None = None,
+    top_examples: int,
+    top_logits: int,
 ) -> dict[str, Any] | None:
     """Top activation signals + top positive logits for one feature; None for embeddings/failures."""
-    info = fetch_feature_info(scan, node_id, top_n=top_examples, top_logits_n=top_logits)
+    info = fetch_feature_info(
+        scan,
+        node_id,
+        features_dir=features_dir,
+        top_n=top_examples,
+        top_logits_n=top_logits,
+    )
     if info is None:
         return None
     return {
@@ -440,13 +451,18 @@ def _feature_blocks_for_supernode(
     scan: str,
     scheme: LabelScheme,
     model_n_layers: int | None,
+    features_dir: str | Path | None = None,
 ) -> list[str]:
     blocks: list[str] = []
     for node in supernode.features:
         if not _is_fetchable_feature(node):
             continue
         info = _fetch_feature_context(
-            scan, node.node_id, top_examples=scheme.top_examples, top_logits=scheme.top_logits
+            scan,
+            node.node_id,
+            features_dir=features_dir,
+            top_examples=scheme.top_examples,
+            top_logits=scheme.top_logits,
         )
         blocks.append(_build_feature_block(node, info, model_n_layers))
     return blocks
@@ -505,7 +521,10 @@ def _parse_single_label_response(text: str) -> tuple[str, str, str] | None:
 
 
 def _build_graph_user_message(
-    sng: SummaryGraph, target_token: str | None, scheme: LabelScheme
+    sng: SummaryGraph,
+    target_token: str | None,
+    scheme: LabelScheme,
+    features_dir: str | Path | None = None,
 ) -> tuple[str, list[Supernode]]:
     """Whole-graph message + the ordered non-emb/logit supernodes that have fetchable features."""
     metadata = sng.metadata
@@ -517,7 +536,7 @@ def _build_graph_user_message(
     for sn in sng.supernodes:
         if sn.type in ("emb", "logit"):
             continue
-        blocks = _feature_blocks_for_supernode(sn, scan, scheme, model_n_layers)
+        blocks = _feature_blocks_for_supernode(sn, scan, scheme, model_n_layers, features_dir)
         if not blocks:
             continue
         cid = len(ordered_clusters)
@@ -530,10 +549,16 @@ def _build_graph_user_message(
 
 
 def _label_one_pass(
-    sng: SummaryGraph, route: ModelRoute, settings: ModelSettings, scheme: LabelScheme
+    sng: SummaryGraph,
+    route: ModelRoute,
+    settings: ModelSettings,
+    scheme: LabelScheme,
+    features_dir: str | Path | None = None,
 ) -> SummaryGraph:
     target_token = _extract_target_token(sng)
-    user_message, ordered_clusters = _build_graph_user_message(sng, target_token, scheme)
+    user_message, ordered_clusters = _build_graph_user_message(
+        sng, target_token, scheme, features_dir
+    )
     if not ordered_clusters:
         return sng
 
@@ -564,7 +589,11 @@ def _build_single_supernode_user_message(
 
 
 def _label_two_pass(
-    sng: SummaryGraph, route: ModelRoute, settings: ModelSettings, scheme: LabelScheme
+    sng: SummaryGraph,
+    route: ModelRoute,
+    settings: ModelSettings,
+    scheme: LabelScheme,
+    features_dir: str | Path | None = None,
 ) -> SummaryGraph:
     metadata = sng.metadata
     scan = metadata.get("scan", "")
@@ -576,7 +605,7 @@ def _label_two_pass(
     for sn_idx, sn in enumerate(sng.supernodes):
         if sn.type in ("emb", "logit"):
             continue
-        blocks = _feature_blocks_for_supernode(sn, scan, scheme, model_n_layers)
+        blocks = _feature_blocks_for_supernode(sn, scan, scheme, model_n_layers, features_dir)
         if blocks:
             feature_blocks_by_idx[sn_idx] = blocks
     if not feature_blocks_by_idx:
@@ -609,6 +638,7 @@ def label_supernodes(
     *,
     settings: ModelSettings | None = None,
     scheme: LabelScheme | None = None,
+    features_dir: str | Path | None = None,
 ) -> SummaryGraph:
     """Label every supernode in *sng* in place (name / role / description) and return it.
 
@@ -622,8 +652,8 @@ def label_supernodes(
     route = resolve_model(model_name)
     merged = _merge_settings(settings, route.defaults)
     if scheme.scheme == "one_pass":
-        return _label_one_pass(sng, route, merged, scheme)
-    return _label_two_pass(sng, route, merged, scheme)
+        return _label_one_pass(sng, route, merged, scheme, features_dir)
+    return _label_two_pass(sng, route, merged, scheme, features_dir)
 
 
 if __name__ == "__main__":

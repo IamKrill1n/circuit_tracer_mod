@@ -81,6 +81,7 @@ class SummaryRequest(BaseModel):
     alpha: float = 0.5
     keep_all_tokens_and_logits: bool = False
     filter_act_density: bool = True
+    features_dir: str = ""
     act_density_lb: float = 2e-5
     act_density_ub: float = 0.1
     max_layer_span: int = 7

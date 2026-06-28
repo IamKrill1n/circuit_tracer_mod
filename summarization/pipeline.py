@@ -209,6 +209,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         _report_progress(args, "Filtering activation density", 0.48)
         prune_graph = filter_act_density(
             prune_graph,
+            features_dir=getattr(args, "features_dir", None),
             act_density_lb=args.act_density_lb,
             act_density_ub=args.act_density_ub,
         )

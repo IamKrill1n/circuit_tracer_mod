@@ -241,6 +241,7 @@ function summaryPayload() {
     alpha: numberValue("sumAlpha"),
     keep_all_tokens_and_logits: el("sumKeepAll").checked,
     filter_act_density: el("sumFilterAct").checked,
+    features_dir: el("sumFeaturesDir").value,
     max_layer_span: numberValue("sumLayerSpan"),
     max_sn: numberValue("sumMaxSn") || null,
     eps_causal: numberValue("sumEpsCausal"),

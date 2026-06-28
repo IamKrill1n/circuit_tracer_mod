@@ -54,6 +54,24 @@ class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(500)
             self.end_headers()
 
+    def do_HEAD(self):
+        if (self.features_dir is not None) and (self.path.startswith("/features/")):
+            rel_path = self.path[len("/features/") :].split("?")[0]
+            local_path = os.path.join(self.features_dir, rel_path)
+            if not os.path.exists(local_path):
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(os.path.getsize(local_path)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            return
+
+        super().do_HEAD()
+
     def _do_GET(self):
         logger.info(f"Received request for {self.path}")
 

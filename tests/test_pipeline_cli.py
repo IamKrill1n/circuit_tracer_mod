@@ -12,6 +12,7 @@ from summarization.summarize import Node, SummaryGraph, Supernode
 def test_pipeline_cli_prune_defaults() -> None:
     args = build_parser().parse_args([])
 
+    assert args.auto_token_weights is True
     assert args.logit_weights == "target"
     assert args.token_attr_normalize == "entmax"
     assert args.entmax_alpha == 1.25
@@ -22,12 +23,30 @@ def test_pipeline_cli_prune_defaults() -> None:
     assert args.alpha == 0.5
     assert args.keep_all_tokens_and_logits is False
     assert args.filter_act_density is True
+    assert args.features_dir is None
+    assert args.max_layer_span == 7
+    assert args.max_sn == 20
+    assert args.eps_causal == 0.05
+
+
+def test_pipeline_cli_can_disable_auto_token_weights() -> None:
+    args = build_parser().parse_args(["--no-auto-token-weights"])
+
+    assert args.auto_token_weights is False
 
 
 def test_pipeline_cli_can_disable_act_density_filter() -> None:
     args = build_parser().parse_args(["--no-filter-act-density"])
 
     assert args.filter_act_density is False
+
+
+def test_pipeline_cli_accepts_features_dir_aliases() -> None:
+    dashed = build_parser().parse_args(["--features-dir", "downloads/features"])
+    underscored = build_parser().parse_args(["--features_dir", "downloads/features"])
+
+    assert dashed.features_dir == "downloads/features"
+    assert underscored.features_dir == "downloads/features"
 
 
 def test_pipeline_cli_accepts_prune_graph_out() -> None:
@@ -126,6 +145,13 @@ def test_run_pipeline_saves_prune_graph(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(pipeline, "_acquire_graph", lambda _args: graph)
     monkeypatch.setattr(pipeline.AttrGraph, "from_graph", lambda _graph: object())
     monkeypatch.setattr(pipeline, "prune_attr_graph", lambda *_args, **_kwargs: prune_graph)
+    filter_kwargs = {}
+
+    def fake_filter_act_density(pg, **kwargs):
+        filter_kwargs.update(kwargs)
+        return pg
+
+    monkeypatch.setattr(pipeline, "filter_act_density", fake_filter_act_density)
     monkeypatch.setattr(pipeline, "cluster", lambda *_args, **_kwargs: rows)
     monkeypatch.setattr(pipeline, "summarize", lambda *_args, **_kwargs: summary_graph)
 
@@ -142,7 +168,10 @@ def test_run_pipeline_saves_prune_graph(monkeypatch, tmp_path) -> None:
         normalization="rank",
         alpha=0.5,
         keep_all_tokens_and_logits=False,
-        filter_act_density=False,
+        filter_act_density=True,
+        features_dir="downloads/features",
+        act_density_lb=2e-5,
+        act_density_ub=0.1,
         classify_filter=False,
         prune_graph_out=str(prune_path),
         method="ilp",
@@ -166,5 +195,6 @@ def test_run_pipeline_saves_prune_graph(monkeypatch, tmp_path) -> None:
     assert saved.num_nodes == prune_graph.num_nodes
     assert saved.num_edges == prune_graph.num_edges
     assert graph.devices == ["cuda"]
+    assert filter_kwargs["features_dir"] == "downloads/features"
     assert result["prune_graph_out"] == str(prune_path)
     assert result["summary_graph_out"] == str(summary_path)

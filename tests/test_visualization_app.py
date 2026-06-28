@@ -208,6 +208,7 @@ def test_summary_request_defaults_match_graph_workflow() -> None:
     assert req.node_threshold == 0.02
     assert req.edge_threshold == 0.9
     assert req.filter_act_density is True
+    assert req.features_dir == ""
     assert req.max_layer_span == 7
     assert req.max_sn == 20
     assert req.eps_causal == 0.05
