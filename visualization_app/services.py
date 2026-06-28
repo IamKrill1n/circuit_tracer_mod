@@ -116,6 +116,44 @@ def source_set_path(root: Path, dataset: str, source_set: str = "") -> Path:
     return root / safe_dataset
 
 
+def feature_dir_for_scan(
+    scan: str,
+    *,
+    downloads_root: Path = REPO / "downloads" / "hf_features",
+) -> Path | None:
+    """Return a local feature-dashboard directory for a scan, if one is available."""
+    safe_scan = scan.strip().strip("/")
+    if not safe_scan:
+        return None
+
+    candidates: list[Path] = []
+    if safe_scan.startswith(("/", "./")):
+        candidates.extend([Path(safe_scan), Path(safe_scan) / "features"])
+
+    scan_without_revision = safe_scan.split("@", 1)[0]
+    candidates.extend(
+        [
+            downloads_root / Path(safe_scan) / "features",
+            downloads_root / Path(safe_scan),
+            downloads_root / Path(scan_without_revision) / "features",
+            downloads_root / Path(scan_without_revision),
+        ]
+    )
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if (resolved / "index.json.gz").is_file():
+            return resolved
+    return None
+
+
 def graph_dir(
     slug: str,
     dataset: str,
@@ -979,7 +1017,7 @@ def summary_figure_html(sng) -> str:
     prompt_tokens = [str(token) for token in (sng.metadata.get("prompt_tokens") or [])]
     fig = supernode_graph_figure(
         sng=sng,
-        title="Summarization supernode graph",
+        title="Summary visualization",
         prompt_tokens=prompt_tokens or None,
         prompt=prompt or None,
     )

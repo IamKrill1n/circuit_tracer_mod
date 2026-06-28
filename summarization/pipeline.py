@@ -299,7 +299,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             sng=sng,
             final_supernodes=supernode_map,
             attr={n.node_id: asdict(n) for n in prune_graph.nodes},
-            title="Summarization supernode graph",
+            title="Summary visualization",
         )
         out = Path(args.figure_html_out)
         out.parent.mkdir(parents=True, exist_ok=True)

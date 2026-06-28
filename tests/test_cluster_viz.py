@@ -8,6 +8,8 @@ import torch
 
 from summarization.cluster_viz import (
     _CARD_W,
+    _CARD_H,
+    _label_card_size,
     _select_edge_indices,
     _supernode_layout,
     _wrap_label,
@@ -61,7 +63,7 @@ def _summary_graph() -> SummaryGraph:
     return SummaryGraph([emb, mid, logit], pruned_adj)
 
 
-def test_logit_layout_uses_output_anchor_not_logit_ctx() -> None:
+def test_connected_logit_layout_uses_barycentric_structure_not_output_anchor() -> None:
     sng = _summary_graph()
     mapping = sng.to_mapping()
     pos, _top_y, _layer_y = _supernode_layout(
@@ -70,11 +72,15 @@ def test_logit_layout_uses_output_anchor_not_logit_ctx() -> None:
         attr=None,
         node_by_name=sng.node_by_name(),
         right_x=8.0,
+        visible_edges=[
+            ("SN_EMB_0", "SN_0", 1.0),
+            ("SN_0", "SN_LOGIT_0", 1.0),
+        ],
     )
 
-    assert pos["SN_LOGIT_0"][0] == pytest.approx(8.0)
     assert pos["SN_EMB_0"][0] == pytest.approx(0.0)
-    assert pos["SN_0"][0] == pytest.approx(4.0)
+    assert pos["SN_0"][0] == pytest.approx(0.0)
+    assert pos["SN_LOGIT_0"][0] == pytest.approx(0.0)
 
 
 def test_same_layer_supernodes_have_extra_horizontal_spacing() -> None:
@@ -90,6 +96,30 @@ def test_same_layer_supernodes_have_extra_horizontal_spacing() -> None:
     )
 
     assert pos["SN_B"][0] - pos["SN_A"][0] > _CARD_W
+
+
+def test_barycentric_layout_places_middle_node_between_embedding_anchors() -> None:
+    nodes = [
+        Supernode("SN_EMB_0", [_node("E_0", 0, "E", 0, "embedding")], "emb", -1, -1),
+        Supernode("SN_EMB_6", [_node("E_6", 1, "E", 6, "embedding")], "emb", -1, -1),
+        Supernode("SN_MID", [_node("1_0", 2, "1", 4, "sae_feature")], "features", 1, 1),
+    ]
+    sng = SummaryGraph(nodes, torch.zeros((3, 3), dtype=torch.float32))
+
+    pos, _top_y, _rank_y = _supernode_layout(
+        sng.sn_names,
+        sng.to_mapping(),
+        attr=None,
+        node_by_name=sng.node_by_name(),
+        visible_edges=[
+            ("SN_EMB_0", "SN_MID", 1.0),
+            ("SN_EMB_6", "SN_MID", 3.0),
+        ],
+    )
+
+    assert pos["SN_EMB_0"][0] == pytest.approx(0.0)
+    assert pos["SN_EMB_6"][0] == pytest.approx(6.0)
+    assert pos["SN_MID"][0] == pytest.approx(4.5)
 
 
 def test_topological_layout_orders_chain_bottom_to_top() -> None:
@@ -220,8 +250,46 @@ def test_supernode_figure_adds_edge_filter_controls() -> None:
     assert fig.layout.sliders
     assert fig.layout.updatemenus
     assert fig.layout.sliders[0].currentvalue.prefix == "Top k edges per node: "
+    assert fig.layout.sliders[0].active == 3
+    assert fig.layout.sliders[0].y < 0
+    assert fig.layout.updatemenus[0].y < 0
     button_labels = [button.label for button in fig.layout.updatemenus[0].buttons]
     assert button_labels == ["All edges", "Positive only"]
+
+
+def test_supernode_figure_initially_shows_top_three_edges_per_source() -> None:
+    emb = Supernode(
+        "SN_EMB_0",
+        [_node("E_0", 0, "E", 0, "embedding", clerp="Emb: The")],
+        "emb",
+        -1,
+        -1,
+    )
+    targets = [
+        Supernode(
+            f"SN_{idx}",
+            [_node(f"{idx}_0", idx, str(idx), idx, "sae_feature")],
+            "features",
+            idx,
+            idx,
+        )
+        for idx in range(1, 5)
+    ]
+    adj = np.zeros((5, 5), dtype=np.float64)
+    for idx, weight in enumerate([1.0, 4.0, -3.0, 2.0], start=1):
+        adj[idx, 0] = weight
+    sng = SummaryGraph([emb, *targets], torch.zeros((5, 5)), adj=adj)
+
+    fig = supernode_graph_figure(sng)
+
+    edge_traces = [
+        trace
+        for trace in fig.data
+        if getattr(trace, "hovertemplate", None) and "->" in str(trace.hovertemplate)
+    ]
+    assert len(edge_traces) == 4
+    assert sum(trace.visible is True for trace in edge_traces) == 3
+    assert sum(trace.visible is False for trace in edge_traces) == 1
 
 
 def test_duplicate_supernode_labels_do_not_create_render_self_loops() -> None:
@@ -262,6 +330,13 @@ def test_long_role_label_wraps_for_wider_card() -> None:
     assert _CARD_W > 2.0
 
 
+def test_card_height_grows_to_contain_wrapped_label() -> None:
+    width, height = _label_card_size("Abstract: Political geography", member_count=1)
+
+    assert width >= _CARD_W
+    assert height > _CARD_H
+
+
 def test_edge_paths_are_complete_within_axis_range() -> None:
     fig = supernode_graph_figure(
         _summary_graph(),
@@ -288,6 +363,64 @@ def test_edge_paths_are_complete_within_axis_range() -> None:
         assert max(ys) <= y_max
 
 
+def test_skip_edge_uses_fixed_port_orthogonal_route_under_cards() -> None:
+    emb = Supernode(
+        "SN_EMB_0",
+        [_node("E_0", 0, "E", 0, "embedding", clerp="Emb: The")],
+        "emb",
+        -1,
+        -1,
+    )
+    middle = Supernode("SN_MID", [_node("1_0", 1, "1", 0, "sae_feature")], "features", 1, 1)
+    logit = Supernode(
+        "SN_LOGIT_0",
+        [_node("27_0", 2, "27", 0, "logit", is_target_logit=True)],
+        "logit",
+        27,
+        27,
+    )
+    adj = np.zeros((3, 3), dtype=np.float64)
+    adj[1, 0] = 1.0
+    adj[2, 1] = 1.0
+    adj[2, 0] = 0.5
+    sng = SummaryGraph([emb, middle, logit], torch.zeros((3, 3)), adj=adj)
+    pos, _top_y, _rank_y = _supernode_layout(
+        sng.sn_names,
+        sng.to_mapping(),
+        attr=None,
+        node_by_name=sng.node_by_name(),
+        visible_edges=[
+            ("SN_EMB_0", "SN_MID", 1.0),
+            ("SN_MID", "SN_LOGIT_0", 1.0),
+            ("SN_EMB_0", "SN_LOGIT_0", 0.5),
+        ],
+    )
+
+    fig = supernode_graph_figure(sng)
+
+    edge_traces = [
+        trace
+        for trace in fig.data
+        if getattr(trace, "hovertemplate", None)
+        and "SN_EMB_0 -> SN_LOGIT_0" in str(trace.hovertemplate)
+    ]
+    assert len(edge_traces) == 1
+    edge_trace_index = list(fig.data).index(edge_traces[0])
+    edge_shapes = [
+        shape
+        for shape in fig.layout.shapes
+        if str(getattr(shape.line, "color", "")).startswith("#")
+    ]
+    path = str(edge_shapes[edge_trace_index].path)
+    coords = [float(raw) for raw in re.findall(r"-?\d+(?:\.\d+)?(?:e[+-]?\d+)?", path)]
+    xs = coords[0::2]
+
+    assert " L " in path
+    assert " C " not in path
+    assert xs[0] == pytest.approx(pos["SN_EMB_0"][0])
+    assert xs[-1] == pytest.approx(pos["SN_LOGIT_0"][0])
+
+
 def test_prompt_tokens_render_as_top_strip_without_old_bar_labels() -> None:
     prompt_tokens = ["<bos>", "The", "saying", "goes", ":", "ab", "uja"]
     fig = supernode_graph_figure(
@@ -303,7 +436,9 @@ def test_prompt_tokens_render_as_top_strip_without_old_bar_labels() -> None:
     assert "Outputs / Logits" not in annotation_text
 
     token_annotations = [
-        annotation for annotation in annotations if str(annotation.text) in {"<bos>", "saying", "ab"}
+        annotation
+        for annotation in annotations
+        if str(annotation.text) in {"<bos>", "saying", "ab"}
     ]
     assert len(token_annotations) == 3
     token_y = {float(annotation.y) for annotation in token_annotations}
@@ -332,6 +467,34 @@ def test_hover_text_includes_supernode_label_role_and_description() -> None:
     assert "Label: Color relation" in hover_text
     assert "Role: Abstract" in hover_text
     assert "Description: Combines object and color evidence." in hover_text
+
+
+def test_supernode_figure_html_uses_draggable_svg_renderer() -> None:
+    fig = supernode_graph_figure(_summary_graph())
+
+    page = fig.to_html(include_plotlyjs="cdn", full_html=True)
+
+    assert fig.payload["scale"] <= 60.0
+    assert "data-cluster-viz" in page
+    assert "data-svg" in page
+    assert "data-edge-panel" in page
+    assert "pointerdown" in page
+    assert "node.rankPy" in page
+    assert "selectedNodeId" in page
+    assert "stroke-dasharray" in page
+    assert "function renderEdges()" in page
+    assert "pathFromRoute" in page
+    assert "Plotly.newPlot" not in page
+
+
+def test_initial_edge_paths_are_orthogonal_not_curved() -> None:
+    fig = supernode_graph_figure(_summary_graph())
+
+    paths = [str(shape.path) for shape in fig.layout.shapes]
+
+    assert paths
+    assert all(" L " in path for path in paths)
+    assert all(" C " not in path for path in paths)
 
 
 def test_display_labels_use_node_kind_role_and_ignore_steering_overlays() -> None:

@@ -871,7 +871,7 @@ def test_summary_figure_html_renders_cluster_visualization() -> None:
 
     html = services.summary_figure_html(sng)
 
-    assert "Summarization supernode graph" in html
+    assert "Summary visualization" in html
     assert "Emb: A" in html
     assert "Abstract:" in html
     assert "Relation" in html
@@ -1101,6 +1101,50 @@ def test_summary_job_reports_progress(monkeypatch: pytest.MonkeyPatch) -> None:
     assert job["status"] == "completed"
     assert job["progress"] == 1.0
     assert job["result"] == {"ok": True}
+
+
+def test_viewer_serves_active_graph_feature_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_dir = tmp_path / "graph"
+    graph_dir.mkdir()
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    index_path = features_dir / "index.json.gz"
+    bin_path = features_dir / "layer_0.bin"
+    index_path.write_bytes(b"index")
+    bin_path.write_bytes(b"0123456789")
+
+    record = services.GraphRecord(
+        slug="austin",
+        dataset="custom",
+        source_set="",
+        directory=str(graph_dir),
+        prompt="prompt",
+        prompt_tokens=["prompt"],
+        scan="mntss/clt-test",
+        has_pt=True,
+        has_summary=False,
+        node_count=0,
+        link_count=0,
+    )
+
+    monkeypatch.setattr(services, "load_graph_record", lambda *_args, **_kwargs: record)
+    monkeypatch.setattr(services, "feature_dir_for_scan", lambda _scan: features_dir)
+    client = TestClient(app)
+
+    viewer_response = client.get("/api/graphs/custom/austin/viewer-url")
+    assert viewer_response.status_code == 200
+
+    head_response = client.head("/features/index.json.gz")
+    assert head_response.status_code == 200
+    assert head_response.headers["content-length"] == str(index_path.stat().st_size)
+
+    range_response = client.get("/features/layer_0.bin", headers={"Range": "bytes=2-5"})
+    assert range_response.status_code == 206
+    assert range_response.headers["content-range"] == "bytes 2-5/10"
+    assert range_response.content == b"2345"
 
 
 def test_preview_job_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:

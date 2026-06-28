@@ -1,19 +1,22 @@
-"""Plotly visualization helpers for clustered supernode graphs.
+"""Visualization helpers for clustered supernode graphs.
 
 Renders the supernode graph in the style of the Anthropic attribution-graph
 figure: supernodes as rounded "card" boxes (with a stacked-paper shadow for
-composites), curved green/red connectors, and a tokenized prompt strip above
-the graph.
+composites), green/red connectors routed around cards, and a tokenized prompt
+strip above the graph.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import html
+import json
 import math
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import numpy as np
-import plotly.graph_objects as go
 
 from summarization.utils import layer_index_from_node, layer_index_from_node_id
 from summarization.summarize import SummaryGraph, Supernode
@@ -24,11 +27,12 @@ _KIND_STYLE = {
     "logit": ("#EDE9DD", "#FF9800"),
     "middle": ("#EDE9DD", "#5B6B7B"),
 }
-_CARD_W = 2.35
-_CARD_H = 0.92
+_CARD_W = 2.75
+_CARD_H = 1.05
 _BAR_H = 0.52
-_MIN_CARD_X_GAP = 2.75
-_RANK_Y_GAP = 1.55
+_MIN_CARD_X_GAP = 3.45
+_RANK_Y_GAP = 2.05
+_DEFAULT_EDGE_TOP_K = 3
 _EDGE_TOP_K_VALUES = (1, 2, 3, 5, 10)
 
 
@@ -189,6 +193,16 @@ def _wrap_label(text: str, width: int = 18, max_lines: int = 5) -> str:
     return "<br>".join(lines)
 
 
+def _label_card_size(label: str, member_count: int) -> tuple[float, float]:
+    wrapped = _wrap_label(label)
+    lines = wrapped.split("<br>") if wrapped else [""]
+    max_line_chars = max(len(line) for line in lines)
+    grow = min(0.18, 0.03 * (max(member_count, 1) - 1))
+    width = max(_CARD_W + grow, min(3.30, 0.24 + 0.13 * max_line_chars))
+    height = max(_CARD_H + grow, 0.48 + 0.31 * len(lines))
+    return width, height
+
+
 def _clean_token(tok: str) -> str:
     """Make a raw tokenizer token printable (strip subword markers, show spaces)."""
     cleaned = tok.replace("Ġ", " ").replace("▁", " ").replace("\n", "\\n")
@@ -196,15 +210,18 @@ def _clean_token(tok: str) -> str:
     return cleaned if cleaned else "·"
 
 
-def _edge_style(weight: float, max_abs_w: float) -> tuple[float, str]:
-    scale = abs(weight) / max(max_abs_w, 1e-9)
-    width = 0.5 + 9.0 * scale
-    alpha = 0.15 + 0.80 * scale
+def _edge_style(weight: float, max_abs_w: float) -> tuple[float, str, float, str]:
+    linear_scale = abs(weight) / max(max_abs_w, 1e-9)
+    scale = math.log1p(9.0 * linear_scale) / math.log1p(9.0)
+    width = 0.7 + 4.8 * scale
+    alpha = 0.20 + 0.75 * scale
     if weight >= 0:
-        color = f"rgba(33,120,78,{alpha:.3f})"
+        color = "#21784e"
+        dash = ""
     else:
-        color = f"rgba(203,24,29,{alpha:.3f})"
-    return width, color
+        color = "#cb181d"
+        dash = "7 5"
+    return width, color, alpha, dash
 
 
 def _rounded_rect_path(x0: float, y0: float, x1: float, y1: float, rx: float, ry: float) -> str:
@@ -214,36 +231,6 @@ def _rounded_rect_path(x0: float, y0: float, x1: float, y1: float, rx: float, ry
         f"L {x1},{y1 - ry} Q {x1},{y1} {x1 - rx},{y1} "
         f"L {x0 + rx},{y1} Q {x0},{y1} {x0},{y1 - ry} "
         f"L {x0},{y0 + ry} Q {x0},{y0} {x0 + rx},{y0} Z"
-    )
-
-
-def _add_card(
-    fig: go.Figure,
-    cx: float,
-    cy: float,
-    w: float,
-    h: float,
-    fill: str,
-    line_color: str,
-    stacked: bool,
-) -> None:
-    rx, ry = 0.10, 0.10
-    x0, x1 = cx - w / 2, cx + w / 2
-    y0, y1 = cy - h / 2, cy + h / 2
-    if stacked:
-        # Two offset rects behind (down-right) for the stacked-paper effect.
-        for off in (0.10, 0.05):
-            fig.add_shape(
-                type="path",
-                path=_rounded_rect_path(x0 + off, y0 - off, x1 + off, y1 - off, rx, ry),
-                fillcolor="#DCD6C4",
-                line=dict(color=line_color, width=1),
-            )
-    fig.add_shape(
-        type="path",
-        path=_rounded_rect_path(x0, y0, x1, y1, rx, ry),
-        fillcolor=fill,
-        line=dict(color=line_color, width=1.6),
     )
 
 
@@ -306,6 +293,645 @@ def _edge_filter_k_values(edges: list[tuple[str, str, float]]) -> list[int | Non
     if max_outdegree > 0:
         values.append(max_outdegree)
     return values
+
+
+@dataclass
+class ClusterGraphFigure:
+    """Small HTML figure wrapper with Plotly-like serialization methods."""
+
+    payload: dict[str, Any]
+
+    @property
+    def nodes(self) -> list[dict[str, Any]]:
+        return cast(list[dict[str, Any]], self.payload["nodes"])
+
+    @property
+    def edges(self) -> list[dict[str, Any]]:
+        return cast(list[dict[str, Any]], self.payload["edges"])
+
+    @property
+    def data(self) -> tuple[SimpleNamespace, ...]:
+        selected = set(self.payload["initialEdgeIndices"])
+        edge_traces = [
+            SimpleNamespace(
+                hovertemplate=f"{edge['source']} -> {edge['target']}<br>weight={edge['weight']:.4f}<extra></extra>",
+                visible=edge["index"] in selected,
+            )
+            for edge in self.edges
+        ]
+        hover_trace = SimpleNamespace(
+            hovertext=[node["hover"].replace("\n", "<br>") for node in self.nodes]
+        )
+        return (*edge_traces, hover_trace)
+
+    @property
+    def layout(self) -> SimpleNamespace:
+        selected = set(self.payload["initialEdgeIndices"])
+        edge_shapes = [
+            SimpleNamespace(
+                path=edge["initialPath"],
+                line=SimpleNamespace(
+                    color=edge["color"],
+                    width=edge["width"],
+                    dash=edge["dash"],
+                ),
+            )
+            for edge in self.edges
+            if edge["index"] in selected
+        ]
+        annotations = [
+            SimpleNamespace(text=line, x=node["x"], y=node["y"])
+            for node in self.nodes
+            for line in ["<br>".join(node["labelLines"])]
+        ]
+        annotations.extend(
+            SimpleNamespace(text=token["text"], x=token["x"], y=token["y"])
+            for token in self.payload["promptTokens"]
+        )
+        top_k_values = self.payload["topKValues"]
+        active = top_k_values.index(self.payload["defaultTopK"])
+        slider = SimpleNamespace(
+            currentvalue=SimpleNamespace(prefix="Top k edges per node: "),
+            active=active,
+            y=-0.12,
+        )
+        buttons = [
+            SimpleNamespace(label="All edges"),
+            SimpleNamespace(label="Positive only"),
+        ]
+        updatemenu = SimpleNamespace(buttons=buttons, y=-0.16)
+        return SimpleNamespace(
+            shapes=tuple(edge_shapes),
+            annotations=tuple(annotations),
+            xaxis=SimpleNamespace(range=tuple(self.payload["xRange"])),
+            yaxis=SimpleNamespace(range=tuple(self.payload["yRange"])),
+            sliders=(slider,),
+            updatemenus=(updatemenu,),
+        )
+
+    def to_html(
+        self,
+        include_plotlyjs: str | bool | None = None,
+        full_html: bool = True,
+        config: dict[str, Any] | None = None,
+    ) -> str:
+        _ = (include_plotlyjs, config)
+        return _cluster_graph_html(self.payload, full_html=full_html)
+
+    def write_html(
+        self,
+        file: str | Path,
+        include_plotlyjs: str | bool | None = None,
+        full_html: bool = True,
+        config: dict[str, Any] | None = None,
+    ) -> None:
+        Path(file).write_text(
+            self.to_html(include_plotlyjs=include_plotlyjs, full_html=full_html, config=config),
+            encoding="utf-8",
+        )
+
+
+def _cluster_graph_html(payload: dict[str, Any], *, full_html: bool) -> str:
+    payload_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+    title = html.escape(str(payload.get("title", "Cluster graph")))
+    fragment = """
+<div class="ct-cluster-viz" data-cluster-viz>
+  <div class="ct-cluster-toolbar">
+    <strong class="ct-cluster-title"></strong>
+    <label>
+      Top k edges per node
+      <select data-top-k></select>
+    </label>
+    <label>
+      <input type="checkbox" data-positive-only />
+      Positive only
+    </label>
+    <button type="button" data-reset-layout>Reset layout</button>
+  </div>
+  <div class="ct-cluster-canvas" data-canvas>
+    <svg data-svg role="img" aria-label="Summary graph"></svg>
+  </div>
+  <div class="ct-edge-panel" data-edge-panel hidden></div>
+</div>
+<script>
+(function () {
+  const graphData = __DATA__;
+  const root = document.currentScript.previousElementSibling;
+  const title = root.querySelector(".ct-cluster-title");
+  const topKSelect = root.querySelector("[data-top-k]");
+  const positiveOnly = root.querySelector("[data-positive-only]");
+  const resetButton = root.querySelector("[data-reset-layout]");
+  const edgePanel = root.querySelector("[data-edge-panel]");
+  const svg = root.querySelector("[data-svg]");
+  const scale = graphData.scale;
+  const margin = graphData.margin;
+  const nodeById = new Map();
+  const nodeElements = new Map();
+  let renderedEdges = [];
+  let hoverNodeId = null;
+  let selectedNodeId = null;
+  let dragState = null;
+  let suppressNextClick = false;
+
+  title.textContent = graphData.title;
+  graphData.nodes.forEach((node) => {
+    node.autoPx = margin.left + (node.x - graphData.xRange[0]) * scale;
+    node.rankPy = margin.top + (graphData.yRange[1] - node.y) * scale;
+    node.userOffsetPx = 0;
+    node.px = node.autoPx;
+    node.py = node.rankPy;
+    node.widthPx = Math.max(148, node.width * scale);
+    node.heightPx = Math.max(58, node.height * scale);
+    nodeById.set(node.id, node);
+  });
+
+  svg.setAttribute("viewBox", `0 0 ${graphData.canvasWidth} ${graphData.canvasHeight}`);
+  svg.style.width = "100%";
+  svg.style.height = "100%";
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+
+  const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+  const edgeLayer = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  const tokenLayer = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  const nodeLayer = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  edgeLayer.setAttribute("class", "edge-layer");
+  tokenLayer.setAttribute("class", "token-layer");
+  nodeLayer.setAttribute("class", "node-layer");
+  svg.append(defs, edgeLayer, tokenLayer, nodeLayer);
+
+  function svgEl(tag, attrs = {}) {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, String(value)));
+    return el;
+  }
+
+  function edgeRoute(edge) {
+    const source = nodeById.get(edge.source);
+    const target = nodeById.get(edge.target);
+    const start = { x: source.px, y: source.py - source.heightPx / 2 };
+    const end = { x: target.px, y: target.py + target.heightPx / 2 };
+    const midY = (start.y + end.y) / 2;
+    if (Math.abs(start.x - end.x) < 1e-9) {
+      return [start, end];
+    }
+    return [start, { x: start.x, y: midY }, { x: end.x, y: midY }, end];
+  }
+
+  function pathFromRoute(route) {
+    const [head, ...tail] = route;
+    return [
+      `M ${head.x.toFixed(1)} ${head.y.toFixed(1)}`,
+      ...tail.map((point) => `L ${point.x.toFixed(1)} ${point.y.toFixed(1)}`),
+    ].join(" ");
+  }
+
+  function svgPoint(event) {
+    const point = svg.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) {
+      return { x: event.clientX, y: event.clientY };
+    }
+    const transformed = point.matrixTransform(ctm.inverse());
+    return { x: transformed.x, y: transformed.y };
+  }
+
+  function visibleEdgeIndices() {
+    const topK = topKSelect.value === "all" ? null : Number(topKSelect.value);
+    const positive = positiveOnly.checked;
+    const bySource = new Map();
+    graphData.edges.forEach((edge, idx) => {
+      if (positive && edge.weight <= 0) {
+        return;
+      }
+      if (!bySource.has(edge.source)) {
+        bySource.set(edge.source, []);
+      }
+      bySource.get(edge.source).push({ idx, edge });
+    });
+    const visible = new Set();
+    bySource.forEach((items) => {
+      items.sort((a, b) => Math.abs(b.edge.weight) - Math.abs(a.edge.weight) || a.edge.target.localeCompare(b.edge.target));
+      const kept = topK === null ? items : items.slice(0, topK);
+      kept.forEach((item) => visible.add(item.idx));
+    });
+    return visible;
+  }
+
+  function localNeighborhood(nodeId) {
+    const nodes = new Set([nodeId]);
+    const edges = new Set();
+    graphData.edges.forEach((edge) => {
+      if (edge.source === nodeId || edge.target === nodeId) {
+        nodes.add(edge.source);
+        nodes.add(edge.target);
+        edges.add(edge.index);
+      }
+    });
+    return { nodes, edges };
+  }
+
+  function activeNodeId() {
+    return selectedNodeId || hoverNodeId;
+  }
+
+  function updateEdgePanel() {
+    if (!selectedNodeId) {
+      edgePanel.hidden = true;
+      edgePanel.replaceChildren();
+      return;
+    }
+    const visible = visibleEdgeIndices();
+    const rows = graphData.edges
+      .filter((edge) => visible.has(edge.index))
+      .filter((edge) => edge.source === selectedNodeId || edge.target === selectedNodeId)
+      .sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight) || a.source.localeCompare(b.source));
+    const title = document.createElement("strong");
+    title.textContent = selectedNodeId;
+    const list = document.createElement("ul");
+    rows.forEach((edge) => {
+      const item = document.createElement("li");
+      item.textContent = `${edge.source} -> ${edge.target}: ${edge.weight.toFixed(4)}`;
+      list.appendChild(item);
+    });
+    edgePanel.replaceChildren(title, list);
+    edgePanel.hidden = false;
+  }
+
+  function applyHighlight() {
+    const nodeId = activeNodeId();
+    const neighborhood = nodeId ? localNeighborhood(nodeId) : null;
+    nodeElements.forEach((group, id) => {
+      group.classList.toggle("is-dimmed", Boolean(neighborhood) && !neighborhood.nodes.has(id));
+      group.classList.toggle("is-active", id === nodeId);
+      group.classList.toggle(
+        "is-neighbor",
+        Boolean(neighborhood) && id !== nodeId && neighborhood.nodes.has(id),
+      );
+    });
+    renderedEdges.forEach(({ edge, path }) => {
+      const highlighted = Boolean(neighborhood) && neighborhood.edges.has(edge.index);
+      path.classList.toggle("is-dimmed", Boolean(neighborhood) && !highlighted);
+      path.classList.toggle("is-highlighted", highlighted);
+      path.classList.toggle("is-selected", Boolean(selectedNodeId) && highlighted);
+      path.setAttribute("stroke-width", String(Boolean(selectedNodeId) && highlighted ? edge.width + 1.2 : edge.width));
+      if (highlighted) {
+        edgeLayer.appendChild(path);
+      }
+    });
+  }
+
+  function renderEdges() {
+    edgeLayer.replaceChildren();
+    defs.replaceChildren();
+    renderedEdges = [];
+    const visible = visibleEdgeIndices();
+    graphData.edges.forEach((edge, idx) => {
+      if (!visible.has(idx)) {
+        return;
+      }
+      const marker = svgEl("marker", {
+        id: `arrow-${idx}`,
+        viewBox: "0 0 10 10",
+        refX: "9",
+        refY: "5",
+        markerWidth: "7",
+        markerHeight: "7",
+        orient: "auto-start-reverse",
+      });
+      marker.appendChild(svgEl("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: edge.color }));
+      defs.appendChild(marker);
+
+      const route = edgeRoute(edge);
+      const path = svgEl("path", {
+        class: "ct-edge",
+        d: pathFromRoute(route),
+        stroke: edge.color,
+        "stroke-width": edge.width,
+        "stroke-opacity": edge.opacity,
+        "stroke-dasharray": edge.dash,
+        "marker-end": `url(#arrow-${idx})`,
+      });
+      path.dataset.edgeIndex = String(edge.index);
+      const title = svgEl("title");
+      title.textContent = `${edge.source} -> ${edge.target}\\nweight=${edge.weight.toFixed(4)}`;
+      path.appendChild(title);
+      edgeLayer.appendChild(path);
+      renderedEdges.push({ edge, path });
+    });
+    applyHighlight();
+    updateEdgePanel();
+  }
+
+  function renderTokens() {
+    tokenLayer.replaceChildren();
+    graphData.promptTokens.forEach((token) => {
+      const x = margin.left + (token.x - graphData.xRange[0]) * scale;
+      const y = margin.top + (graphData.yRange[1] - token.y) * scale;
+      const w = 0.9 * scale;
+      const h = graphData.tokenHeight * scale;
+      const group = svgEl("g");
+      group.appendChild(svgEl("rect", {
+        x: x - w / 2,
+        y: y - h / 2,
+        width: w,
+        height: h,
+        rx: 6,
+        fill: token.highlight ? "#D8D2BF" : "#F4F2EB",
+        stroke: "#B9B29A",
+      }));
+      const text = svgEl("text", {
+        x,
+        y: y + 4,
+        "text-anchor": "middle",
+        class: "ct-token-label",
+      });
+      text.textContent = token.text;
+      group.appendChild(text);
+      tokenLayer.appendChild(group);
+    });
+  }
+
+  function renderNodes() {
+    nodeLayer.replaceChildren();
+    nodeElements.clear();
+    graphData.nodes.forEach((node) => {
+      const group = svgEl("g", { class: "ct-node", tabindex: "0" });
+      group.dataset.nodeId = node.id;
+      group.style.cursor = "grab";
+      if (node.stacked) {
+        [10, 5].forEach((offset) => {
+          group.appendChild(svgEl("rect", {
+            x: node.px - node.widthPx / 2 + offset,
+            y: node.py - node.heightPx / 2 + offset,
+            width: node.widthPx,
+            height: node.heightPx,
+            rx: 9,
+            fill: "#DCD6C4",
+            stroke: node.border,
+          }));
+        });
+      }
+      group.appendChild(svgEl("rect", {
+        x: node.px - node.widthPx / 2,
+        y: node.py - node.heightPx / 2,
+        width: node.widthPx,
+        height: node.heightPx,
+        rx: 9,
+        fill: node.fill,
+        stroke: node.border,
+        "stroke-width": 1.6,
+      }));
+      const text = svgEl("text", {
+        x: node.px,
+        y: node.py - ((node.labelLines.length - 1) * 7),
+        "text-anchor": "middle",
+        class: "ct-node-label",
+      });
+      node.labelLines.forEach((line, idx) => {
+        const tspan = svgEl("tspan", {
+          x: node.px,
+          dy: idx === 0 ? 0 : 15,
+        });
+        tspan.textContent = line;
+        text.appendChild(tspan);
+      });
+      const title = svgEl("title");
+      title.textContent = node.hover;
+      group.append(text, title);
+      group.addEventListener("pointerdown", (event) => {
+        const point = svgPoint(event);
+        dragState = {
+          node,
+          startX: point.x,
+          px: node.px,
+          moved: false,
+        };
+        group.setPointerCapture(event.pointerId);
+        group.style.cursor = "grabbing";
+      });
+      group.addEventListener("pointerup", (event) => {
+        if (dragState) {
+          suppressNextClick = dragState.moved;
+          group.releasePointerCapture(event.pointerId);
+        }
+        dragState = null;
+        group.style.cursor = "grab";
+      });
+      group.addEventListener("mouseenter", () => {
+        hoverNodeId = node.id;
+        applyHighlight();
+      });
+      group.addEventListener("mouseleave", () => {
+        if (hoverNodeId === node.id) {
+          hoverNodeId = null;
+          applyHighlight();
+        }
+      });
+      group.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (suppressNextClick) {
+          suppressNextClick = false;
+          return;
+        }
+        selectedNodeId = node.id;
+        updateEdgePanel();
+        applyHighlight();
+      });
+      nodeElements.set(node.id, group);
+      nodeLayer.appendChild(group);
+    });
+    applyHighlight();
+  }
+
+  function rerenderGraph() {
+    renderEdges();
+    renderNodes();
+  }
+
+  svg.addEventListener("pointermove", (event) => {
+    if (!dragState) {
+      return;
+    }
+    const point = svgPoint(event);
+    const dx = point.x - dragState.startX;
+    dragState.moved = dragState.moved || Math.abs(dx) > 3;
+    dragState.node.userOffsetPx = dragState.px - dragState.node.autoPx + dx;
+    dragState.node.px = dragState.node.autoPx + dragState.node.userOffsetPx;
+    dragState.node.py = dragState.node.rankPy;
+    rerenderGraph();
+  });
+
+  graphData.topKValues.forEach((value) => {
+    const option = document.createElement("option");
+    option.value = value === null ? "all" : String(value);
+    option.textContent = value === null ? "all" : String(value);
+    if (value === graphData.defaultTopK) {
+      option.selected = true;
+    }
+    topKSelect.appendChild(option);
+  });
+  topKSelect.addEventListener("change", renderEdges);
+  positiveOnly.addEventListener("change", renderEdges);
+  resetButton.addEventListener("click", () => {
+    graphData.nodes.forEach((node) => {
+      node.userOffsetPx = 0;
+      node.px = node.autoPx;
+      node.py = node.rankPy;
+    });
+    rerenderGraph();
+  });
+  svg.addEventListener("click", (event) => {
+    if (event.target !== svg) {
+      return;
+    }
+    selectedNodeId = null;
+    updateEdgePanel();
+    applyHighlight();
+  });
+
+  renderTokens();
+  rerenderGraph();
+})();
+</script>
+"""
+    fragment = fragment.replace("__DATA__", payload_json)
+    styles = """
+<style>
+  html,
+  body {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+  }
+  .ct-cluster-viz {
+    color: #1f2933;
+    display: grid;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    height: 100vh;
+    min-height: 0;
+  }
+  .ct-cluster-toolbar {
+    align-items: center;
+    background: #ffffff;
+    border-bottom: 1px solid #d9dee7;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 12px 14px;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+  }
+  .ct-cluster-title {
+    font-size: 15px;
+    margin-right: auto;
+  }
+  .ct-cluster-toolbar label {
+    align-items: center;
+    display: inline-flex;
+    font-size: 12px;
+    gap: 6px;
+  }
+  .ct-cluster-toolbar select,
+  .ct-cluster-toolbar button {
+    background: #ffffff;
+    border: 1px solid #bac2cf;
+    border-radius: 6px;
+    color: #243044;
+    font: inherit;
+    padding: 5px 8px;
+  }
+  .ct-cluster-canvas {
+    background: #ffffff;
+    min-height: 0;
+    overflow: auto;
+  }
+  .ct-cluster-canvas svg {
+    display: block;
+    height: 100%;
+    width: 100%;
+  }
+  .edge-layer {
+    z-index: 1;
+  }
+  .node-layer {
+    z-index: 2;
+  }
+  .ct-edge {
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: opacity 120ms ease, stroke-opacity 120ms ease, stroke-width 120ms ease;
+  }
+  .ct-edge.is-dimmed {
+    opacity: 0.12;
+  }
+  .ct-edge.is-highlighted {
+    stroke-opacity: 0.95;
+  }
+  .ct-node {
+    touch-action: none;
+    transition: opacity 120ms ease;
+    user-select: none;
+  }
+  .ct-node.is-dimmed {
+    opacity: 0.24;
+  }
+  .ct-node.is-active > rect:last-of-type {
+    stroke-width: 2.6;
+  }
+  .ct-node.is-neighbor > rect:last-of-type {
+    stroke-width: 2.1;
+  }
+  .ct-node-label {
+    fill: #1a1a1a;
+    font-size: 12px;
+    pointer-events: none;
+  }
+  .ct-token-label {
+    fill: #333333;
+    font-size: 11px;
+    pointer-events: none;
+  }
+  .ct-edge-panel {
+    background: #ffffff;
+    border-top: 1px solid #d9dee7;
+    font-size: 12px;
+    max-height: 160px;
+    overflow: auto;
+    padding: 10px 14px;
+  }
+  .ct-edge-panel ul {
+    columns: 2 240px;
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 0;
+  }
+  .ct-edge-panel li {
+    break-inside: avoid;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    padding: 2px 0;
+  }
+</style>
+"""
+    if not full_html:
+        return styles + fragment
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title}</title>
+  {styles}
+</head>
+<body>
+  {fragment}
+</body>
+</html>
+"""
 
 
 def _unique_names(names: list[str]) -> list[str]:
@@ -381,9 +1007,7 @@ def _topological_rank_rows(
                 ready.append(target)
                 ready.sort(key=lambda sn: (depth[sn], *node_key(sn)))
 
-    non_logit_depths = [
-        rank for sn, rank in depth.items() if _sn_kind(sn, node_by_name) != "logit"
-    ]
+    non_logit_depths = [rank for sn, rank in depth.items() if _sn_kind(sn, node_by_name) != "logit"]
     if non_logit_depths:
         min_logit_depth = max(non_logit_depths) + 1
         for sn in sn_names:
@@ -396,6 +1020,128 @@ def _topological_rank_rows(
     return rows
 
 
+def _layout_sort_key(
+    sn: str,
+    mapping: dict[str, list[str]],
+    attr: dict[str, dict[str, Any]] | None,
+    node_by_name: dict[str, Supernode],
+) -> tuple[float, int, str]:
+    layer, ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
+    return (ctx_mean, layer, sn)
+
+
+def _resolve_rank_x_collisions(
+    row: list[str],
+    x_by_name: dict[str, float],
+    mapping: dict[str, list[str]],
+    attr: dict[str, dict[str, Any]] | None,
+    node_by_name: dict[str, Supernode],
+) -> None:
+    if len(row) <= 1:
+        return
+
+    ordered = sorted(
+        row, key=lambda sn: (x_by_name[sn], *_layout_sort_key(sn, mapping, attr, node_by_name))
+    )
+    desired_mean = sum(x_by_name[sn] for sn in ordered) / len(ordered)
+
+    adjusted: dict[str, float] = {}
+    last_x: float | None = None
+    for sn in ordered:
+        x = x_by_name[sn]
+        if last_x is not None and x - last_x < _MIN_CARD_X_GAP:
+            x = last_x + _MIN_CARD_X_GAP
+        adjusted[sn] = x
+        last_x = x
+
+    adjusted_mean = sum(adjusted.values()) / len(adjusted)
+    shift = desired_mean - adjusted_mean
+    for sn, x in adjusted.items():
+        x_by_name[sn] = x + shift
+
+
+def _barycentric_x_layout(
+    rows: dict[int, list[str]],
+    edges: list[tuple[str, str, float]],
+    mapping: dict[str, list[str]],
+    attr: dict[str, dict[str, Any]] | None,
+    node_by_name: dict[str, Supernode],
+    right_x: float | None,
+) -> dict[str, float]:
+    sn_names = [sn for rank in sorted(rows) for sn in rows[rank]]
+    name_set = set(sn_names)
+    predecessors: dict[str, list[tuple[str, float]]] = {sn: [] for sn in sn_names}
+    successors: dict[str, list[tuple[str, float]]] = {sn: [] for sn in sn_names}
+    for source, target, weight in edges:
+        if source not in name_set or target not in name_set or source == target:
+            continue
+        abs_weight = abs(float(weight))
+        if abs_weight == 0.0:
+            continue
+        successors[source].append((target, abs_weight))
+        predecessors[target].append((source, abs_weight))
+
+    emb_x: list[float] = []
+    for sn in sn_names:
+        if _sn_kind(sn, node_by_name) != "emb":
+            continue
+        _layer, ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
+        emb_x.append(float(ctx_mean))
+    fallback_center = (
+        float(np.mean(emb_x)) if emb_x else float(right_x if right_x is not None else 0.0)
+    )
+
+    x_by_name: dict[str, float] = {}
+    for rank in sorted(rows):
+        ordered = sorted(
+            rows[rank], key=lambda sn: _layout_sort_key(sn, mapping, attr, node_by_name)
+        )
+        for idx, sn in enumerate(ordered):
+            _layer, ctx_mean = _layer_and_ctx_for_supernode(
+                sn, mapping.get(sn, []), attr, node_by_name
+            )
+            if _sn_kind(sn, node_by_name) == "emb":
+                x_by_name[sn] = float(ctx_mean)
+            elif (
+                _sn_kind(sn, node_by_name) == "logit"
+                and right_x is not None
+                and not predecessors[sn]
+                and not successors[sn]
+            ):
+                x_by_name[sn] = float(right_x)
+            else:
+                row_offset = (idx - (len(ordered) - 1) / 2) * _MIN_CARD_X_GAP
+                x_by_name[sn] = fallback_center + row_offset
+
+    ordered_ranks = sorted(rows)
+
+    def update_node(sn: str) -> None:
+        if _sn_kind(sn, node_by_name) == "emb":
+            return
+        weighted_sum = 0.0
+        total_weight = 0.0
+        for neighbor, weight in predecessors[sn]:
+            weighted_sum += weight * x_by_name[neighbor]
+            total_weight += weight
+        for neighbor, weight in successors[sn]:
+            weighted_sum += weight * x_by_name[neighbor]
+            total_weight += weight
+        if total_weight > 0.0:
+            x_by_name[sn] = weighted_sum / total_weight
+
+    for _sweep in range(8):
+        for rank in ordered_ranks:
+            for sn in sorted(rows[rank], key=lambda name: x_by_name[name]):
+                update_node(sn)
+        for rank in reversed(ordered_ranks):
+            for sn in sorted(rows[rank], key=lambda name: x_by_name[name]):
+                update_node(sn)
+
+    for rank in ordered_ranks:
+        _resolve_rank_x_collisions(rows[rank], x_by_name, mapping, attr, node_by_name)
+    return x_by_name
+
+
 def _supernode_layout(
     sn_names: list[str],
     mapping: dict[str, list[str]],
@@ -404,175 +1150,66 @@ def _supernode_layout(
     right_x: float | None = None,
     visible_edges: list[tuple[str, str, float]] | None = None,
 ) -> tuple[dict[str, tuple[float, float]], float, dict[int, float]]:
-    """x = token position (ctx mean); y = topological rank below the prompt strip."""
+    """Barycentric x layout with embedding nodes anchored to token position."""
     rows = _topological_rank_rows(sn_names, visible_edges or [], mapping, attr, node_by_name)
-    non_logit_ctx: list[float] = []
-    for sn in sn_names:
-        if _sn_kind(sn, node_by_name) == "logit":
-            continue
-        _layer, ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
-        non_logit_ctx.append(ctx_mean)
-
-    logit_x = right_x
-    if logit_x is None:
-        logit_x = (max(non_logit_ctx) + 1.5) if non_logit_ctx else 0.0
-
     ordered_ranks = sorted(rows)
     rank_y = {rank: (rank + 1) * _RANK_Y_GAP for rank in ordered_ranks}
+    x_by_name = _barycentric_x_layout(
+        rows,
+        visible_edges or [],
+        mapping,
+        attr,
+        node_by_name,
+        right_x,
+    )
 
     pos: dict[str, tuple[float, float]] = {}
     for rank in ordered_ranks:
-        items: list[tuple[str, float, int]] = []
         for sn in rows[rank]:
-            layer, ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
-            x0 = float(logit_x) if _sn_kind(sn, node_by_name) == "logit" else ctx_mean
-            items.append((sn, x0, layer))
-        items = sorted(items, key=lambda p: (p[1], p[2], p[0]))
-        last_x: float | None = None
-        for sn, ctx, _layer in items:
-            x = float(ctx)
-            if last_x is not None and x - last_x < _MIN_CARD_X_GAP:
-                x = last_x + _MIN_CARD_X_GAP
-            last_x = x
-            pos[sn] = (x, float(rank_y[rank]))
+            pos[sn] = (x_by_name[sn], float(rank_y[rank]))
     max_rank = max(ordered_ranks, default=-1)
     top_y = (max_rank + 2) * _RANK_Y_GAP
     return pos, top_y, rank_y
 
 
-def _rect_boundary_point(
-    cx: float,
-    cy: float,
-    w: float,
-    h: float,
-    toward_x: float,
-    toward_y: float,
-) -> tuple[float, float]:
-    """Point where the center-to-target ray leaves a card rectangle."""
-    dx = toward_x - cx
-    dy = toward_y - cy
-    if dx == 0.0 and dy == 0.0:
-        return cx, cy + h / 2
-    sx = (w / 2) / abs(dx) if dx != 0.0 else math.inf
-    sy = (h / 2) / abs(dy) if dy != 0.0 else math.inf
-    scale = min(sx, sy)
-    return cx + dx * scale, cy + dy * scale
+def _dedupe_route_points(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    cleaned: list[tuple[float, float]] = []
+    for point in points:
+        if not cleaned or math.hypot(point[0] - cleaned[-1][0], point[1] - cleaned[-1][1]) > 1e-9:
+            cleaned.append(point)
+    return cleaned
 
 
-def _prompt_token_strip(
-    fig: go.Figure,
-    prompt_tokens: list[str],
-    emb_ctx: set[int],
-    y: float,
-) -> None:
-    cellw, cellh = 0.9, _BAR_H
-    for i, tok in enumerate(prompt_tokens):
-        highlight = i in emb_ctx
-        fill = "#D8D2BF" if highlight else "#F4F2EB"
-        x0, x1 = i - cellw / 2, i + cellw / 2
-        fig.add_shape(
-            type="path",
-            path=_rounded_rect_path(x0, y - cellh / 2, x1, y + cellh / 2, 0.06, 0.08),
-            fillcolor=fill,
-            line=dict(color="#B9B29A", width=1),
-        )
-        fig.add_annotation(
-            x=i,
-            y=y,
-            text=_clean_token(tok),
-            showarrow=False,
-            font=dict(size=9, color="#333"),
-        )
+def _orthogonal_path(points: list[tuple[float, float]]) -> str:
+    route = _dedupe_route_points(points)
+    head, *tail = route
+    chunks = [f"M {head[0]},{head[1]}"]
+    chunks.extend(f"L {x},{y}" for x, y in tail)
+    return " ".join(chunks)
 
 
-def _jsonify_plotly_items(items: list[Any]) -> list[dict[str, Any]]:
-    return [
-        item.to_plotly_json() if hasattr(item, "to_plotly_json") else dict(item)
-        for item in items
-    ]
+def _routed_edge_points(
+    source: str,
+    target: str,
+    geom: dict[str, tuple[float, float, float, float]],
+) -> list[tuple[float, float]]:
+    """Orthogonal source-top -> target-bottom route in graph coordinates."""
+    sx, sy, sw, sh = geom[source]
+    tx, ty, tw, th = geom[target]
+    source_port = (sx, sy + sh / 2)
+    target_port = (tx, ty - th / 2)
+    mid_y = (source_port[1] + target_port[1]) / 2
 
-
-def _edge_filter_controls(
-    *,
-    edges: list[tuple[str, str, float]],
-    edge_shapes: list[dict[str, Any]],
-    edge_annotations: list[dict[str, Any]],
-    static_shapes: list[Any],
-    static_annotations: list[Any],
-    n_traces: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    edge_count = len(edges)
-    static_shape_json = _jsonify_plotly_items(static_shapes)
-    static_annotation_json = _jsonify_plotly_items(static_annotations)
-    k_values = _edge_filter_k_values(edges)
-
-    def state(top_k: int | None, positive_only: bool) -> tuple[dict[str, Any], dict[str, Any]]:
-        selected = _select_edge_indices(edges, top_k=top_k, positive_only=positive_only)
-        visible = [idx in selected for idx in range(edge_count)]
-        visible.extend([True for _idx in range(edge_count, n_traces)])
-        layout = {
-            "shapes": [
-                *[edge_shapes[idx] for idx in sorted(selected)],
-                *static_shape_json,
-            ],
-            "annotations": [
-                *[edge_annotations[idx] for idx in sorted(selected)],
-                *static_annotation_json,
-            ],
-        }
-        return {"visible": visible}, layout
-
-    def slider(positive_only: bool, active: int = 0) -> dict[str, Any]:
-        steps = []
-        for top_k in k_values:
-            label = "all" if top_k is None else str(top_k)
-            data_update, layout_update = state(top_k, positive_only)
-            steps.append(
-                {
-                    "label": label,
-                    "method": "update",
-                    "args": [data_update, layout_update],
-                }
-            )
-        return {
-            "active": active,
-            "currentvalue": {"prefix": "Top k edges per node: "},
-            "pad": {"t": 42},
-            "x": 0.08,
-            "xanchor": "left",
-            "y": 1.04,
-            "yanchor": "top",
-            "len": 0.52,
-            "steps": steps,
-        }
-
-    all_data, all_layout = state(None, False)
-    positive_data, positive_layout = state(None, True)
-    all_layout = {**all_layout, "sliders": [slider(False)]}
-    positive_layout = {**positive_layout, "sliders": [slider(True)]}
-    updatemenus = [
-        {
-            "type": "buttons",
-            "direction": "right",
-            "x": 0.70,
-            "xanchor": "left",
-            "y": 1.08,
-            "yanchor": "top",
-            "buttons": [
-                {
-                    "label": "All edges",
-                    "method": "update",
-                    "args": [all_data, all_layout],
-                },
-                {
-                    "label": "Positive only",
-                    "method": "update",
-                    "args": [positive_data, positive_layout],
-                },
-            ],
-        }
-    ]
-    return updatemenus, [slider(False)]
+    if abs(source_port[0] - target_port[0]) < 1e-9:
+        return _dedupe_route_points([source_port, target_port])
+    return _dedupe_route_points(
+        [
+            source_port,
+            (source_port[0], mid_y),
+            (target_port[0], mid_y),
+            target_port,
+        ]
+    )
 
 
 def supernode_graph_figure(
@@ -590,10 +1227,10 @@ def supernode_graph_figure(
     activation_ratios: dict[str, float | None] | None = None,
     top_outputs: list[Any] | None = None,
     stored_interventions: list[dict[str, Any]] | None = None,
-) -> go.Figure:
+) -> ClusterGraphFigure:
     """
-    Build an interactive Plotly figure in the Anthropic attribution-graph style:
-    supernodes as rounded cards, directed edges as curved green/red arrows, and
+    Build an interactive HTML/SVG figure in the Anthropic attribution-graph style:
+    supernodes as draggable rounded cards, directed green/red arrows, and
     (when ``prompt_tokens`` is given) a tokenized prompt strip above the graph.
 
     `sng` may be a `SummaryGraph` instance or the legacy dict.
@@ -603,7 +1240,15 @@ def supernode_graph_figure(
     logit supernodes (and their edges); ``None`` shows all.
     """
     # Kept for callers that still pass the old display/steering overlay options.
-    _ = (use_supernode_names, steering_factors, activation_ratios, top_outputs, stored_interventions)
+    _ = (
+        seed,
+        prompt,
+        use_supernode_names,
+        steering_factors,
+        activation_ratios,
+        top_outputs,
+        stored_interventions,
+    )
 
     # Duck-typing rather than isinstance so this survives Streamlit hot-reload,
     # which re-imports SummaryGraph and breaks isinstance on session-state objects.
@@ -618,9 +1263,7 @@ def supernode_graph_figure(
                 sn_name: supernode.member_node_ids()
                 for sn_name, supernode in zip(sn_names, supernodes)
             }
-            node_by_name = {
-                sn_name: supernode for sn_name, supernode in zip(sn_names, supernodes)
-            }
+            node_by_name = {sn_name: supernode for sn_name, supernode in zip(sn_names, supernodes)}
         else:
             mapping = final_supernodes if final_supernodes is not None else graph.to_mapping()
             node_by_name = graph.node_by_name()
@@ -666,130 +1309,86 @@ def supernode_graph_figure(
             continue
         cx, cy = pos[sn]
         members = mapping.get(sn, [])
-        m = max(len(members), 1)
-        grow = min(0.18, 0.03 * (m - 1))
-        geom[sn] = (cx, cy, _CARD_W + grow, _CARD_H + grow)
         kind = _sn_kind(sn, node_by_name)
         kinds[sn] = kind
+        label_text = _node_label(sn, members, attr, node_by_name.get(sn))
+        card_w, card_h = _label_card_size(label_text, len(members))
+        geom[sn] = (cx, cy, card_w, card_h)
         if kind == "emb":
             emb_ctx.add(int(round(cx)))
 
-    fig = go.Figure()
-
-    # --- Curved edges (drawn first so cards sit on top) ---
-    edge_shapes: list[dict[str, Any]] = []
-    edge_annotations: list[dict[str, Any]] = []
+    # --- Edges ---
+    top_k_values = _edge_filter_k_values(rendered_edges)
+    default_top_k = _DEFAULT_EDGE_TOP_K if _DEFAULT_EDGE_TOP_K in top_k_values else None
+    initial_edge_indices = _select_edge_indices(
+        rendered_edges,
+        top_k=default_top_k,
+        positive_only=False,
+    )
+    edge_payload: list[dict[str, Any]] = []
     edge_xs: list[float] = []
     edge_ys: list[float] = []
-    for u, v, w in rendered_edges:
+    for edge_idx, (u, v, w) in enumerate(rendered_edges):
         if u not in geom or v not in geom:
             continue
-        uc, vc = geom[u], geom[v]
-        xs, ys = _rect_boundary_point(uc[0], uc[1], uc[2], uc[3], vc[0], vc[1])
-        xt, yt = _rect_boundary_point(vc[0], vc[1], vc[2], vc[3], uc[0], uc[1])
-        dx, dy = xt - xs, yt - ys
-        length = math.hypot(dx, dy) or 1.0
-        px, py = -dy / length, dx / length  # perpendicular
-        bow = 0.18 * length
-        cxm, cym = (xs + xt) / 2 + px * bow, (ys + yt) / 2 + py * bow
-        width, color = _edge_style(w, max_abs_w)
-        edge_xs.extend((xs, cxm, xt))
-        edge_ys.extend((ys, cym, yt))
-        edge_shapes.append(
+        width, color, opacity, dash = _edge_style(w, max_abs_w)
+        route = _routed_edge_points(u, v, geom)
+        if edge_idx in initial_edge_indices:
+            edge_xs.extend(x for x, _y in route)
+            edge_ys.extend(y for _x, y in route)
+        edge_payload.append(
             {
-                "type": "path",
-                "path": f"M {xs},{ys} Q {cxm},{cym} {xt},{yt}",
-                "line": {"width": width, "color": color},
-            }
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=[xs, cxm, xt],
-                y=[ys, cym, yt],
-                mode="markers",
-                marker=dict(size=16, color="rgba(0,0,0,0)"),
-                hovertemplate=f"{u} -> {v}<br>weight={w:.4f}<extra></extra>",
-                showlegend=False,
-            )
-        )
-        # Arrowhead at the target end, tangent to the incoming curve.
-        tangent_len = math.hypot(xt - cxm, yt - cym) or 1.0
-        ax = xt - (xt - cxm) / tangent_len * min(0.28, 0.18 * length)
-        ay = yt - (yt - cym) / tangent_len * min(0.28, 0.18 * length)
-        edge_annotations.append(
-            {
-                "x": xt,
-                "y": yt,
-                "ax": ax,
-                "ay": ay,
-                "xref": "x",
-                "yref": "y",
-                "axref": "x",
-                "ayref": "y",
-                "showarrow": True,
-                "arrowhead": 2,
-                "arrowsize": 1.0,
-                "arrowwidth": max(1.0, width * 0.6),
-                "arrowcolor": color,
-                "text": "",
+                "index": edge_idx,
+                "source": u,
+                "target": v,
+                "weight": w,
+                "width": width,
+                "color": color,
+                "opacity": opacity,
+                "dash": dash,
+                "initialPath": _orthogonal_path(route),
             }
         )
 
     # --- Cards + labels ---
-    hover_x: list[float] = []
-    hover_y: list[float] = []
-    hover_text: list[str] = []
+    node_payload: list[dict[str, Any]] = []
     for sn in sn_names:
         if sn not in geom:
             continue
         cx, cy, w, h = geom[sn]
         members = mapping.get(sn, [])
         fill, line_color = _KIND_STYLE.get(kinds[sn], _KIND_STYLE["middle"])
-        _add_card(fig, cx, cy, w, h, fill, line_color, stacked=len(members) > 1)
         label_text = _node_label(sn, members, attr, node_by_name.get(sn))
-        fig.add_annotation(
-            x=cx,
-            y=cy,
-            text=_wrap_label(label_text),
-            showarrow=False,
-            font=dict(size=9, color="#1a1a1a"),
-            align="center",
+        hover_title = html.unescape(_sn_title(sn, members, attr, node_by_name.get(sn)))
+        node_payload.append(
+            {
+                "id": sn,
+                "x": cx,
+                "y": cy,
+                "width": w,
+                "height": h,
+                "kind": kinds[sn],
+                "fill": fill,
+                "border": line_color,
+                "stacked": len(members) > 1,
+                "label": label_text,
+                "labelLines": _wrap_label(label_text).split("<br>"),
+                "hover": hover_title.replace("<br>", "\n"),
+            }
         )
-        hover_x.append(cx)
-        hover_y.append(cy)
-        hover_title = _sn_title(sn, members, attr, node_by_name.get(sn))
-        hover_text.append(hover_title)
-
-    # Invisible markers carry the rich hover (composite members).
-    fig.add_trace(
-        go.Scatter(
-            x=hover_x,
-            y=hover_y,
-            mode="markers",
-            marker=dict(size=18, color="rgba(0,0,0,0)"),
-            hovertext=hover_text,
-            hoverinfo="text",
-            showlegend=False,
-        )
-    )
 
     # --- Tokenized prompt strip ---
+    prompt_payload: list[dict[str, Any]] = []
     if prompt_tokens:
-        _prompt_token_strip(fig, prompt_tokens, emb_ctx, y=float(top_y))
-
-    static_shapes = list(fig.layout.shapes or [])
-    static_annotations = list(fig.layout.annotations or [])
-    updatemenus: list[dict[str, Any]] = []
-    sliders: list[dict[str, Any]] = []
-    if rendered_edges:
-        updatemenus, sliders = _edge_filter_controls(
-            edges=rendered_edges,
-            edge_shapes=edge_shapes,
-            edge_annotations=edge_annotations,
-            static_shapes=static_shapes,
-            static_annotations=static_annotations,
-            n_traces=len(fig.data),
-        )
+        prompt_payload = [
+            {
+                "x": float(i),
+                "y": float(top_y),
+                "text": _clean_token(tok),
+                "highlight": i in emb_ctx,
+            }
+            for i, tok in enumerate(prompt_tokens)
+        ]
 
     # --- Layout / ranges ---
     token_xs = [float(i) for i in range(len(prompt_tokens or []))]
@@ -803,20 +1402,25 @@ def supernode_graph_figure(
     x_max = max(xs_for_range) + 1.5
     y_min = min(ys_for_range) - 0.7
     y_max = max(ys_for_range) + 0.7
-    fig.layout.shapes = ()
-    fig.layout.annotations = ()
-    fig.update_layout(
-        title=title,
-        showlegend=False,
-        xaxis=dict(visible=False, range=[x_min, x_max]),
-        yaxis=dict(visible=False, range=[y_min, y_max]),
-        margin=dict(l=30, r=30, t=95, b=20),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        height=760,
-        shapes=[*edge_shapes, *_jsonify_plotly_items(static_shapes)],
-        annotations=[*edge_annotations, *_jsonify_plotly_items(static_annotations)],
-        updatemenus=updatemenus,
-        sliders=sliders,
+    scale = 58.0
+    margin = {"left": 72.0, "right": 72.0, "top": 72.0, "bottom": 72.0}
+    canvas_width = max(960.0, (x_max - x_min) * scale + margin["left"] + margin["right"])
+    canvas_height = max(620.0, (y_max - y_min) * scale + margin["top"] + margin["bottom"])
+    return ClusterGraphFigure(
+        {
+            "title": title,
+            "nodes": node_payload,
+            "edges": edge_payload,
+            "initialEdgeIndices": sorted(initial_edge_indices),
+            "promptTokens": prompt_payload,
+            "topKValues": top_k_values,
+            "defaultTopK": default_top_k,
+            "xRange": [x_min, x_max],
+            "yRange": [y_min, y_max],
+            "scale": scale,
+            "margin": margin,
+            "canvasWidth": canvas_width,
+            "canvasHeight": canvas_height,
+            "tokenHeight": _BAR_H,
+        }
     )
-    return fig

@@ -11,7 +11,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -123,6 +123,7 @@ _jobs: dict[str, JobRecord] = {}
 _jobs_lock = threading.Lock()
 _viewer_lock = threading.Lock()
 _viewer_dir: str | None = None
+_viewer_features_dir: str | None = None
 
 
 def _json_job(job: JobRecord) -> dict[str, Any]:
@@ -166,10 +167,11 @@ def _submit_job(
     return job
 
 
-def _set_viewer_dir(viewer_dir: Path) -> str:
-    global _viewer_dir
+def _set_viewer_dir(viewer_dir: Path, features_dir: Path | None = None) -> str:
+    global _viewer_dir, _viewer_features_dir
     with _viewer_lock:
         _viewer_dir = str(viewer_dir)
+        _viewer_features_dir = str(features_dir) if features_dir is not None else None
     return "/viewer"
 
 
@@ -181,12 +183,73 @@ def _active_viewer_dir() -> Path:
     return Path(viewer_dir)
 
 
+def _active_features_dir() -> Path:
+    with _viewer_lock:
+        features_dir = _viewer_features_dir
+    if features_dir is None:
+        raise HTTPException(status_code=404, detail="No local feature metadata is available.")
+    return Path(features_dir)
+
+
 def _viewer_file_response(base_dir: Path, relative_path: str) -> FileResponse:
     path = (base_dir / relative_path).resolve()
     base = base_dir.resolve()
     if not path.is_file() or base not in path.parents and path != base:
         raise HTTPException(status_code=404, detail="Viewer file not found.")
     return FileResponse(path)
+
+
+def _feature_path(relative_path: str) -> Path:
+    parts = Path(relative_path).parts
+    if (
+        not relative_path
+        or Path(relative_path).is_absolute()
+        or any(part in {"", ".", ".."} for part in parts)
+    ):
+        raise HTTPException(status_code=404, detail="Feature metadata not found.")
+
+    base = _active_features_dir().resolve()
+    path = (base / relative_path).resolve()
+    if not path.is_file() or base not in path.parents and path != base:
+        raise HTTPException(status_code=404, detail="Feature metadata not found.")
+    return path
+
+
+def _features_response(relative_path: str, request: Request, *, head: bool = False) -> Response:
+    path = _feature_path(relative_path)
+    file_size = path.stat().st_size
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Access-Control-Allow-Origin": "*",
+    }
+    range_header = request.headers.get("range", "")
+    start = 0
+    end = file_size - 1
+    status_code = 200
+
+    if range_header.startswith("bytes="):
+        raw_start, raw_end = range_header[6:].split("-", 1)
+        start = int(raw_start) if raw_start else 0
+        end = int(raw_end) if raw_end else file_size - 1
+        if start < 0 or end < start or start >= file_size:
+            raise HTTPException(status_code=416, detail="Invalid feature metadata byte range.")
+        end = min(end, file_size - 1)
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+        status_code = 206
+
+    length = end - start + 1
+    headers["Content-Length"] = str(length)
+    content = b""
+    if not head:
+        with path.open("rb") as f:
+            f.seek(start)
+            content = f.read(length)
+    return Response(
+        content=content,
+        status_code=status_code,
+        headers=headers,
+        media_type="application/octet-stream",
+    )
 
 
 @app.get("/viewer/data/{relative_path:path}")
@@ -203,6 +266,16 @@ def viewer_graph_data(relative_path: str) -> FileResponse:
 def viewer_static(relative_path: str = "index.html") -> FileResponse:
     path = relative_path or "index.html"
     return _viewer_file_response(VIEWER_FRONTEND_DIR, path)
+
+
+@app.head("/features/{relative_path:path}")
+def feature_metadata_head(relative_path: str, request: Request) -> Response:
+    return _features_response(relative_path, request, head=True)
+
+
+@app.get("/features/{relative_path:path}")
+def feature_metadata(relative_path: str, request: Request) -> Response:
+    return _features_response(relative_path, request)
 
 
 @app.post("/save_graph/{slug}")
@@ -450,7 +523,10 @@ def get_viewer_url(
         record = services.load_graph_record(safe_slug, safe_dataset, source_set=safe_source_set)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    base_url = _set_viewer_dir(Path(record.directory))
+    base_url = _set_viewer_dir(
+        Path(record.directory),
+        services.feature_dir_for_scan(record.scan),
+    )
 
     extra_params = None
     summary_data = None

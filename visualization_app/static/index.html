@@ -49,18 +49,19 @@
         </div>
         <div class="viewer-stack">
           <iframe id="viewerFrame" title="circuit_tracer dashboard"></iframe>
-          <section id="clusterVizPanel" class="cluster-viz-panel" hidden>
-            <div class="section-title">Cluster Visualization</div>
-            <iframe id="clusterVizFrame" title="summary cluster visualization"></iframe>
-          </section>
         </div>
       </section>
-
-      <aside class="summary-panel">
-        <div class="section-title">Summary Details</div>
-        <div id="summaryDetails" class="summary-details muted">Summary roles and descriptions appear here.</div>
-      </aside>
     </main>
+
+    <dialog id="clusterVizPanel" class="summary-viz-dialog">
+      <div class="summary-viz-shell">
+        <div class="summary-viz-header">
+          <div class="section-title">Summary Visualization</div>
+          <button id="summaryVizCloseBtn" type="button" class="secondary">Close</button>
+        </div>
+        <iframe id="clusterVizFrame" title="summary visualization"></iframe>
+      </div>
+    </dialog>
 
     <dialog id="generateDialog">
       <form method="dialog" class="modal">

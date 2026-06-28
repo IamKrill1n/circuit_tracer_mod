@@ -119,38 +119,19 @@ async function openViewer(useSummary = false) {
   );
   el("viewerFrame").src = payload.url;
   state.summary = payload.summary;
-  renderSummaryDetails(payload.summary);
   renderClusterViz(payload.summary);
-}
-
-function renderSummaryDetails(summaryPayload) {
-  const container = el("summaryDetails");
-  if (!summaryPayload?.summary?.length) {
-    container.className = "summary-details muted";
-    container.textContent = "Summary roles and descriptions appear here.";
-    return;
-  }
-
-  container.className = "summary-details";
-  container.innerHTML = "";
-  summaryPayload.summary.forEach((item) => {
-    const card = document.createElement("div");
-    card.className = "summary-card";
-    card.innerHTML = `
-      <strong>${item.name}</strong>
-      <span>${item.role || item.type}</span>
-      <div>${item.description || `${item.members.length} member node(s)`}</div>
-    `;
-    container.appendChild(card);
-  });
 }
 
 function renderClusterViz(summaryPayload) {
   const panel = el("clusterVizPanel");
   const frame = el("clusterVizFrame");
   const figureHtml = summaryPayload?.figure_html || "";
-  panel.hidden = !figureHtml;
   frame.srcdoc = figureHtml;
+  if (!figureHtml) {
+    if (panel.open) panel.close();
+    return;
+  }
+  if (!panel.open) panel.showModal();
 }
 
 function updateProgress(progressEl, textEl, progress) {
@@ -607,6 +588,10 @@ el("summaryBtn").addEventListener("click", () => {
 });
 el("sumThetaMode").addEventListener("change", syncThetaModeInputs);
 el("showSummaryBtn").addEventListener("click", () => openViewer(true));
+el("summaryVizCloseBtn").addEventListener("click", () => {
+  const panel = el("clusterVizPanel");
+  if (panel.open) panel.close();
+});
 el("steerBtn").addEventListener("click", openSteeringDialog);
 el("showRawBtn").addEventListener("click", () => openViewer(false));
 el("steerAllBtn").addEventListener("click", () => setAllSteeringNodes(true));

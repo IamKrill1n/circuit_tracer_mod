@@ -75,23 +75,21 @@ button.secondary {
 
 .layout {
   display: grid;
-  grid-template-columns: 300px minmax(520px, 1fr) 320px;
+  grid-template-columns: 300px minmax(0, 1fr);
   gap: 16px;
   padding: 16px;
   height: calc(100vh - 82px);
 }
 
 .sidebar,
-.viewer-panel,
-.summary-panel {
+.viewer-panel {
   min-height: 0;
   background: #ffffff;
   border: 1px solid #d8e0ea;
   border-radius: 8px;
 }
 
-.sidebar,
-.summary-panel {
+.sidebar {
   padding: 14px;
   overflow: auto;
 }
@@ -162,47 +160,46 @@ iframe {
   min-height: 0;
   overflow: auto;
   display: grid;
-  grid-template-rows: minmax(520px, 1fr) auto;
+  grid-template-rows: minmax(520px, 1fr);
 }
 
-.cluster-viz-panel {
-  border-top: 1px solid #d8e0ea;
-  padding: 12px;
+.summary-viz-dialog {
+  width: 100vw;
+  max-width: none;
+  height: 100vh;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
 }
 
-.cluster-viz-panel[hidden] {
-  display: none;
+.summary-viz-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100vh;
+  min-height: 0;
+  background: #ffffff;
+}
+
+.summary-viz-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #d8e0ea;
+}
+
+.summary-viz-header .section-title {
+  margin-bottom: 0;
 }
 
 #clusterVizFrame {
-  min-height: 820px;
-  border: 1px solid #d8e0ea;
-  border-radius: 7px;
-}
-
-.summary-details {
-  display: grid;
-  gap: 10px;
-}
-
-.summary-card {
-  border: 1px solid #d8e0ea;
-  border-radius: 7px;
-  padding: 10px;
-}
-
-.summary-card strong {
-  display: block;
-  margin-bottom: 4px;
-  overflow-wrap: anywhere;
-}
-
-.summary-card span {
-  display: inline-block;
-  margin-bottom: 6px;
-  color: #047857;
-  font-size: 12px;
-  font-weight: 700;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
 }
 
 dialog {
@@ -520,10 +517,6 @@ progress {
 @media (max-width: 1180px) {
   .layout {
     grid-template-columns: 280px 1fr;
-  }
-
-  .summary-panel {
-    display: none;
   }
 }
 
