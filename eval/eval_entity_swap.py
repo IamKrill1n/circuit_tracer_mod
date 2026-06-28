@@ -659,8 +659,18 @@ def _write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
 
 
 def run_entity_swap(model: ReplacementModel, args: argparse.Namespace) -> None:
+    mode = getattr(args, "mode", "full")
+    if mode not in ("full", "suppress", "inject"):
+        raise ValueError(f"--mode must be one of full/suppress/inject, got {mode!r}")
     source_factors = _parse_coefficients(args.negation_coefficients)
     donor_factors = _parse_coefficients(args.addition_coefficients)
+    # suppress-only / inject-only disable one half of the swap. Collapse the disabled side's
+    # factor list to a single 0.0 so it neither multiplies rows nor contributes interventions,
+    # and is recorded as 0.0 in the source_factor / donor_factor columns.
+    if mode == "suppress":
+        donor_factors = [0.0]
+    elif mode == "inject":
+        source_factors = [0.0]
     relations = _parse_relations(args.relations)
     records = [r for r in _load_graph_records(Path(args.graph_dir), Path(args.analogies_file))]
     layers_below = int(args.layers_below)
@@ -734,16 +744,24 @@ def run_entity_swap(model: ReplacementModel, args: argparse.Namespace) -> None:
 
                 donor_target_token = _decode_token(model, donor.target_id)
                 for source_factor in source_factors:
-                    source_interventions = _source_interventions(
-                        source.output_clt_nodes,
-                        clean_activations,
-                        source_factor,
+                    source_interventions = (
+                        _source_interventions(
+                            source.output_clt_nodes,
+                            clean_activations,
+                            source_factor,
+                        )
+                        if mode in ("full", "suppress")
+                        else []
                     )
                     for donor_factor in donor_factors:
-                        donor_interventions = _donor_interventions(
-                            donor.donor_features,
-                            source.last_pos,
-                            donor_factor,
+                        donor_interventions = (
+                            _donor_interventions(
+                                donor.donor_features,
+                                source.last_pos,
+                                donor_factor,
+                            )
+                            if mode in ("full", "inject")
+                            else []
                         )
                         interventions = _combine_interventions(
                             source_interventions, donor_interventions
@@ -811,6 +829,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--analogies-file", type=Path, default=Path("bats_analogies.txt"))
     parser.add_argument("--negation-coefficients", default="-2")
     parser.add_argument("--addition-coefficients", default="2,4,8")
+    parser.add_argument(
+        "--mode",
+        default="full",
+        choices=["full", "suppress", "inject"],
+        help="full: suppress source + inject donor; suppress: source only; inject: donor only.",
+    )
     parser.add_argument(
         "--relations",
         default=None,
