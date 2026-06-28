@@ -11,6 +11,7 @@ Per-graph metrics (cosine uses cos(x, y) = xᵀy / (|x| |y| + ε), ε = 1e-12):
   3. Signed down gap ↑ same, on the downstream role vᵒᵘᵗ
   4. C_causal ↓      fraction of retained edge mass hidden inside a feature supernode
   5. DAG loss ↓        backward-edge mass fraction Rσ over the aggregated superedges A
+  6. External loss ↓   non-internal mass lost from pruned graph to final summary DAG
 
 rᵢ = [vᵢᵒᵘᵗ ; vᵢⁱⁿ] is the full signed role vector from ``compute_phi_vectors``: the
 first half is the downstream (sender) role, the second the upstream (receiver) role.
@@ -93,6 +94,7 @@ SUMMARY_COLUMNS = [
     "signed_down_gap",
     "C_causal",
     "dag_loss",
+    "external_loss",
     "L_atom",
     "raw_superedge_mass",
     "final_superedge_mass",
@@ -104,7 +106,7 @@ SUMMARY_COLUMNS = [
     "result_path",
 ]
 
-# Recommended final-table columns (means across graphs); the headline 5 metrics + L_atom.
+# Recommended final-table columns (means across graphs); headline metrics + L_atom.
 MEAN_COLUMNS = [
     "method",
     "n_graphs",
@@ -113,6 +115,7 @@ MEAN_COLUMNS = [
     "signed_down_gap",
     "C_causal",
     "dag_loss",
+    "external_loss",
     "L_atom",
 ]
 
@@ -262,6 +265,18 @@ def compute_dag_loss(sng: SummaryGraph) -> float:
             if A[t, s] != 0.0 and rank[s] > rank[t]:  # source ranks later → backward edge
                 backward_mag += abs(float(A[t, s]))
     return backward_mag / (total_mag + EPS)
+
+
+def compute_external_loss(sng: SummaryGraph, c_causal: float | None = None) -> float:
+    """Additive non-internal mass loss: 1 − final_retained_mass_fraction − C_causal."""
+    if c_causal is None:
+        c_causal = compute_C_causal(sng)
+    total_fine_edge_mass = float(np.abs(sng.pruned_adj.detach().cpu().numpy()).sum())
+    if total_fine_edge_mass <= EPS:
+        return 0.0
+    final_superedge_mass = float(np.abs(sng.adj_matrix).sum())
+    total_loss = 1.0 - final_superedge_mass / total_fine_edge_mass
+    return max(total_loss - c_causal, 0.0)
 
 
 def compute_edge_mass_metrics(sng: SummaryGraph) -> dict[str, float | int]:
@@ -634,6 +649,7 @@ def _evaluate_partition(
     gaps = compute_role_gaps(role_vectors_middle, labels, random_state=random_state)
     c_causal = compute_C_causal(sng)
     dag_loss = compute_dag_loss(sng)
+    external_loss = compute_external_loss(sng, c_causal)
     edge_mass = compute_edge_mass_metrics(sng)
     l_atom = compute_atomicity_loss(cos_middle, labels, theta_resolved)
 
@@ -641,6 +657,7 @@ def _evaluate_partition(
         **gaps,
         "C_causal": float(c_causal),
         "dag_loss": float(dag_loss),
+        "external_loss": float(external_loss),
         "L_atom": float(l_atom),
         "matched_k": matched_k,
         "n_supernodes": int(len(rows)),
@@ -842,6 +859,7 @@ def _mean_table(summary_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "signed_down_gap",
         "C_causal",
         "dag_loss",
+        "external_loss",
         "L_atom",
     ]
     by_method: dict[str, list[dict[str, Any]]] = {}
@@ -940,6 +958,10 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                     "(lower better)"
                 ),
                 "dag_loss": "backward-edge mass fraction Rσ over aggregated superedges (lower better)",
+                "external_loss": (
+                    "non-internal mass lost from pruned graph to final summary DAG "
+                    "(lower better)"
+                ),
                 "L_atom": "atomicity diagnostic Σ_same (θ − cos(r_i,r_j))",
             },
             "protocol": (
