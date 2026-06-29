@@ -7,10 +7,10 @@ from api import get_feature_dashboard
 
 @dataclass
 class FeatureInfo:
-    act_density: float          # = FeatureDashboard.activation_frequency (Neuronpedia frac_nonzero)
-    top_logits: list[str]       # = FeatureDashboard.top_logits (Neuronpedia pos_str)
-    contexts: list[str]         # top activation contexts, activating span(s) wrapped in <<>>
-    top_tokens: list[str]       # peak-activating token per top example
+    act_density: float  # = FeatureDashboard.activation_frequency (Neuronpedia frac_nonzero)
+    top_logits: list[str]  # = FeatureDashboard.top_logits (Neuronpedia pos_str)
+    contexts: list[str]  # top activation contexts, activating span(s) wrapped in <<>>
+    top_tokens: list[str]  # peak-activating token per top example
     top_next_tokens: list[str]  # token following the peak (may be "")
 
 

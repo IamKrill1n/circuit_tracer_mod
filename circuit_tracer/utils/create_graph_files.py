@@ -157,6 +157,7 @@ def build_model(graph: Graph, used_nodes, used_edges, slug, scan, node_threshold
 
     return full_model
 
+
 def create_graph_files(
     graph_or_path: Graph | str,
     slug: str,

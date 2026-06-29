@@ -123,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="ilp",
         help=(
             "Clustering method. 'ilp' is the canonical package stage; spectral and "
-            "agglomerative are eval-owned legacy baselines."
+            "agglomerative are legacy baselines."
         ),
     )
     parser.add_argument("--target-k", type=int, default=7)

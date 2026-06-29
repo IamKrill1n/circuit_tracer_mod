@@ -59,7 +59,7 @@ def _parse_bin_payload(raw: bytes) -> bytes:
     # First 4 bytes = little-endian payload length; rest is zlib/gzip-deflated JSON.
     # Mirrors the 'bin' branch of getFile() in circuit_tracer/frontend/assets/util.js
     data_len = int.from_bytes(raw[:4], "little")
-    payload = raw[4:4 + data_len]
+    payload = raw[4 : 4 + data_len]
     return zlib.decompress(payload, wbits=zlib.MAX_WBITS | 32)  # auto-detect zlib/gzip
 
 
@@ -74,7 +74,9 @@ def _get_hf_index(scan: str) -> list | dict | None:
     if scan not in _HF_INDEX_CACHE:
         resp = requests.get(_hf_features_url(scan, "index.json.gz"), timeout=30)
         if resp.status_code == 200:
-            _HF_INDEX_CACHE[scan] = json.loads(zlib.decompress(resp.content, wbits=zlib.MAX_WBITS | 32))
+            _HF_INDEX_CACHE[scan] = json.loads(
+                zlib.decompress(resp.content, wbits=zlib.MAX_WBITS | 32)
+            )
         else:
             _HF_INDEX_CACHE[scan] = None
     return _HF_INDEX_CACHE[scan]
@@ -162,33 +164,30 @@ def generate_autointerp(
     layer: str,
     index: int,
     explanationModelName: str = "gemini-2.5-flash",
-    explanationType: str = "oai_token-act-pair"
+    explanationType: str = "oai_token-act-pair",
 ) -> tuple[int, str]:
     """Generate auto-interpretation for a feature.
-    
+
     Args:
         modelId: Model identifier
         layer: Layer identifier
         index: Feature index
         explanationModelName: Model to use for explanation generation
         explanationType: Type of explanation to generate
-        
+
     Returns:
         Tuple of (status_code, response_body)
     """
     url = f"{BASE_URL}/api/explanation/generate"
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": NEURONPEDIA_API_KEY
-    }
+    headers = {"Content-Type": "application/json", "x-api-key": NEURONPEDIA_API_KEY}
     payload = {
         "modelId": modelId,
         "layer": layer,
         "index": index,
         "explanationType": explanationType,
-        "explanationModelName": explanationModelName
+        "explanationModelName": explanationModelName,
     }
-    
+
     resp = requests.post(url, headers=headers, json=payload, timeout=60)
     return resp.status_code, resp.text
 
@@ -202,10 +201,10 @@ def generate_graph(
     edgeThreshold: float = 1,
     maxFeatureNodes: int = 10000,
     maxNLogits: int = 15,
-    nodeThreshold: float = 1
+    nodeThreshold: float = 1,
 ) -> tuple[int, str]:
     """Generate an attribution graph via the Neuronpedia API.
-    
+
     Args:
         modelId: Model identifier (e.g., "gemma-2-2b")
         prompt: Input text prompt
@@ -216,7 +215,7 @@ def generate_graph(
         maxFeatureNodes: Maximum number of feature nodes
         maxNLogits: Maximum number of logits
         nodeThreshold: Node importance threshold
-        
+
     Returns:
         Tuple of (status_code, response_body)
     """
@@ -231,9 +230,9 @@ def generate_graph(
         "edgeThreshold": edgeThreshold,
         "maxFeatureNodes": maxFeatureNodes,
         "maxNLogits": maxNLogits,
-        "nodeThreshold": nodeThreshold
+        "nodeThreshold": nodeThreshold,
     }
-    
+
     resp = requests.post(url, headers=headers, json=payload, timeout=120)
     return resp.status_code, resp.text
 
@@ -266,10 +265,7 @@ def save_subgraph(
         Tuple of (status_code, response_body)
     """
     url = f"{BASE_URL}/api/graph/subgraph/save"
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": NEURONPEDIA_API_KEY
-    }
+    headers = {"Content-Type": "application/json", "x-api-key": NEURONPEDIA_API_KEY}
     print(headers)
     payload = {
         "modelId": modelId,
@@ -388,7 +384,6 @@ if __name__ == "__main__":
     # print(f"Status: {status}")
     # print(data)
 
-
     # Example: generate graph (uncomment to use)
     # status, data = generate_graph(
     #     modelId="gemma-2-2b",
@@ -425,7 +420,7 @@ if __name__ == "__main__":
     #     ],
     #     pruningThreshold=0.8,
     #     densityThreshold=0.99,
-        
+
     # )
     # print(f"Status: {status}")
     # print(data)

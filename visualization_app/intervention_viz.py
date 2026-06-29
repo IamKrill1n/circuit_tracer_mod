@@ -283,10 +283,7 @@ def _format_factor(factor: float) -> str:
 
 def _layout_width(nodes: list[list[InterventionNode]]) -> int:
     max_row_width = max(
-        (
-            len(row) * _NODE_WIDTH + max(0, len(row) - 1) * _COL_GAP
-            for row in nodes
-        ),
+        (len(row) * _NODE_WIDTH + max(0, len(row) - 1) * _COL_GAP for row in nodes),
         default=_GRAPH_WIDTH,
     )
     return max(_GRAPH_WIDTH, max_row_width)

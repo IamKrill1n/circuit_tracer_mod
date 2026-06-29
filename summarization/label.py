@@ -2,8 +2,8 @@
 
 Public entry point: ``label_supernodes(sng, model_name, settings=, scheme=)``. Routing,
 credentials, and per-model default settings come from a JSON registry (``llm_models.json``,
-overridable via ``LLM_MODELS_PATH``); see docs/adr/0002. Provenance (prompt, target token,
-scan, prompt_tokens) rides on ``SummaryGraph.metadata`` (docs/adr/0001).
+overridable via ``LLM_MODELS_PATH``). Provenance (prompt, target token, scan, prompt_tokens)
+rides on ``SummaryGraph.metadata``.
 """
 
 from __future__ import annotations
@@ -660,8 +660,8 @@ if __name__ == "__main__":
     # Demo: load a saved SummaryGraph and write the one-pass whole-graph user message to disk.
     from summarization.prune import load_prune_graph
 
-    SUMMARY_PATH = "summary/analogies_clt_hp_entmax_alpha_0.50_node_0.02_ilp_max_sn_7.pt"
-    PRUNE_PATH = "eval_outputs/analogies/clt-hp/entmax/alpha_0.50/node_0.02/000_prune_graph.pt"
+    SUMMARY_PATH = "summary/example.sng.pt"
+    PRUNE_PATH = "generated_graphs/example_prune_graph.pt"
     OUTPUT_PATH = Path("debug/one_pass_user_message.txt")
 
     sng = SummaryGraph.load(SUMMARY_PATH)

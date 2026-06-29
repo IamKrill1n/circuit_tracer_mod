@@ -339,15 +339,15 @@ def list_graphs(
         if not dataset_dir.is_dir():
             continue
         json_paths = sorted(
-            path
-            for path in dataset_dir.rglob("*.json")
-            if path.name != "graph-metadata.json"
+            path for path in dataset_dir.rglob("*.json") if path.name != "graph-metadata.json"
         )
         for graph_path in json_paths:
             directory = graph_path.parent
             slug = slugify(graph_path.stem)
             legacy_dir = dataset_dir / slug
-            source_set = "" if directory == legacy_dir else directory.relative_to(dataset_dir).as_posix()
+            source_set = (
+                "" if directory == legacy_dir else directory.relative_to(dataset_dir).as_posix()
+            )
 
             try:
                 payload = _read_graph_json(graph_path)
@@ -628,7 +628,7 @@ def _token_weights_from_shap(
     entmax_alpha: float | None,
     device: str,
 ) -> list[float]:
-    from eval.prune_graphs import _token_weights_for_embeddings
+    from summarization.shap_weights import token_weights_for_embeddings
     from summarization.token_attribution import get_token_attribution
     from summarization.utils import _build_index_sets
 
@@ -651,7 +651,7 @@ def _token_weights_from_shap(
     )
     emb_idx = _build_index_sets(ag.nodes)["embedding"]
     node_ids = [n.node_id for n in ag.nodes]
-    return _token_weights_for_embeddings(normalized.detach().cpu(), node_ids, emb_idx)
+    return token_weights_for_embeddings(normalized.detach().cpu(), node_ids, emb_idx)
 
 
 def _token_weights_from_shap_file(
@@ -661,22 +661,22 @@ def _token_weights_from_shap_file(
     normalize_method: str,
     entmax_alpha: float | None,
 ) -> list[float]:
-    from eval.prune_graphs import (
-        _build_shap_lookup,
-        _match_shap_row,
-        _token_weights_for_embeddings,
+    from summarization.shap_weights import (
+        build_shap_lookup,
+        match_shap_row,
         normalize_shap_values_for_prune,
+        token_weights_for_embeddings,
     )
     from summarization.utils import _build_index_sets
 
     payload = json.loads(shap_json_path.read_text(encoding="utf-8"))
-    by_prompt, by_index = _build_shap_lookup(payload)
+    by_prompt, by_index = build_shap_lookup(payload)
     metadata = ag.metadata
     prompt_tokens = [str(t) for t in (metadata.get("prompt_tokens") or [])]
     if not prompt_tokens:
         raise ValueError("Graph metadata lacks prompt_tokens for SHAP file.")
 
-    row = _match_shap_row(stem="", metadata=metadata, by_prompt=by_prompt, by_index=by_index)
+    row = match_shap_row(stem="", metadata=metadata, by_prompt=by_prompt, by_index=by_index)
     if row is None:
         raise ValueError(
             f"No matching SHAP row in {shap_json_path} for prompt {metadata.get('prompt')!r}"
@@ -699,7 +699,7 @@ def _token_weights_from_shap_file(
 
     emb_idx = _build_index_sets(ag.nodes)["embedding"]
     node_ids = [n.node_id for n in ag.nodes]
-    return _token_weights_for_embeddings(normalized, node_ids, emb_idx)
+    return token_weights_for_embeddings(normalized, node_ids, emb_idx)
 
 
 def run_summary(
@@ -732,9 +732,7 @@ def run_summary(
         custom_pt_root=custom_pt_root,
     )
     if pt_path is None:
-        raise FileNotFoundError(
-            f"No .pt file exists for graph {safe_dataset}/{safe_slug!r}"
-        )
+        raise FileNotFoundError(f"No .pt file exists for graph {safe_dataset}/{safe_slug!r}")
 
     def setting(name: str, default: Any) -> Any:
         value = settings.get(name, default)
@@ -1190,7 +1188,9 @@ def rebuild_supernode_storage(
     )
     path_infos: list[tuple[Path, str, str, str]] = []
     for path in legacy_paths:
-        path_infos.append((path, validate_dataset(path.parent.name), "", _summary_slug_from_path(path)))
+        path_infos.append(
+            (path, validate_dataset(path.parent.name), "", _summary_slug_from_path(path))
+        )
     for path in source_paths:
         source_info = _source_summary_info_from_path(path, summary_graph_root)
         if source_info is not None:
@@ -1430,10 +1430,12 @@ def steering_options(
         summary_graph_root=summary_graph_root,
     )
     if not summary_file.exists():
-        graph_name = f"{safe_dataset}/{safe_source_set}/{safe_slug}" if safe_source_set else f"{safe_dataset}/{safe_slug}"
-        raise FileNotFoundError(
-            f"Summary has not been generated for graph {graph_name!r}."
+        graph_name = (
+            f"{safe_dataset}/{safe_source_set}/{safe_slug}"
+            if safe_source_set
+            else f"{safe_dataset}/{safe_slug}"
         )
+        raise FileNotFoundError(f"Summary has not been generated for graph {graph_name!r}.")
 
     sng = SummaryGraph.load(str(summary_file))
     prompt = str(sng.metadata.get("prompt", "") or record.prompt or "")

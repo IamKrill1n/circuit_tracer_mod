@@ -1,8 +1,0 @@
----
-name: unicode-math
-keep-coding-instructions: true
----
-
-Never use LaTeX math syntax in chat or terminal output. Always use Unicode
-math symbols (∑ ∫ √ θ α → ∞ x² xᵢ). LaTeX is only permitted inside
-the paper/ directory.

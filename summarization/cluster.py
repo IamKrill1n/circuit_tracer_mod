@@ -653,12 +653,12 @@ def cluster(
     """Stage 2: cluster a ``PruneGraph`` into typed ``Supernode`` rows.
 
     ``summarization.cluster`` is the canonical ILP clustering stage. Legacy
-    spectral/agglomerative baselines live in ``eval.legacy_cluster_baselines``.
+    spectral/agglomerative baselines live in ``summarization.cluster_baselines``.
     """
     if method != "ilp":
         raise ValueError(
             "summarization.cluster only supports method='ilp'. "
-            "Use eval.legacy_cluster_baselines for spectral/agglomerative baselines."
+            "Use summarization.cluster_baselines for spectral/agglomerative baselines."
         )
     clusters = cluster_graph_ilp(
         prune_graph,

@@ -18,8 +18,8 @@ from typing import Any, Callable
 import numpy as np
 
 from api import save_subgraph
-from eval.legacy_cluster_baselines import cluster as legacy_cluster
-from eval.legacy_cluster_baselines import find_best_k
+from summarization.cluster_baselines import cluster as legacy_cluster
+from summarization.cluster_baselines import find_best_k
 from summarization.attr_graph import AttrGraph
 from summarization.cluster import DEFAULT_THETA, cluster
 from summarization.cluster_viz import supernode_graph_figure
@@ -221,7 +221,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         out.parent.mkdir(parents=True, exist_ok=True)
         save_prune_graph(prune_graph, str(out))
 
-    # Stage 2: cluster (ILP canonical; legacy baselines remain eval-owned).
+    # Stage 2: cluster (ILP canonical; spectral/agglomerative remain legacy baselines).
     _report_progress(args, "Clustering supernodes", 0.62)
     sweep: dict[int, dict[str, Any]] = {}
     if args.method == "ilp":

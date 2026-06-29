@@ -10,6 +10,7 @@ from summarization.summarize import Node
 from summarization.utils import get_data_from_json
 from circuit_tracer.graph import Graph
 
+
 @dataclass
 class AttrGraph:
     """
