@@ -34,23 +34,16 @@ than the tested clustering baselines, as measured by lower internalized edge mas
 and lower DAG loss, while still maintaining coherent role-vector clusters. The
 intervention experiments further validate the final summaries. Entity-swap steering
 shows that Output supernodes often contain answer-specific information that can be
-suppressed or transferred across prompts. Edge-response steering shows that the
-signed edges of the summary graph predict the direction and relative strength of
-measured downstream responses. Together, these results suggest that the proposed
+suppressed or transferred across prompts. Together, these results suggest that the proposed
 pipeline compresses attribution graphs while preserving important parts of their
 causal structure.
 
 The approach nevertheless has several limitations. First, the relevance score uses
 SHAP values as a proxy for input-token importance. Although this helps suppress
-uninformative prompt tokens in practice, the thesis does not provide a theoretical
-argument that SHAP-based token relevance should align with human rationales or
-with the causal structure of the attribution graph. Second, the experiments are
-limited in scale. They focus mainly on analogy and multi-hop reasoning prompts
+uninformative prompt tokens in practice, SHAP is a non-linear attribution method and it is not clear how it can transfer to the linear attribution graphs. Second, the experiments are
+limited in scale. Therefore, the thesis only uses SHAP to approximate human rationales and not for evaluations. They focus mainly on analogy and multi-hop reasoning prompts
 for one circuit-tracing backbone, and do not test longer prompts, larger models, or
-a broader range of behaviors. Third, the quality of the generated supernode labels
-is not evaluated systematically. The labels are useful for inspection, but the thesis
-does not yet measure whether they accurately predict the behavior of member
-features or whether different annotators would agree with them. Fourth, there is no
+a broader range of behaviors. Third, there is no
 established end-to-end baseline for summarizing CLT attribution graphs. The thesis
 therefore compares against stage-level baselines such as influence-only pruning and
 classical clustering methods, but it cannot yet compare against a mature competing
@@ -73,40 +66,23 @@ jailbreak susceptibility, and unfaithful reasoning traces.
 
 Future work should strengthen both the summarization method and its evaluation.
 A first direction is to replace the current SHAP-based relevance proxy with a
-relevance measure defined directly on the attribution graph. Such a measure would
-express upstream and downstream importance within the same linear framework and
-could better align the pruning objective with the causal semantics of the graph.
+relevance measure that align better with the attribution graph. Such a measure would
+express upstream and downstream importance within the same linear framework, while approximate human rationales closely.
 
 A second direction is to evaluate the pipeline on a broader set of models, prompts,
 and tasks. The present experiments focus on controlled analogy and multi-hop
 reasoning settings. Future evaluations should include longer prompts, tasks with
-multiple competing answers, prompts involving attention-heavy mechanisms, and
+multiple competing answers,  and
 models with different sizes or replacement-model quality. This would clarify which
 parts of the pipeline are robust and which depend on the structure of the current
 experimental setting.
 
-A third direction is to improve the evaluation of supernode labels. One possibility
-is to test whether a label predicts the behavior of the member features on held-out
-contexts. Another is to use interventions: if a supernode is labeled as representing
-an answer-selection mechanism, then suppressing or injecting it should have the
-corresponding effect on the model's output. Human evaluation could also be used
-to measure whether the summary graph is genuinely easier to understand than the
-original pruned attribution graph.
-
-A fourth direction is to develop stronger end-to-end baselines. Since no standard
+A third direction is to develop stronger end-to-end baselines. Since no standard
 method currently exists for CLT attribution-graph summarization, future work
 could compare against expert-written summaries, adapted neuron-circuit clustering
 methods, ADAG-style attribution-profile clustering, or ablations of the proposed
 pipeline. Such comparisons would make it easier to separate the contribution of
 each stage from the contribution of the complete pipeline.
 
-Finally, future work should improve the scalability of the clustering stage. The ILP
-formulation makes the objective explicit, but it may become expensive for larger
-graphs. Greedy approximations, continuous relaxations, or hierarchical clustering
-methods with explicit causal-preservation constraints could allow the same
-principles to scale to larger attribution graphs. Combined with better label
-validation and broader intervention tests, these extensions would move automated
-attribution-graph summarization closer to a practical tool for mechanistic
-interpretability.
-
+Finally, future work should use the proposed pipeline to study the biology of language models, investigate failure modes, and build more reliable evidence about model behavior.
 \end{document}
