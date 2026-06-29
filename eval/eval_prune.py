@@ -431,6 +431,20 @@ def compute_clt_graph_completeness_combined(
     return float((c_back * c_fwd) ** 0.5)
 
 
+def count_irrelevant_ctx_features(
+    prune_graph: PruneGraph,
+    irrelevant_ctx_idx: set[int],
+) -> tuple[int, int]:
+    """(# kept CLT features at irrelevant token positions, # kept CLT features).
+
+    ``irrelevant_ctx_idx`` is in the graph ``prompt_tokens`` index space, which
+    matches ``Node.ctx_idx`` directly (see eval/label_analogy_tokens.py).
+    """
+    feat = [nd for nd in prune_graph.nodes if nd.feature_type == "cross layer transcoder"]
+    n_irrelevant = sum(1 for nd in feat if int(nd.ctx_idx) in irrelevant_ctx_idx)
+    return n_irrelevant, len(feat)
+
+
 def influence_relevance_agreement(prune_graph: PruneGraph) -> float | None:
     if prune_graph.node_influence is None or prune_graph.node_relevance is None:
         return None
@@ -462,6 +476,7 @@ def _evaluate_record(
     skip_pruning_divergence: bool,
     skip_influence_relevance_agreement: bool,
     skip_clt_scores: bool,
+    irrelevant_ctx_labels: dict[str, set[int]] | None,
 ) -> dict[str, float | None]:
     metrics: dict[str, float | None] = {
         "relevance_conservation_rate": None,
@@ -470,6 +485,9 @@ def _evaluate_record(
         "influence_relevance_agreement": None,
         "replacement_score": None,
         "completeness_score": None,
+        "n_feature_nodes": None,
+        "n_irrelevant_ctx_features": None,
+        "frac_irrelevant_ctx_features": None,
         "n_nodes": None,
         "n_edges": None,
     }
@@ -538,6 +556,16 @@ def _evaluate_record(
 
     if not skip_influence_relevance_agreement:
         metrics["influence_relevance_agreement"] = influence_relevance_agreement(prune_graph)
+
+    if irrelevant_ctx_labels is not None:
+        stem = str(rec["graph_stem"])
+        irrelevant = irrelevant_ctx_labels.get(stem)
+        if irrelevant is None:
+            raise KeyError(f"no irrelevant_ctx_idx labels for graph_stem {stem!r}")
+        n_irrelevant, n_feat = count_irrelevant_ctx_features(prune_graph, irrelevant)
+        metrics["n_feature_nodes"] = n_feat
+        metrics["n_irrelevant_ctx_features"] = n_irrelevant
+        metrics["frac_irrelevant_ctx_features"] = (n_irrelevant / n_feat) if n_feat > 0 else 0.0
 
     return metrics
 
@@ -621,6 +649,16 @@ def plot_pareto_frontier(
     return out_path
 
 
+def _load_irrelevant_ctx_labels(path: Path) -> dict[str, set[int]]:
+    """graph_stem -> set of irrelevant ctx_idx, from analogy_token_labels.json."""
+    with path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    return {
+        stem: {int(i) for i in entry.get("irrelevant_ctx_idx", [])}
+        for stem, entry in (payload.get("entries") or {}).items()
+    }
+
+
 def _write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -647,6 +685,16 @@ def run_eval(args: argparse.Namespace) -> None:
     output_root = Path(args.output_root) if args.output_root else manifest_path.parent / "eval"
     output_root.mkdir(parents=True, exist_ok=True)
 
+    irrelevant_ctx_labels: dict[str, set[int]] | None = None
+    if not args.skip_irrelevant_ctx:
+        labels_path = Path(args.token_labels)
+        if not labels_path.exists():
+            raise FileNotFoundError(
+                f"token labels file not found: {labels_path} "
+                "(pass --skip-irrelevant-ctx to disable the irrelevant-ctx-feature metric)."
+            )
+        irrelevant_ctx_labels = _load_irrelevant_ctx_labels(labels_path)
+
     cache = GraphCache(device=args.device)
     rows_out: list[dict[str, Any]] = []
     failures: list[str] = []
@@ -665,6 +713,7 @@ def run_eval(args: argparse.Namespace) -> None:
                 skip_pruning_divergence=args.skip_pruning_divergence,
                 skip_influence_relevance_agreement=args.skip_influence_relevance_agreement,
                 skip_clt_scores=args.skip_clt_scores,
+                irrelevant_ctx_labels=irrelevant_ctx_labels,
             )
             row = {**rec, **metrics}
             rows_out.append(row)
@@ -677,6 +726,7 @@ def run_eval(args: argparse.Namespace) -> None:
                     f"ira={metrics['influence_relevance_agreement']} "
                     f"rep={metrics['replacement_score']} "
                     f"comp={metrics['completeness_score']} "
+                    f"irr_ctx={metrics['n_irrelevant_ctx_features']}/{metrics['n_feature_nodes']} "
                     f"n={metrics['n_nodes']} e={metrics['n_edges']}"
                 )
         except Exception as exc:
@@ -706,6 +756,8 @@ def run_eval(args: argparse.Namespace) -> None:
         "skip_pruning_divergence": args.skip_pruning_divergence,
         "skip_influence_relevance_agreement": args.skip_influence_relevance_agreement,
         "skip_clt_scores": args.skip_clt_scores,
+        "skip_irrelevant_ctx": args.skip_irrelevant_ctx,
+        "token_labels": None if args.skip_irrelevant_ctx else str(Path(args.token_labels)),
         "n_records_processed": len(rows_out),
         "n_failures": len(failures),
         "results_json": str(eval_results_path),
@@ -779,6 +831,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-clt-scores",
         action="store_true",
         help="Skip CLT-style replacement_score and completeness_score.",
+    )
+    parser.add_argument(
+        "--token-labels",
+        default="dataset/analogies/analogy_token_labels.json",
+        help=(
+            "Path to analogy_token_labels.json providing per-graph "
+            "irrelevant_ctx_idx (keyed by graph_stem)."
+        ),
+    )
+    parser.add_argument(
+        "--skip-irrelevant-ctx",
+        action="store_true",
+        help="Skip counting kept feature nodes at irrelevant token positions.",
     )
     parser.add_argument(
         "--plot",

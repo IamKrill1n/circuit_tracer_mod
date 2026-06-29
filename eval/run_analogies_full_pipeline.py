@@ -245,6 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--labeled-root", default="labeled_summary")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--skip-label", action="store_true", help="Skip the LLM labeling stage.")
     return parser
 
 
@@ -356,7 +357,7 @@ def main() -> None:
                 )
                 _save_stage_rows(summary_root, "summary", cluster_rows)
 
-                if _should_label(stem):
+                if not args.skip_label and _should_label(stem):
                     stage = "label"
                     labelled, label_info = _label_one(summary_graph=sng, output_path=label_path)
                     label_rows.append(

@@ -1,10 +1,17 @@
 """Batch-label stored SummaryGraph files with an LLM.
 
-Example:
+Example (separate labeled dir, <stem>_summary_graph.pt layout):
     conda run -n circuit python -u eval/label_summary_graphs.py \
       --summary-dir summary_graphs/entmax/alpha_0.50/node_0.02 \
       --labeled-dir labeled_summary/entmax/alpha_0.50/node_0.02 \
       --resume
+
+Example (in-place <stem>.pt layout, skipping the first 10 already-labeled graphs):
+    conda run -n circuit python -u eval/label_summary_graphs.py \
+      --summary-dir summary_graphs/analogies/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02 \
+      --glob '*.pt' --in-place --skip 10 \
+      --system-prompt-path summarization/prompts/label_graph_no_trash.txt \
+      --thinking-effort low
 """
 
 from __future__ import annotations
@@ -39,8 +46,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
     parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
     parser.add_argument("--graph-timeout-seconds", type=int, default=DEFAULT_GRAPH_TIMEOUT_SECONDS)
+    parser.add_argument("--glob", default="*_summary_graph.pt")
+    parser.add_argument("--in-place", action="store_true", default=False)
+    parser.add_argument("--system-prompt-path", default=None)
+    parser.add_argument("--thinking-effort", choices=["low", "medium", "high"], default=None)
     parser.add_argument("--resume", action="store_true", default=False)
     parser.add_argument("--overwrite", action="store_true", default=False)
+    parser.add_argument("--skip", type=int, default=0)  # skip the first N sorted graphs
     parser.add_argument("--limit", type=int, default=None)
     return parser.parse_args()
 
@@ -77,9 +89,8 @@ def _manifest_root(labeled_dir: Path, explicit_root: Path | None) -> Path:
 def _stem_from_summary_path(path: Path) -> str:
     suffix = "_summary_graph"
     stem = path.stem
-    if not stem.endswith(suffix):
-        raise ValueError(f"Unexpected summary filename: {path.name}")
-    return stem[: -len(suffix)]
+    # In-place layouts name graphs <stem>.pt; the older pipeline used <stem>_summary_graph.pt.
+    return stem[: -len(suffix)] if stem.endswith(suffix) else stem
 
 
 def _load_manifest(path: Path) -> list[dict[str, Any]]:
@@ -135,14 +146,17 @@ def _save_manifest(root: Path, rows: list[dict[str, Any]]) -> None:
 def main() -> None:
     args = _parse_args()
     summary_dir = args.summary_dir
-    labeled_dir = args.labeled_dir
+    # In-place labeling overwrites each source .pt, so the manifest lives beside the graphs.
+    labeled_dir = summary_dir if args.in_place else args.labeled_dir
     manifest_root = _manifest_root(labeled_dir, args.manifest_root)
 
-    summary_paths = sorted(summary_dir.glob("*_summary_graph.pt"))
+    summary_paths = sorted(summary_dir.glob(args.glob))
+    if args.skip:
+        summary_paths = summary_paths[args.skip :]
     if args.limit is not None:
         summary_paths = summary_paths[: args.limit]
     if not summary_paths:
-        raise SystemExit(f"No *_summary_graph.pt files found in {summary_dir}")
+        raise SystemExit(f"No {args.glob} files found in {summary_dir}")
 
     from summarization.label import LabelScheme, ModelSettings, label_supernodes
     from summarization.summarize import SummaryGraph
@@ -151,10 +165,14 @@ def main() -> None:
     rows = _load_manifest(manifest_path)
     labeled_dir.mkdir(parents=True, exist_ok=True)
 
+    scheme = LabelScheme(scheme="one_pass", system_prompt_path=args.system_prompt_path)
+    # No --thinking-effort -> fall back to the registry default (original behavior).
+    settings = ModelSettings(temperature=args.temperature, thinking_effort=args.thinking_effort)
+
     ok = skipped = errors = 0
     for i, summary_path in enumerate(summary_paths, start=1):
         stem = _stem_from_summary_path(summary_path)
-        output_path = labeled_dir / f"{stem}_labeled_summary_graph.pt"
+        output_path = summary_path if args.in_place else labeled_dir / f"{stem}_labeled_summary_graph.pt"
         base = {
             "graph_file": f"{stem}.pt",
             "graph_stem": stem,
@@ -168,7 +186,8 @@ def main() -> None:
         print(f"[{i}/{len(summary_paths)}] {stem}", flush=True)
 
         try:
-            if output_path.exists() and (args.resume or not args.overwrite):
+            # In-place overwrites the source, so "exists" can't mean "already labeled" — use --skip.
+            if not args.in_place and output_path.exists() and (args.resume or not args.overwrite):
                 sng = SummaryGraph.load(str(output_path))
                 labelled_count = sum(1 for sn in sng.supernodes if sn.role or sn.description)
                 row = {
@@ -187,8 +206,8 @@ def main() -> None:
                 labelled = label_supernodes(
                     sng,
                     args.model_name,
-                    settings=ModelSettings(temperature=args.temperature, thinking_effort=None),
-                    scheme=LabelScheme(scheme="one_pass"),
+                    settings=settings,
+                    scheme=scheme,
                 )
             labelled_count = sum(1 for sn in labelled.supernodes if sn.role or sn.description)
             labelled.save(str(output_path))

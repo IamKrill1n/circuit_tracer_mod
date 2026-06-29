@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from summarization.summarize import Node, SummaryGraph, Supernode
 from visualization_app import services
+from visualization_app.intervention_viz import create_intervention_svg
 from visualization_app.server import app
 
 
@@ -355,6 +356,78 @@ def test_steering_options_reads_feature_supernodes(tmp_path: Path) -> None:
             "feature_count": 1,
         }
     ]
+
+
+def test_intervention_svg_renders_factor_activation_and_outputs() -> None:
+    sng = SummaryGraph(
+        [
+            Supernode(
+                "Muted SN",
+                [_node("0_1_0", 0)],
+                "features",
+                0,
+                0,
+            )
+        ],
+        torch.zeros((1, 1)),
+    )
+
+    svg = create_intervention_svg(
+        sng,
+        prompt="the sky is",
+        steering_factors={"Muted SN": -1.0},
+        activation_ratios={"Muted SN": 0.20},
+        top_outputs=[{"token": " blue", "probability": 0.42}],
+        stored_interventions=[],
+        edge_threshold=0.1,
+    )
+
+    assert "Muted SN" in svg
+    assert "-1x" in svg
+    assert "20%" in svg
+    assert "#f0f0f0" in svg
+    assert "the sky is" in svg
+    assert "blue" in svg
+    assert "42%" in svg
+
+
+def test_intervention_svg_renders_stored_replacement_node() -> None:
+    sng = SummaryGraph(
+        [
+            Supernode(
+                "Recipient SN",
+                [_node("0_1_0", 0)],
+                "features",
+                0,
+                0,
+            )
+        ],
+        torch.zeros((1, 1)),
+    )
+
+    svg = create_intervention_svg(
+        sng,
+        prompt="recipient prompt",
+        steering_factors={},
+        activation_ratios={"Recipient SN": 1.0},
+        top_outputs=[],
+        stored_interventions=[
+            {
+                "record_id": "custom:donor:0",
+                "label": "Stored color",
+                "factor": 2.0,
+                "target_pos": 0,
+                "layer": 0,
+                "n_features": 3,
+            }
+        ],
+        edge_threshold=0.1,
+    )
+
+    assert "Recipient SN" in svg
+    assert "Stored color" in svg
+    assert "2x" in svg
+    assert "#FFF8DC" in svg
 
 
 def test_supernode_storage_indexes_feature_supernodes_only(tmp_path: Path) -> None:
@@ -984,7 +1057,10 @@ def test_run_steering_uses_current_and_stored_supernodes(
             )
             logits = torch.zeros((1, 3, 8))
             logits[0, -1, 0] = 1.0
-            return logits, None
+            activations = self.orig_activations.clone()
+            for layer, pos, feature, value in interventions:
+                activations[layer, pos, feature] = value
+            return logits, activations if return_activations else None
 
     fake_model = FakeModel()
     monkeypatch.setattr(services, "_load_steering_model", lambda *_args: fake_model)
@@ -1017,9 +1093,14 @@ def test_run_steering_uses_current_and_stored_supernodes(
             "n_features": 1,
         }
     ]
-    assert "figure_html" in result
-    assert "Steering intervention graph" in result["figure_html"]
-    assert "Current SN" in result["figure_html"]
+    assert "figure_html" not in result
+    assert "svg" in result
+    assert "Steering intervention graph" in result["svg"]
+    assert "Current SN" in result["svg"]
+    assert "-1x" in result["svg"]
+    assert "Stored entity" in result["svg"]
+    assert "current prompt" in result["svg"]
+    assert "tok0" in result["svg"]
 
 
 def test_summary_graph_viewer_payload_respects_200_node_limit() -> None:

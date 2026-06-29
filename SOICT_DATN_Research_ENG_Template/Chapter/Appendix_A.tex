@@ -44,161 +44,17 @@ to sum to one. The graph entry point
 \texttt{prompt\_tokens}, and the target-logit feature id from graph metadata, then
 returns this normalized vector for use as $\tau$.
 
-\section{ILP Pareto curve}
+% \section{ILP Pareto curve}
 
-We trace the Pareto curve of the ILP solver with theta = 0.65. The x-axis is the causal epsilon, and the y-axis is the atomicity objective.
+% We trace the Pareto curve of the ILP solver with theta = 0.65. The x-axis is the causal epsilon, and the y-axis is the atomicity objective.
 
 
-\begin{figure}[ht]
-\centering
-\includegraphics[width=0.75\linewidth]{Figure/theta_p65_average_pareto.png}
-\caption{ILP Pareto curve with theta = 0.65}
-\label{fig:ILP_Pareto_Curve}
-\end{figure}
-
-\section{Labeling prompt}
-The following system prompt is provided to an LLM to label the supernodes of a
-summary graph.
-
-\begin{lstlisting}[style=prompt,caption={...},label={lst:label-prompt}]
-You are explaining a summary graph of a language model's computation.
-
-You will be given:
-
-- The prompt processed by the model.
-- The token predicted by the model.
-- A set of supernodes.
-- A set of features belonging to each supernode.
-
-Each feature is described only by:
-- Layer
-- Position
-- <MAX_ACTIVATING_TOKENS>
-- <TOKENS_AFTER_MAX_ACTIVATING_TOKEN>
-- <TOP_POSITIVE_LOGITS>
-- <TOP_ACTIVATING_TEXTS>
-
-Your goal is NOT to explain what the features do in general.
-
-Your goal is to explain what information each supernode contributes to THIS computation.
-
-Always interpret the supernodes in the context of:
-
-1. The prompt.
-2. The predicted token.
-3. The layer and position evidence for each feature.
-
---------------------------------------------------
-ROLE DEFINITIONS
---------------------------------------------------
-
-Input:
-- Activates on a token directly present in the prompt.
-- Recognizes entities, words, phrases, syntax, or local patterns.
-- Extracts evidence from the prompt.
-- Usually appears early in the computation.
-
-Abstract:
-- Represents concepts, relations, themes, reasoning steps, or intermediate computations.
-- Combines or transforms information from other supernodes.
-- Usually appears in the middle of the computation.
-
-Output:
-- Supports prediction of the next token.
-- Promotes candidate outputs.
-- Often reflected in top positive logits.
-- Usually appears near the end of the computation.
-
-Trash:
-- No consistent pattern exists.
-- Evidence is noisy, unrelated to the computation.
-- Use only when no meaningful interpretation can be supported.
-
---------------------------------------------------
-GLOBAL ANALYSIS PROCEDURE
---------------------------------------------------
-
-1. Read the prompt and predicted token carefully.
-
-2. Examine ALL supernodes before labeling any individual supernode.
-
-3. Identify major information sources in the prompt.
-
-4. Identify major concepts required to predict the next token.
-
-5. For each supernode:
-   - Inspect its features.
-   - Inspect each feature's layer and position.
-   - Determine what information it contributes to this computation.
-
-6. Prefer explanations that make the set of supernodes coherent as a whole.
-
---------------------------------------------------
-LABELING GUIDELINES
---------------------------------------------------
-
-Labels should represent information carried by the supernode.
-
-Good labels:
-- France
-- Capital cities
-- Geographic entities
-- Country-capital relation
-- Numbers ~30
-- say Paris
-- say J_
-
-Bad labels:
-- Neuron that activates on...
-- This cluster seems related to...
-- General semantic feature
-
-Prefer:
-- Specific concepts over broad themes.
-- Labels that distinguish related supernodes.
-- Information relevant to the prompt.
-- Computation-relevant explanations.
-- Roles in this computation rather than global neuron behavior.
-
---------------------------------------------------
-CONSISTENCY RULES
---------------------------------------------------
-
-When multiple supernodes participate in the same reasoning chain:
-
-Input:
-    France
-
-Abstract:
-    Country-capital relation
-
-Output:
-    Say Paris
-
-Adjacent supernodes should typically represent different stages of computation unless the evidence strongly suggests otherwise.
-
---------------------------------------------------
-OUTPUT FORMAT
---------------------------------------------------
-
-Return JSON only.
-
-{
-  "supernodes": [
-    {
-      "id": "<supernode id>",
-      "role": "Input | Abstract | Output | Trash",
-      "label": "<1-5 word description>",
-      "description": "<one short sentence describing the contribution to the prediction>"
-    }
-  ]
-}
-\end{lstlisting}
-
-\section{Multihop results}
-
-We present some summary graphs from the multihop dataset.
-
+% \begin{figure}[ht]
+% \centering
+% \includegraphics[width=0.75\linewidth]{Figure/theta_p65_average_pareto.png}
+% \caption{ILP Pareto curve with theta = 0.65}
+% \label{fig:ILP_Pareto_Curve}
+% \end{figure}
 % \section{General Regulations}
 % Dưới đây là một số quy định và hướng dẫn viết đồ án tốt nghiệp mà bắt buộc sinh viên phải đọc kỹ và tuân thủ nghiêm ngặt.
 

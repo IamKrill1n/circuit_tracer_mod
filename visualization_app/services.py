@@ -1600,9 +1600,10 @@ def _steering_activation_ratios(
     orig_activations,
     new_activations,
 ) -> dict[str, float | None]:
+    _ = factors
     ratios: dict[str, float | None] = {}
     for supernode in sng.supernodes:
-        if supernode.type != "features" or supernode.name in factors:
+        if supernode.type != "features":
             continue
         feature_ratios: list[float] = []
         for node in supernode.features:
@@ -1646,8 +1647,8 @@ def run_steering(
     summary_root: Path = SUMMARY_ROOT,
     progress: Callable[[str, float | None], None] | None = None,
 ) -> dict[str, Any]:
-    from summarization.cluster_viz import supernode_graph_figure
     from summarization.summarize import SummaryGraph, steer_interventions_constrained
+    from visualization_app.intervention_viz import create_intervention_svg
 
     safe_slug = slugify(slug)
     safe_dataset = validate_dataset(dataset)
@@ -1723,16 +1724,17 @@ def run_steering(
     new_logits = base_logits.clone()
     new_activations = orig_activations.clone()
     for window, interventions in groups:
-        group_logits, _ = model.feature_intervention(
+        group_logits, group_activations = model.feature_intervention(
             steer_tokens,
             interventions,
             constrained_layers=window,
             freeze_attention=freeze_attention,
-            return_activations=False,
+            return_activations=True,
         )
+        if group_activations is None:
+            raise ValueError("Steering model did not return activations for visualization.")
         new_logits += group_logits - base_logits
-        for layer, pos, feature, value in interventions:
-            new_activations[layer, pos, feature] = value
+        new_activations += group_activations - orig_activations
 
     report("Rendering steering graph", 0.85)
     activation_ratios = _steering_activation_ratios(
@@ -1747,22 +1749,14 @@ def run_steering(
         {"token": tokenizer.decode([int(token_id)]), "probability": float(probability)}
         for token_id, probability in zip(top_ids.tolist(), top_probs.tolist())
     ]
-    fig = supernode_graph_figure(
+    svg = create_intervention_svg(
         sng=sng,
-        title="Steering intervention graph",
-        prompt_tokens=list(options["prompt_tokens"]),
         prompt=prompt,
-        use_supernode_names=True,
-        edge_threshold=edge_threshold,
         steering_factors=factors,
         activation_ratios=activation_ratios,
         top_outputs=top_outputs,
         stored_interventions=selected_stored,
-    )
-    figure_html = fig.to_html(
-        include_plotlyjs="cdn",
-        full_html=True,
-        config={"responsive": True, "displaylogo": False},
+        edge_threshold=edge_threshold,
     )
     return {
         "slug": safe_slug,
@@ -1774,5 +1768,5 @@ def run_steering(
         "steered": factors,
         "stored_supernodes": selected_stored,
         "top_outputs": top_outputs,
-        "figure_html": figure_html,
+        "svg": svg,
     }
