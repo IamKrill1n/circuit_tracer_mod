@@ -76,18 +76,7 @@ Experiments run on a single workstation with an NVIDIA GeForce RTX 4090 GPU
 uses Python 3.13.5. Attribution graphs are generated with the circuit-tracing
 library~\cite{circuit-tracer}. The summary graphs reuse the same feature
 metadata and are rendered with an adapted version of the library's user
-interface (Figure~\ref{fig:our-dashboard}).
-
-\begin{figure}[ht]
-\centering
-\includegraphics[width=0.95\linewidth]{Figure/our_dashboard.png}
-\caption{Summarization dashboard. The left panel lists local attribution graphs,
-the center shows the pruned attribution subgraph with its supernodes for an
-analogy prompt, and the right panel reports the generated summary with labeled
-input, abstract, and output supernodes. The viewer also exposes per-feature
-input and output details and on-demand summary generation and steering.}
-\label{fig:our-dashboard}
-\end{figure}
+interface
 
 \subsection{Default pipeline configuration}
 
@@ -333,13 +322,6 @@ $R_\sigma=\{(C,C'): A_{C\to C'}\ne 0,\, \sigma(C)>\sigma(C')\}$. The score is
 Lower DAG loss means the partition is more compatible with the final acyclic
 summary graph.
 
-\paragraph{Number of singleton supernodes.}
-The number of singleton supernodes counts feature supernodes that contain
-exactly one retained feature node. Embedding and logit singleton nodes are
-excluded because they are fixed by construction. Lower values indicate more
-compression, while higher values indicate that the clusterer leaves more
-features unmerged.
-
 \subsection{Results}
 
 Table~\ref{tab:clustering-baseline-entmax} reports method means on entmax-pruned
@@ -394,83 +376,129 @@ graph.
 \section{Experiment 3: Intervention Validation via Entity-swap}
 \label{sec:steering-experiment}
 
-Entity-swap steering tests whether an Output-role supernode carries transferable
-answer-entity information, rather than only receiving a plausible post-hoc
-label. Within each BATS relation type, we form ordered source--donor pairs of
-prompts that share the same relation but have different target answers. The
-source prompt is first run without intervention to obtain its clean feature
-activations. We then suppress the source summary's Output CLT features by
-writing $-c$ times their clean activations, and inject the donor summary's
-Output CLT features at the source final-token position by writing $c$ times the
-donor activations. The coefficient $c$ controls the strength of the swap.
-Figures~\ref{fig:our-summary} and~\ref{fig:our-steering} show the summary graph
-and one entity-swap intervention on that graph.
+\subsection{Question and setup}
 
-This intervention asks whether replacing the answer-related Output state changes
-the source model prediction toward the donor answer. Pairs are skipped when the
-source and donor have the same target token, or when either summary lacks usable
-Output-role CLT features. The primary success criterion is strict: the clean
-source prediction must be the source target, and the steered top-1 prediction
-must become the donor target. We also record the unconditional donor top-1 rate
-and the source and donor target probabilities before and after steering. These
-probability measurements show partial transfer even when the top-1 token does
-not flip. This protocol complements the edge-response test by evaluating whether
-a whole Output-role supernode carries answer-specific information, rather than
-only predicting local downstream signs.
+The intervention experiment asks whether the summary graph identifies
+supernodes that are not only interpretable after inspection, but also causally
+usable. In the analogy task, an Output-role supernode should contain features
+that promote the answer entity $D$ for a prompt of the form ``$A$ is to $B$ as
+$C$ is to''. If this interpretation is correct, replacing the source prompt's
+Output-role features with the corresponding features from a donor prompt should
+move the model toward the donor answer.
 
-\begin{figure}[ht]
+The experiment uses ordered source--donor pairs from the BATS analogy dataset.
+The source and donor prompts must come from the same relation type, so the
+intervention changes the answer entity while keeping the relation fixed. Pairs
+are skipped when the source and donor have the same target token or when either
+summary graph lacks usable Output-role CLT features. This filtering keeps the
+test focused on answer transfer rather than on degenerate pairs or missing
+summary nodes.
+
+\subsection{Intervention protocol}
+
+Entity-swap steering evaluates whether the Output supernodes discovered by the
+summary graph are causally meaningful. For each analogy relation, we pair a source
+prompt with a donor prompt from the same relation. We suppress the source
+Output supernode and inject the donor Output supernode at the corresponding
+position. If the summary graph has identified an answer-carrying supernode, this
+intervention should move the model prediction away from the source answer and
+toward the donor answer.
+
+Figure~\ref{fig:summary-steering} shows the summary graph for one animal--young prompt
+and the corresponding intervention view after replacing features that promote
+``kid'' with features that promote ``calf''.
+
+\begin{figure}[H]
 \centering
-\includegraphics[width=0.90\linewidth]{Figure/our_summary.png}
-\caption{Summary graph before entity-swap intervention for an animal-young-term
-analogy. The graph groups feature nodes into labeled supernodes, with the
-Output-role supernodes carrying answer-related concepts such as goat terminology
-and ruminant offspring.}
-\label{fig:our-summary}
+\begin{subfigure}{0.95\linewidth}
+\centering
+\includegraphics[width=\linewidth]{Figure/our_summary.png}
+\caption{Summary graph produced for the prompt ``The saying goes: fox is to cub as goat is to''.}
+\end{subfigure}
+
+\vspace{0.4cm}
+
+\begin{subfigure}{0.95\linewidth}
+\centering
+\includegraphics[width=\linewidth]{Figure/our_steering.png}
+\caption{Intervention view for the same prompt. The model output changes after
+swapping Output features that promote ``kid'' with features that promote
+``calf''.}
+\end{subfigure}
+\caption{The summary graph and interventions of the prompt ``The saying goes:
+fox is to cub as goat is to''.}
+\label{fig:summary-steering}
 \end{figure}
 
-\begin{figure}[ht]
-\centering
-\includegraphics[width=0.95\linewidth]{Figure/our_steering.png}
-\caption{Entity-swap intervention on a summary graph for the prompt
-``abuja is to nigeria as amman is to''. The source Output supernode is
-suppressed (``say Jordan'', factor $-2$) while the donor Output supernode is
-injected at the final-token position (``Say Australia'', factor $+8$), steering
-the prediction toward the donor answer. Node colors denote supernode roles and
-edge thickness denotes signed superedge weight.}
-\label{fig:our-steering}
-\end{figure}
+\subsection{Metrics}
 
-Table~\ref{tab:entity-swap-steering} reports entity-swap transfer for the
-relation and factor settings in the full sweep. Each row aggregates 50 attempted
-source--donor pairs. The hit rates are computed over all attempted pairs, and
-mean $p_{\text{donor}}$ is the mean steered probability assigned to the donor
-target token. The result show that our summary graphs produce atomic supernodes that can be use for steering.
+The primary metric is top-1 hit rate. A pair is counted as a top-1 hit only when
+the steered model's most likely next token is the donor target token. This is a
+strict success criterion because the intervention must overcome the clean source
+answer and make the donor answer the model's final prediction.
+
+The secondary metrics measure weaker forms of transfer. Top-5 hit rate counts
+whether the donor target appears among the five highest-probability next tokens.
+The donor probability change $\Delta p_{\text{donor}}$ is the steered donor
+target probability minus its clean value, and the source probability change
+$\Delta p_{\text{source}}$ is defined analogously for the source target. These
+metrics are useful because a summary supernode can increase the donor answer
+evidence and suppress the source answer without always making the donor answer
+the top-1 prediction.
+
+\subsection{Results}
+
+Table~\ref{tab:entity-swap-steering} reports entity-swap transfer for two BATS
+relations with the source suppression factor fixed at $-2$. Each row aggregates
+50 attempted source--donor pairs for each donor factor, and hit rates are
+computed over all attempted pairs. The results show that Output-role supernodes
+carry transferable answer information: across the four settings, top-1 hit
+rates range from $0.1600$ to $0.4400$, and top-5 hit rates range from $0.2800$
+to $0.6800$.
 
 \begin{table}[ht]
 \centering
 \caption{Entity-swap supernode steering on 50 BATS analogy pairs per relation
-and factor setting. Source Output features are suppressed with the listed
-negative factor; donor Output features are injected at the listed positive
-factor. Hit rates are over all attempted pairs.}
+with the source factor fixed at $-2$. Donor Output features are injected with
+the grouped donor factor. Hit rates are over all attempted pairs, and
+$\Delta p$ values are steered probabilities minus clean probabilities. The best
+value for each relation and metric is shown in bold.}
 \label{tab:entity-swap-steering}
 \resizebox{\linewidth}{!}{%
-\begin{tabular}{lrrrrr}
+\begin{tabular}{lrrrrrrrr}
 \toprule
-Relation & Source factor & Donor factor & Top-1 hit & Top-5 hit & Mean $p_{\text{donor}}$ \\
+\multirow{2}{*}{Relation}
+& \multicolumn{4}{c}{Donor factor $4$}
+& \multicolumn{4}{c}{Donor factor $8$} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-9}
+& Top-1 hit & Top-5 hit & $\Delta p_{\text{donor}} \uparrow$ & $\Delta p_{\text{source}} \downarrow$
+& Top-1 hit & Top-5 hit & $\Delta p_{\text{donor}} \uparrow$ & $\Delta p_{\text{source}} \downarrow$ \\
 \midrule
-capital--country & $-2$ & $4$ & 0.1600 & 0.2800 & 0.0953 \\
-capital--country & $-2$ & $8$ & 0.2000 & 0.4000 & 0.0826 \\
-capital--country & $-1$ & $4$ & 0.1600 & 0.2800 & 0.0971 \\
-capital--country & $-1$ & $8$ & 0.2200 & 0.3600 & 0.1017 \\
-person--nationality & $-2$ & $4$ & 0.4400 & 0.6800 & 0.2267 \\
-person--nationality & $-2$ & $8$ & 0.3600 & 0.6000 & 0.1695 \\
-person--nationality & $-1$ & $4$ & 0.4600 & 0.6400 & 0.2619 \\
-person--nationality & $-1$ & $8$ & 0.3600 & 0.5600 & 0.1906 \\
+capital--country & 0.1600 & 0.2800 & \textbf{0.0944} & -0.5741 & \textbf{0.2000} & \textbf{0.4000} & 0.0817 & \textbf{-0.6746} \\
+person--nationality & \textbf{0.4400} & \textbf{0.6800} & \textbf{0.2188} & -0.5328 & 0.3600 & 0.6000 & 0.1617 & \textbf{-0.5747} \\
 \bottomrule
 \end{tabular}
 }
 \end{table}
 
+The transfer rate depends strongly on the relation. For capital--country pairs,
+the best setting obtains a top-1 hit rate of $0.2000$ and a top-5 hit rate of
+$0.4000$. For person--nationality pairs, the best setting obtains a top-1 hit
+rate of $0.4400$ and a top-5 hit rate of $0.6800$. The donor probability change
+shows the same pattern: the largest $\Delta p_{\text{donor}}$ for
+capital--country is $0.0944$, whereas the largest value for
+person--nationality is $0.2188$.
+
+The factor sweep also shows that stronger donor injection is not uniformly
+better. Increasing the donor factor from $4$ to $8$ improves the
+capital--country top-1 and top-5 hit rates, but it reduces the
+person--nationality hit rates and $\Delta p_{\text{donor}}$. This behavior
+suggests that the entity-swap intervention is sensitive to activation scale, so
+the results should be interpreted as evidence for transferable Output-role
+information rather than as an optimized steering method. Overall, the
+intervention validates the summary graph at the supernode level: the same nodes
+that receive answer-role labels can be used to move the model toward a different
+answer entity.
 
 \section{Chapter Summary}
 
@@ -480,7 +508,7 @@ does not substantially reduce replacement score or graph completeness at matched
 graph sizes, while discarding features that are not semantically relevant to the
 input prompt. The clustering experiment showed that the ILP clusterer yields the
 lowest internalized edge mass and DAG loss among the tested baselines, while
-K-means yields the strongest role-vector gaps. The end to end steering
+K-means yields the strongest role-vector gaps. The end-to-end steering
 experiment validated the final summary graph's ability to predict the behavior
 of the model under intervention. Taken
 together, these results indicate that the proposed pipeline preserves important
