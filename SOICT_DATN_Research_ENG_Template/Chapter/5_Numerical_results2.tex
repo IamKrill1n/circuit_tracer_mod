@@ -205,8 +205,9 @@ across graphs. Irrelevant feature and token counts are the numbers of retained
 feature and input-token nodes at irrelevant positions (lower is better);
 graph completeness and replacement score are the graph-faithfulness metrics of
 Eq.~\eqref{eq:metric-completeness} and Eq.~\eqref{eq:metric-replacement} (higher
-is better). The best value in each column is in bold; the $\alpha=1.0$ baseline
-ignores token weights, so its normalization is not applicable.}
+is better). The best value in each column is in bold and the second-best value
+is underlined; the $\alpha=1.0$ baseline ignores token weights, so its
+normalization is not applicable.}
 \label{tab:pruning-results}
 \resizebox{\linewidth}{!}{%
 \begin{tabular}{llrrrrr}
@@ -214,10 +215,10 @@ ignores token weights, so its normalization is not applicable.}
 Method & Normalization & $\alpha$ & Irrelevant feature count $\downarrow$ & Irrelevant token count $\downarrow$ & Graph completeness $\uparrow$ & Replacement score $\uparrow$ \\
 \midrule
 Influence only & -- & 1.0 & 2.29 & 9.00 & \textbf{0.604} & \textbf{0.437} \\
-Ours & Entmax 1.25 & 0.75 & 0.13 & 0.12 & 0.598 & 0.425 \\
+Ours & Entmax 1.25 & 0.75 & 0.13 & \underline{0.12} & \underline{0.598} & \underline{0.425} \\
 Ours & Entmax 1.25 & 0.5 & 0.12 & \textbf{0.11} & 0.589 & 0.421 \\
 Ours & Softmax & 0.75 & \textbf{0.04} & 3.48 & 0.591 & 0.423 \\
-Ours & Softmax & 0.5 & 0.07 & 2.77 & 0.583 & 0.418 \\
+Ours & Softmax & 0.5 & \underline{0.07} & 2.77 & 0.583 & 0.418 \\
 \bottomrule
 \end{tabular}
 }
@@ -341,77 +342,54 @@ features unmerged.
 
 \subsection{Results}
 
-Table~\ref{tab:clustering-baseline-entmax} reports method means on 100 pruned
-analogy graphs. K-means obtains the largest role gap, which shows that direct
-geometric clustering can form compact role-vector groups. However, those groups
-hide more feature--feature edge mass and require more backward-edge removal than
-the proposed ILP summary when converted into an acyclic summary graph.
+Table~\ref{tab:clustering-baseline-entmax} reports method means on entmax-pruned
+analogy and multihop graphs. K-means obtains the largest role gap on both
+datasets, which shows that direct geometric clustering can form compact
+role-vector groups. However, those groups hide more feature--feature edge mass
+and require more backward-edge removal than the proposed ILP summary when
+converted into an acyclic summary graph.
 
 The gain columns compare each method with the random same-size baseline.
-Positive values are better. Since the random baseline has a slightly negative
-role gap, the role-gain column reports the absolute difference
-$m-m_{\mathrm{rand}}$ rather than a percentage. For internalized mass and DAG
-loss, gain is the percentage reduction from the random baseline,
+Positive values are better. Since the random-baseline role gap is near zero, the
+role-gain column reports the absolute difference $m-m_{\mathrm{rand}}$ rather
+than a percentage. For internalized mass and DAG loss, gain is the percentage
+reduction from the random baseline,
 $100(m_{\mathrm{rand}}-m)/m_{\mathrm{rand}}$.
 
 \begin{table}[ht]
 \centering
-\caption{Clustering evaluation on 100 pruned analogy graphs. Higher
-role gap indicates more coherent signed causal roles inside supernodes. Lower
+\caption{Clustering evaluation on entmax-pruned analogy and multihop graphs.
+Higher role gap indicates more coherent signed causal roles inside supernodes. Lower
 internalized edge mass and lower DAG loss indicate better preservation of visible
-causal structure. Gains are measured against the random same-size baseline.}
+causal structure. Gains are measured against the random same-size baseline. \textbf{Best} and \underline{second-best} values are highlighted for each metric}
 \label{tab:clustering-baseline-entmax}
 \resizebox{\linewidth}{!}{%
-\begin{tabular}{lrrrrrr}
+\begin{tabular}{lrrrrrrrrrrrr}
 \toprule
-& \multicolumn{3}{c}{Metric value} & \multicolumn{3}{c}{Gain vs. random} \\
-\cmidrule(lr){2-4}\cmidrule(lr){5-7}
-Method & Role gap $\uparrow$ & Internalized mass $\downarrow$ & DAG loss $\downarrow$ & Role $\Delta$ $\uparrow$ & Internalized $\uparrow$ & DAG loss $\uparrow$ \\
+& \multicolumn{6}{c}{Analogies (100)} & \multicolumn{6}{c}{Multihop (36)} \\
+\cmidrule(lr){2-7}\cmidrule(lr){8-13}
+Method & Role gap $\uparrow$ & Int. mass $\downarrow$ & DAG loss $\downarrow$ & Role $\Delta$ $\uparrow$ & Int. gain $\uparrow$ & DAG gain $\uparrow$ & Role gap $\uparrow$ & Int. mass $\downarrow$ & DAG loss $\downarrow$ & Role $\Delta$ $\uparrow$ & Int. gain $\uparrow$ & DAG gain $\uparrow$ \\
 \midrule
-Ours ILP & 0.675 & \textbf{0.048} & \textbf{0.056} & $+0.688$ & \textbf{$+41.1\%$} & \textbf{$+54.9\%$} \\
-K-means on role vectors & \textbf{0.713} & 0.084 & 0.092 & \textbf{$+0.726$} & $-2.3\%$ & $+25.9\%$ \\
-Random same-size clusters & -0.012 & 0.082 & 0.124 & $+0.000$ & $+0.0\%$ & $+0.0\%$ \\
-Spectral on adjacency & 0.108 & 0.187 & 0.114 & $+0.121$ & $-128.2\%$ & $+8.1\%$ \\
-Spectral on role vectors & 0.562 & 0.097 & 0.078 & $+0.575$ & $-18.1\%$ & $+37.4\%$ \\
+Random same-size clusters & -0.012 & \underline{0.082} & 0.124 & $+0.000$ & \underline{$+0.0\%$} & $+0.0\%$ & 0.004 & \underline{0.062} & 0.091 & $+0.000$ & \underline{$+0.0\%$} & $+0.0\%$ \\
+Spectral on adjacency & 0.108 & 0.187 & 0.114 & $+0.121$ & $-128.2\%$ & $+8.1\%$ & 0.081 & 0.118 & 0.076 & $+0.077$ & $-89.7\%$ & $+16.0\%$ \\
+Spectral on role vectors & 0.562 & 0.097 & \underline{0.078} & $+0.575$ & $-18.1\%$ & \underline{$+37.4\%$} & 0.479 & 0.087 & \underline{0.051} & $+0.474$ & $-40.0\%$ & \underline{$+43.6\%$} \\
+K-means on role vectors & \textbf{0.713} & 0.084 & 0.092 & \textbf{$+0.726$} & $-2.3\%$ & $+25.9\%$ & \textbf{0.612} & 0.068 & 0.058 & \textbf{$+0.608$} & $-9.1\%$ & $+36.0\%$ \\
+\midrule
+Ours ILP & \underline{0.675} & \textbf{0.048} & \textbf{0.056} & \underline{$+0.688$} & \textbf{$+41.1\%$} & \textbf{$+54.9\%$} & \underline{0.591} & \textbf{0.048} & \textbf{0.038} & \underline{$+0.586$} & \textbf{$+22.7\%$} & \textbf{$+58.5\%$} \\
 \bottomrule
 \end{tabular}
 }
 \end{table}
 
 The edge-mass metrics identify the intended advantage of the ILP formulation.
-The ILP row has the lowest internalized feature-edge mass and DAG loss. Relative
-to random same-size clusters, it reduces internalized mass by $41.1\%$ and DAG
-loss by $54.9\%$, while increasing role gap by $0.688$. K-means gives the
-largest role-gap improvement, but it slightly increases internalized mass over
-the random baseline. The ILP therefore sacrifices some role-vector compactness to
-preserve more visible causal structure in the final summary graph.
-
-Table~\ref{tab:theta-sensitivity-entmax} reports the ILP sensitivity to the
-role-cosine threshold $\theta$. The $p50$, $p65$, and $p80$ settings correspond
-to the 50th, 65th, and 80th percentiles of allowed feature-pair cosine values on
-each graph. Increasing the threshold improves role gap and reduces both
-internalized edge mass and DAG loss, but it also leaves more feature supernodes
-as singletons. Thus the stricter threshold preserves more local causal structure
-at the cost of lower compression.
-
-\begin{table}[ht]
-\centering
-\caption{Sensitivity of the ILP clusterer to the role-cosine threshold on 100
-pruned analogy graphs. Values are unweighted means across graphs. Singleton
-counts include only feature supernodes.}
-\label{tab:theta-sensitivity-entmax}
-\resizebox{\linewidth}{!}{%
-\begin{tabular}{lrrrr}
-\toprule
-$\theta$ & Role gap $\uparrow$ & Internalized mass $\downarrow$ & DAG loss $\downarrow$ & Singletons $\downarrow$ \\
-\midrule
-$p50$ & 0.6036 & 0.1056 & 0.0340 & \textbf{4.32} \\
-$p65$ & 0.6465 & 0.0994 & 0.0359 & 5.48 \\
-$p80$ & \textbf{0.6687} & \textbf{0.0849} & \textbf{0.0310} & 8.78 \\
-\bottomrule
-\end{tabular}
-}
-\end{table}
+The ILP row has the lowest internalized feature-edge mass and DAG loss on both
+datasets. Relative to random same-size clusters, ILP reduces internalized mass by
+$41.1\%$ on analogies and $22.7\%$ on multihop, and reduces DAG loss by
+$54.9\%$ on analogies and $58.5\%$ on multihop. K-means gives the largest
+role-gap improvement, but it increases internalized mass over the random
+baseline on both datasets. The ILP therefore sacrifices some role-vector
+compactness to preserve more visible causal structure in the final summary
+graph.
 
 \section{Experiment 3: Intervention Validation via Entity-swap}
 \label{sec:steering-experiment}
@@ -425,7 +403,8 @@ activations. We then suppress the source summary's Output CLT features by
 writing $-c$ times their clean activations, and inject the donor summary's
 Output CLT features at the source final-token position by writing $c$ times the
 donor activations. The coefficient $c$ controls the strength of the swap.
-Figure~\ref{fig:our-steering} illustrates one such swap on the summary graph.
+Figures~\ref{fig:our-summary} and~\ref{fig:our-steering} show the summary graph
+and one entity-swap intervention on that graph.
 
 This intervention asks whether replacing the answer-related Output state changes
 the source model prediction toward the donor answer. Pairs are skipped when the
@@ -441,6 +420,16 @@ only predicting local downstream signs.
 
 \begin{figure}[ht]
 \centering
+\includegraphics[width=0.90\linewidth]{Figure/our_summary.png}
+\caption{Summary graph before entity-swap intervention for an animal-young-term
+analogy. The graph groups feature nodes into labeled supernodes, with the
+Output-role supernodes carrying answer-related concepts such as goat terminology
+and ruminant offspring.}
+\label{fig:our-summary}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
 \includegraphics[width=0.95\linewidth]{Figure/our_steering.png}
 \caption{Entity-swap intervention on a summary graph for the prompt
 ``abuja is to nigeria as amman is to''. The source Output supernode is
@@ -451,13 +440,11 @@ edge thickness denotes signed superedge weight.}
 \label{fig:our-steering}
 \end{figure}
 
-\subsection{Entity-swap steering results}
-
 Table~\ref{tab:entity-swap-steering} reports entity-swap transfer for the
 relation and factor settings in the full sweep. Each row aggregates 50 attempted
 source--donor pairs. The hit rates are computed over all attempted pairs, and
 mean $p_{\text{donor}}$ is the mean steered probability assigned to the donor
-target token.
+target token. The result show that our summary graphs produce atomic supernodes that can be use for steering.
 
 \begin{table}[ht]
 \centering
@@ -484,12 +471,6 @@ person--nationality & $-1$ & $8$ & 0.3600 & 0.5600 & 0.1906 \\
 }
 \end{table}
 
-The sweep shows stronger transfer for person--nationality than for
-capital--country. Person--nationality reaches top-1 hit rates of $0.36$--$0.46$
-and mean donor probabilities of $0.1695$--$0.2619$, while capital--country stays
-at top-1 hit rates of $0.16$--$0.22$ and mean donor probabilities of
-$0.0826$--$0.1017$. The weaker source suppression factor $-1$ gives the best
-top-1 rate in both relations under the listed donor factors.
 
 \section{Chapter Summary}
 

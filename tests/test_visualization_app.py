@@ -66,6 +66,21 @@ def test_slugify_and_graph_paths(tmp_path: Path) -> None:
         / "node_0.02"
         / "000.pt"
     )
+    assert services._source_summary_info_from_path(
+        tmp_path / "multihop" / "entmax" / "alpha_0.50" / "node_0.02" / "000_summary_graph.pt",
+        tmp_path,
+    ) == ("multihop", "", "000")
+    assert services._source_summary_info_from_path(
+        tmp_path
+        / "analogies"
+        / "mntss"
+        / "clt-gemma-2-2b-426k"
+        / "entmax"
+        / "alpha_0.50"
+        / "node_0.02"
+        / "000_labeled_summary_graph.pt",
+        tmp_path,
+    ) == ("analogies", "mntss/clt-gemma-2-2b-426k", "000")
 
 
 def test_list_graphs_reads_viewer_directories(tmp_path: Path) -> None:
@@ -387,8 +402,10 @@ def test_intervention_svg_renders_factor_activation_and_outputs() -> None:
     assert "20%" in svg
     assert "#f0f0f0" in svg
     assert "the sky is" in svg
+    assert "Top Outputs" in svg
     assert "blue" in svg
     assert "42%" in svg
+    assert 'width="1100"' in svg
 
 
 def test_intervention_svg_renders_stored_replacement_node() -> None:
@@ -428,6 +445,61 @@ def test_intervention_svg_renders_stored_replacement_node() -> None:
     assert "Stored color" in svg
     assert "2x" in svg
     assert "#FFF8DC" in svg
+
+
+def test_intervention_svg_labels_embedding_and_logit_tokens() -> None:
+    emb = Supernode(
+        "SN_EMB_1",
+        [
+            Node(
+                node_id="E_1",
+                node_idx=0,
+                feature=0,
+                layer="E",
+                ctx_idx=1,
+                feature_type="embedding",
+            )
+        ],
+        "emb",
+        -1,
+        -1,
+    )
+    logit = Supernode(
+        "SN_LOGIT_0",
+        [
+            Node(
+                node_id="L_0",
+                node_idx=1,
+                feature=1,
+                layer="L",
+                ctx_idx=0,
+                feature_type="logit",
+                clerp='Output "calf" (p=0.516)',
+            )
+        ],
+        "logit",
+        99,
+        99,
+    )
+    pruned_adj = torch.zeros((2, 2))
+    pruned_adj[1, 0] = 1.0
+    sng = SummaryGraph([emb, logit], pruned_adj)
+
+    svg = create_intervention_svg(
+        sng,
+        prompt="<bos>The saying goes: fox is to cub as goat is to",
+        steering_factors={},
+        activation_ratios={},
+        top_outputs=[],
+        stored_interventions=[],
+        prompt_tokens=["<bos>", "goat"],
+        edge_threshold=0.0,
+    )
+
+    assert "Emb: goat" in svg
+    assert "Logit: calf" in svg
+    assert ">SN_EMB_1<" not in svg
+    assert ">SN_LOGIT_0<" not in svg
 
 
 def test_supernode_storage_indexes_feature_supernodes_only(tmp_path: Path) -> None:
@@ -479,6 +551,53 @@ def test_supernode_storage_indexes_feature_supernodes_only(tmp_path: Path) -> No
     assert record["description"] == "Tracks the source entity."
     assert record["feature_count"] == 1
     assert record["transcoder"] == "CLT-HP"
+
+
+def test_supernode_storage_indexes_current_summary_graph_layout(tmp_path: Path) -> None:
+    graph_root = tmp_path / "graph_files"
+    summary_root = tmp_path / "summary"
+    summary_graph_root = tmp_path / "summary_graphs"
+    summary_dir = summary_graph_root / "multihop" / "entmax" / "alpha_0.50" / "node_0.02"
+    summary_dir.mkdir(parents=True)
+    sng = SummaryGraph(
+        supernodes=[
+            Supernode(
+                name="Country bridge",
+                features=[_node("1_10_0", 0, activation=3.0)],
+                type="features",
+                layer_min=1,
+                layer_max=1,
+                role="Abstract",
+                description="Connects the country clue.",
+            )
+        ],
+        pruned_adj=torch.zeros((1, 1)),
+        metadata={
+            "prompt": "Fact prompt",
+            "prompt_tokens": ["Fact", " prompt"],
+            "scan": "mntss/clt-gemma-2-2b-426k",
+            "model_name": "gemma-2-2b",
+        },
+    )
+    sng.save(str(summary_dir / "000_summary_graph.pt"))
+
+    payload = services.rebuild_supernode_storage(
+        graph_root,
+        summary_root,
+        dataset_root=tmp_path / "dataset",
+        custom_pt_root=tmp_path / "generated_graphs",
+        summary_graph_root=summary_graph_root,
+    )
+
+    assert len(payload["records"]) == 1
+    record = payload["records"][0]
+    assert record["record_id"] == "multihop:000:0"
+    assert record["source_dataset"] == "multihop"
+    assert record["source_set"] == ""
+    assert record["source_slug"] == "000"
+    assert record["label"] == "Country bridge"
+    assert record["model_name"] == "gemma-2-2b"
+    assert record["transcoder"] == "mntss/clt-gemma-2-2b-426k"
 
 
 def test_supernode_storage_filters_by_label_role_and_description(tmp_path: Path) -> None:
@@ -1100,6 +1219,7 @@ def test_run_steering_uses_current_and_stored_supernodes(
     assert "-1x" in result["svg"]
     assert "Stored entity" in result["svg"]
     assert "current prompt" in result["svg"]
+    assert "Top Outputs" in result["svg"]
     assert "tok0" in result["svg"]
 
 

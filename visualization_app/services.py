@@ -1032,6 +1032,10 @@ def _summary_slug_from_path(path: Path) -> str:
     name = path.name
     if name.endswith(".sng.pt"):
         return slugify(name[: -len(".sng.pt")])
+    if name.endswith("_labeled_summary_graph.pt"):
+        return slugify(name[: -len("_labeled_summary_graph.pt")])
+    if name.endswith("_summary_graph.pt"):
+        return slugify(name[: -len("_summary_graph.pt")])
     return slugify(path.stem)
 
 
@@ -1046,14 +1050,14 @@ def _source_summary_info_from_path(
     parts = relative.parts
     if len(parts) < 5:
         return None
+    if not parts[-3].startswith("alpha_") or not parts[-2].startswith("node_"):
+        return None
     try:
         dataset = validate_dataset(parts[0])
     except ValueError:
         return None
     source_set = validate_source_set("/".join(parts[1:-4]))
-    if not source_set:
-        return None
-    return dataset, source_set, slugify(path.stem)
+    return dataset, source_set, _summary_slug_from_path(path)
 
 
 def _summary_source_metadata(
@@ -1070,7 +1074,7 @@ def _summary_source_metadata(
 ) -> tuple[str, str, str]:
     safe_source_set = validate_source_set(source_set)
     prompt = str(sng.metadata.get("prompt") or "")
-    model_name = ""
+    model_name = str(sng.metadata.get("model_name") or "")
     transcoder = str(sng.metadata.get("scan") or "")
 
     try:
@@ -1097,11 +1101,26 @@ def _summary_source_metadata(
         dataset_root=dataset_root,
         custom_pt_root=custom_pt_root,
     )
+    if pt_path is None and not safe_source_set:
+        try:
+            inferred_source_set = validate_source_set(transcoder)
+        except ValueError:
+            inferred_source_set = ""
+        if inferred_source_set:
+            pt_path = find_pt_path(
+                slug,
+                dataset,
+                source_set=inferred_source_set,
+                dataset_root=dataset_root,
+                custom_pt_root=custom_pt_root,
+            )
     if pt_path is not None:
         try:
-            model_name, inferred_transcoder = infer_graph_model_and_scan(pt_path)
+            inferred_model_name, inferred_transcoder = infer_graph_model_and_scan(pt_path)
         except (OSError, KeyError, RuntimeError, ValueError, EOFError, pickle.UnpicklingError):
             inferred_transcoder = ""
+            inferred_model_name = ""
+        model_name = inferred_model_name or model_name
         transcoder = inferred_transcoder or transcoder
 
     return model_name, transcoder, prompt
@@ -1756,6 +1775,7 @@ def run_steering(
         activation_ratios=activation_ratios,
         top_outputs=top_outputs,
         stored_interventions=selected_stored,
+        prompt_tokens=list(options["prompt_tokens"]),
         edge_threshold=edge_threshold,
     )
     return {

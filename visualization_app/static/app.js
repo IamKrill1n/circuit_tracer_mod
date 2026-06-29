@@ -547,17 +547,17 @@ function renderSteeringResult(result) {
   const figurePanel = el("steeringFigure");
   figurePanel.innerHTML = "";
 
-  const outputs = document.createElement("div");
-  outputs.className = "steering-outputs";
-  (result.top_outputs || []).forEach((item) => {
-    const pill = document.createElement("span");
-    pill.className = "pill";
-    pill.textContent = `${item.token} ${Number(item.probability).toFixed(3)}`;
-    outputs.appendChild(pill);
-  });
-  container.appendChild(outputs);
-
   if (result.figure_html) {
+    const outputs = document.createElement("div");
+    outputs.className = "steering-outputs";
+    (result.top_outputs || []).forEach((item) => {
+      const pill = document.createElement("span");
+      pill.className = "pill";
+      pill.textContent = `${item.token} ${Number(item.probability).toFixed(3)}`;
+      outputs.appendChild(pill);
+    });
+    container.appendChild(outputs);
+
     const frame = document.createElement("iframe");
     frame.className = "steering-figure";
     frame.title = "steering visualization";

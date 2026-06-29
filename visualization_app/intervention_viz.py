@@ -7,6 +7,14 @@ from typing import Any
 
 import numpy as np
 
+_GRAPH_OFFSET_X = 70
+_GRAPH_WIDTH = 960
+_GRAPH_HEIGHT = 560
+_NODE_WIDTH = 170
+_NODE_HEIGHT = 54
+_COL_GAP = 95
+_PROMPT_SEPARATOR_Y = 650
+
 
 @dataclass(frozen=True)
 class Feature:
@@ -18,6 +26,7 @@ class Feature:
 @dataclass(eq=False)
 class InterventionNode:
     name: str
+    label: str
     features: list[Feature] = field(default_factory=list)
     activation: float | None = None
     children: list["InterventionNode"] = field(default_factory=list)
@@ -39,12 +48,14 @@ def summary_graph_to_intervention_graph(
     steering_factors: dict[str, float],
     activation_ratios: dict[str, float | None],
     stored_interventions: list[dict[str, Any]],
+    prompt_tokens: list[str] | None = None,
     edge_threshold: float,
 ) -> InterventionGraph:
     sn_names = list(sng.sn_names)
     graph_nodes = [
         InterventionNode(
             name=supernode.name,
+            label=_display_label(supernode, prompt_tokens or []),
             features=_features_for_supernode(supernode),
             activation=activation_ratios.get(supernode.name),
             intervention=_format_factor(steering_factors[supernode.name])
@@ -64,6 +75,7 @@ def summary_graph_to_intervention_graph(
             continue
         donor = InterventionNode(
             name=str(stored.get("label") or stored.get("record_id") or "Stored intervention"),
+            label=str(stored.get("label") or stored.get("record_id") or "Stored intervention"),
             activation=None,
             intervention=_format_factor(float(stored.get("factor", 0.0))),
             children=list(host.children),
@@ -82,29 +94,29 @@ def render_intervention_svg(
     graph: InterventionGraph,
     top_outputs: list[dict[str, Any]],
 ) -> str:
-    node_data = _calculate_node_positions(graph.ordered_nodes)
+    graph_width = _layout_width(graph.ordered_nodes)
+    svg_width = graph_width + _GRAPH_OFFSET_X + 70
+    node_data = _calculate_node_positions(graph.ordered_nodes, graph_width)
     connections = _build_connections_data(graph.ordered_nodes)
     connections_svg = _create_connection_svg(node_data, connections)
     nodes_svg = _create_nodes_svg(node_data)
     prompt_svg, prompt_height = _prompt_svg(graph.prompt)
-    outputs_svg, outputs_y = _outputs_svg(top_outputs, 350 + prompt_height)
-    height = max(420, outputs_y + 48)
+    outputs_y = _PROMPT_SEPARATOR_Y + 80 + prompt_height
+    outputs_svg = _outputs_svg(top_outputs, outputs_y)
+    height = max(760, outputs_y + 55)
 
-    return f"""<svg width="700" height="{height}" viewBox="0 0 700 {height}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Steering intervention graph">
-  <rect width="700" height="{height}" fill="#f5f5f5"/>
-  <rect x="20" y="20" width="660" height="{height - 40}" fill="white" stroke="none" rx="12"/>
+    return f"""<svg width="{svg_width}" height="{height}" viewBox="0 0 {svg_width} {height}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Steering intervention graph">
+  <rect width="{svg_width}" height="{height}" fill="#f5f5f5"/>
+  <rect x="30" y="20" width="{svg_width - 60}" height="{height - 40}" fill="white" stroke="none" rx="12"/>
   <text x="40" y="45" fill="#666" font-family="Arial, sans-serif" font-size="14" font-weight="bold">Graph &amp; Interventions</text>
-  <g transform="translate(50, 0)">
+  <g transform="translate({_GRAPH_OFFSET_X}, 0)">
     {connections_svg}
     {nodes_svg}
   </g>
-  <line x1="40" y1="290" x2="660" y2="290" stroke="#ddd" stroke-width="1"/>
-  <text x="40" y="310" fill="#666" font-family="Arial, sans-serif" font-size="12" font-weight="bold">Prompt</text>
+  <line x1="40" y1="{_PROMPT_SEPARATOR_Y}" x2="{svg_width - 40}" y2="{_PROMPT_SEPARATOR_Y}" stroke="#ddd" stroke-width="1"/>
+  <text x="40" y="{_PROMPT_SEPARATOR_Y + 20}" fill="#666" font-family="Arial, sans-serif" font-size="12" font-weight="bold">Prompt</text>
   {prompt_svg}
-  <text x="40" y="{outputs_y}" fill="#666" font-family="Arial, sans-serif" font-size="10" font-weight="bold">Top Outputs</text>
-  <g transform="translate(0, 5)">
-    {outputs_svg}
-  </g>
+  {outputs_svg}
 </svg>"""
 
 
@@ -116,6 +128,7 @@ def create_intervention_svg(
     activation_ratios: dict[str, float | None],
     top_outputs: list[dict[str, Any]],
     stored_interventions: list[dict[str, Any]],
+    prompt_tokens: list[str] | None = None,
     edge_threshold: float,
 ) -> str:
     graph = summary_graph_to_intervention_graph(
@@ -124,9 +137,48 @@ def create_intervention_svg(
         steering_factors=steering_factors,
         activation_ratios=activation_ratios,
         stored_interventions=stored_interventions,
+        prompt_tokens=prompt_tokens,
         edge_threshold=edge_threshold,
     )
     return render_intervention_svg(graph, top_outputs)
+
+
+def _display_label(supernode: Any, prompt_tokens: list[str]) -> str:
+    if supernode.type == "emb":
+        token = _token_for_supernode(supernode, prompt_tokens)
+        return f"Emb: {token}" if token else str(supernode.name)
+    if supernode.type == "logit":
+        token = _token_for_supernode(supernode, prompt_tokens)
+        return f"Logit: {token}" if token else str(supernode.name)
+    return str(supernode.name)
+
+
+def _token_for_supernode(supernode: Any, prompt_tokens: list[str]) -> str:
+    for node in supernode.features:
+        clerp = str(getattr(node, "clerp", "") or "").strip()
+        if clerp:
+            return _token_from_clerp(clerp)
+    if supernode.type == "emb" and supernode.features:
+        ctx_idx = int(supernode.features[0].ctx_idx)
+        if 0 <= ctx_idx < len(prompt_tokens):
+            return _clean_token(prompt_tokens[ctx_idx])
+    return ""
+
+
+def _token_from_clerp(text: str) -> str:
+    if '"' in text:
+        parts = text.split('"')
+        if len(parts) >= 3:
+            return _clean_token(parts[1])
+    if ":" in text:
+        return _clean_token(text.split(":", 1)[1])
+    return _clean_token(text)
+
+
+def _clean_token(token: str) -> str:
+    cleaned = token.replace("Ġ", " ").replace("▁", " ").replace("\n", "\\n")
+    cleaned = cleaned.strip()
+    return cleaned if cleaned else "·"
 
 
 def _features_for_supernode(supernode: Any) -> list[Feature]:
@@ -229,24 +281,34 @@ def _format_factor(factor: float) -> str:
     return f"{factor:g}x"
 
 
-def _calculate_node_positions(nodes: list[list[InterventionNode]]) -> dict[str, dict[str, Any]]:
-    container_width = 600
-    container_height = 250
-    node_width = 100
-    gap = 50
+def _layout_width(nodes: list[list[InterventionNode]]) -> int:
+    max_row_width = max(
+        (
+            len(row) * _NODE_WIDTH + max(0, len(row) - 1) * _COL_GAP
+            for row in nodes
+        ),
+        default=_GRAPH_WIDTH,
+    )
+    return max(_GRAPH_WIDTH, max_row_width)
+
+
+def _calculate_node_positions(
+    nodes: list[list[InterventionNode]],
+    graph_width: int,
+) -> dict[str, dict[str, Any]]:
     node_data: dict[str, dict[str, Any]] = {}
 
     for row_index, row in enumerate(nodes):
-        row_y = container_height - (row_index * (container_height / (len(nodes) + 0.5)))
-        row_width = len(row) * node_width + max(0, len(row) - 1) * gap
-        start_x = (container_width - row_width) / 2
+        row_y = _GRAPH_HEIGHT - (row_index * (_GRAPH_HEIGHT / (len(nodes) + 0.5)))
+        row_width = len(row) * _NODE_WIDTH + max(0, len(row) - 1) * _COL_GAP
+        start_x = (graph_width - row_width) / 2
         for col_index, node in enumerate(row):
-            node_x = start_x + col_index * (node_width + gap)
+            node_x = start_x + col_index * (_NODE_WIDTH + _COL_GAP)
             node_data[node.name] = {"x": node_x, "y": row_y, "node": node}
             for replacement_index, replacement in enumerate(node.replacement_nodes):
                 node_data[replacement.name] = {
-                    "x": node_x + 30 + replacement_index * 35,
-                    "y": row_y - 42 - replacement_index * 6,
+                    "x": node_x + 45 + replacement_index * 45,
+                    "y": row_y - 72 - replacement_index * 10,
                     "node": replacement,
                 }
 
@@ -257,7 +319,7 @@ def _get_node_center(node_data: dict[str, dict[str, Any]], node_name: str) -> di
     node = node_data.get(node_name)
     if not node:
         return {"x": 0, "y": 0}
-    return {"x": float(node["x"]) + 50, "y": float(node["y"]) + 17.5}
+    return {"x": float(node["x"]) + _NODE_WIDTH / 2, "y": float(node["y"]) + _NODE_HEIGHT / 2}
 
 
 def _build_connections_data(nodes: list[list[InterventionNode]]) -> list[dict[str, Any]]:
@@ -365,18 +427,20 @@ def _create_nodes_svg(node_data: dict[str, dict[str, Any]]) -> str:
             text_color = "#333"
             stroke_color = "#999"
         svg_parts.append(
-            f'<rect x="{x}" y="{y}" width="100" height="35" '
+            f'<rect x="{x}" y="{y}" width="{_NODE_WIDTH}" height="{_NODE_HEIGHT}" '
             f'fill="{fill_color}" stroke="{stroke_color}" stroke-width="2" rx="8"/>'
         )
-        escaped_name = html.escape(name)
+        escaped_label = html.escape(str(node.label))
+        label_lines = _wrap_text_for_svg(escaped_label, max_width=19)[:3]
+        first_y = y + (_NODE_HEIGHT / 2) - ((len(label_lines) - 1) * 7) + 4
         svg_parts.append(
-            f'<text x="{x + 50}" y="{y + 22}" text-anchor="middle" '
+            f'<text x="{x + _NODE_WIDTH / 2}" y="{first_y}" text-anchor="middle" '
             f'fill="{text_color}" font-family="Arial, sans-serif" font-size="12" '
-            f'font-weight="bold">{escaped_name}</text>'
+            f'font-weight="bold">{_node_label_tspans(label_lines, x + _NODE_WIDTH / 2)}</text>'
         )
         if node.activation is not None:
             activation_pct = round(node.activation * 100)
-            label_x = x - 15
+            label_x = x - 12
             label_y = y - 5
             svg_parts.append(
                 f'<rect x="{label_x}" y="{label_y}" width="34" height="16" '
@@ -391,11 +455,11 @@ def _create_nodes_svg(node_data: dict[str, dict[str, Any]]) -> str:
             escaped_intervention = html.escape(node.intervention)
             text_width = len(node.intervention) * 8 + 10
             svg_parts.append(
-                f'<rect x="{x - 20}" y="{y - 5}" width="{text_width}" height="16" '
+                f'<rect x="{x - 18}" y="{y - 5}" width="{text_width}" height="16" '
                 f'fill="#D2691E" stroke="none" rx="12"/>'
             )
             svg_parts.append(
-                f'<text x="{x - 20 + text_width / 2}" y="{y + 7}" text-anchor="middle" '
+                f'<text x="{x - 18 + text_width / 2}" y="{y + 7}" text-anchor="middle" '
                 f'fill="white" font-family="Arial, sans-serif" font-size="10" '
                 f'font-weight="bold">{escaped_intervention}</text>'
             )
@@ -403,38 +467,48 @@ def _create_nodes_svg(node_data: dict[str, dict[str, Any]]) -> str:
 
 
 def _prompt_svg(prompt: str) -> tuple[str, int]:
-    lines = _wrap_text_for_svg(html.escape(prompt), max_width=80)
+    lines = _wrap_text_for_svg(html.escape(prompt), max_width=130)
     svg_lines = [
-        f'<text x="40" y="{325 + i * 15}" fill="#333" '
+        f'<text x="40" y="{_PROMPT_SEPARATOR_Y + 45 + i * 15}" fill="#333" '
         f'font-family="Arial, sans-serif" font-size="12">{line}</text>'
         for i, line in enumerate(lines)
     ]
     return "\n".join(svg_lines), max(0, (len(lines) - 1) * 15)
 
 
-def _outputs_svg(top_outputs: list[dict[str, Any]], output_y_start: int) -> tuple[str, int]:
-    output_items_svg: list[str] = []
+def _outputs_svg(top_outputs: list[dict[str, Any]], y: int) -> str:
+    if not top_outputs:
+        return ""
+    svg_parts = [
+        f'<text x="40" y="{y}" fill="#666" font-family="Arial, sans-serif" '
+        'font-size="10" font-weight="bold">Top Outputs</text>'
+    ]
     current_x = 40
     for item in top_outputs[:6]:
-        display_text = str(item.get("token") or "(empty)")
-        percentage = float(item.get("probability") or 0.0)
-        escaped_display_text = html.escape(display_text)
-        percentage_text = f"{round(percentage * 100)}%"
-        item_width = min(150, len(display_text) * 8 + len(percentage_text) * 6 + 20)
-        output_items_svg.append(
-            f'<rect x="{current_x}" y="{output_y_start}" width="{item_width}" height="20" '
+        token = str(item.get("token") or "(empty)")
+        probability = float(item.get("probability", 0.0))
+        percentage_text = f"{round(probability * 100)}%"
+        item_width = len(token) * 8 + len(percentage_text) * 6 + 26
+        escaped_token = html.escape(token)
+        svg_parts.append(
+            f'<rect x="{current_x}" y="{y + 8}" width="{item_width}" height="22" '
             f'fill="#e8e8e8" stroke="none" rx="6"/>'
         )
-        output_items_svg.append(
-            f'<text x="{current_x + 5}" y="{output_y_start + 14}" '
-            f'fill="#333" font-family="Arial, sans-serif" font-size="11" '
-            f'font-weight="bold">{escaped_display_text} '
-            f'<tspan fill="#555" font-size="10">{percentage_text}</tspan></text>'
+        svg_parts.append(
+            f'<text x="{current_x + 8}" y="{y + 23}" fill="#333" '
+            f'font-family="Arial, sans-serif" font-size="11" font-weight="bold">'
+            f'{escaped_token} <tspan fill="#555" font-size="10">{percentage_text}</tspan></text>'
         )
         current_x += item_width + 10
-        if current_x > 620:
-            break
-    return "\n".join(output_items_svg), output_y_start
+    return "\n".join(svg_parts)
+
+
+def _node_label_tspans(lines: list[str], x: float) -> str:
+    tspans = []
+    for index, line in enumerate(lines):
+        dy = 0 if index == 0 else 14
+        tspans.append(f'<tspan x="{x}" dy="{dy}">{line}</tspan>')
+    return "".join(tspans)
 
 
 def _wrap_text_for_svg(text: str, max_width: int = 80) -> list[str]:
