@@ -1,5 +1,7 @@
 window.initCg = async function (sel, slug, {clickedId, clickedIdCb, isModal, isGridsnap, pruningThreshold} = {}){
-  var data = await util.getFile(`./graph_data/${slug}.json`)
+  var viewerImport = util.params.get('viewerImport')
+  var graphDataPath = `./graph_data/${slug}.json${viewerImport ? `?viewerImport=${viewerImport}` : ''}`
+  var data = await util.getFile(graphDataPath, true, 'json')
   
   var visState = {
     pinnedIds: [],

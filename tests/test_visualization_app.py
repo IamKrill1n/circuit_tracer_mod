@@ -10,6 +10,7 @@ import torch
 from fastapi.testclient import TestClient
 
 from summarization.summarize import Node, SummaryGraph, Supernode
+from visualization_app import server as app_server
 from visualization_app import services
 from visualization_app.intervention_viz import create_intervention_svg
 from visualization_app.server import app
@@ -155,6 +156,37 @@ def test_list_graphs_distinguishes_same_slug_across_datasets(tmp_path: Path) -> 
         ("analogies", "000"),
         ("multihop", "000"),
     }
+
+
+def test_viewer_url_has_cache_buster_for_same_slug_dataset_switches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = iter([101, 202])
+    monkeypatch.setattr(services.time, "time_ns", lambda: next(values))
+
+    first = services.viewer_url("/viewer", "000")
+    second = services.viewer_url("/viewer", "000")
+
+    assert first == "/viewer/index.html?slug=000&viewerImport=101"
+    assert second == "/viewer/index.html?slug=000&viewerImport=202"
+
+
+def test_viewer_graph_data_disables_browser_cache(tmp_path: Path) -> None:
+    viewer_dir = tmp_path / "viewer"
+    viewer_dir.mkdir()
+    (viewer_dir / "graph-metadata.json").write_text('{"graphs":[]}', encoding="utf-8")
+    (viewer_dir / "000.json").write_text('{"nodes":[],"links":[]}', encoding="utf-8")
+    app_server._set_viewer_dir(viewer_dir)
+
+    client = TestClient(app)
+
+    metadata_response = client.get("/viewer/data/graph-metadata.json")
+    graph_response = client.get("/viewer/graph_data/000.json")
+
+    assert metadata_response.status_code == 200
+    assert graph_response.status_code == 200
+    assert metadata_response.headers["cache-control"] == "no-store"
+    assert graph_response.headers["cache-control"] == "no-store"
 
 
 def test_list_graphs_distinguishes_same_slug_across_source_sets(tmp_path: Path) -> None:
@@ -1256,7 +1288,17 @@ def test_summary_graph_viewer_payload_includes_singleton_logit_supernodes() -> N
     emb = Supernode("SN_EMB_0", [_node("E_0_0", 2, "embedding")], "emb", -1, -1)
     logit = Supernode(
         "SN_LOGIT_0",
-        [_node("L_0", 3, "logit")],
+        [
+            Node(
+                node_id="L_0",
+                node_idx=3,
+                feature=3,
+                layer="L",
+                ctx_idx=0,
+                feature_type="logit",
+                clerp='Output "B" (p=0.700)',
+            )
+        ],
         "logit",
         99,
         99,
@@ -1266,7 +1308,7 @@ def test_summary_graph_viewer_payload_includes_singleton_logit_supernodes() -> N
     pinned_ids, grouped, stats = services.summary_graph_viewer_payload(sng, max_nodes=200)
 
     assert pinned_ids == ["L_0", "0_0_0", "0_1_0", "E_0_0"]
-    assert grouped == [["SN_0", "0_0_0", "0_1_0"], ["SN_LOGIT_0", "L_0"]]
+    assert grouped == [["SN_0", "0_0_0", "0_1_0"], ['Output "B" (p=0.700)', "L_0"]]
     assert stats["supernodes"] == 2
 
     capped_ids, capped_grouped, capped_stats = services.summary_graph_viewer_payload(
@@ -1274,8 +1316,37 @@ def test_summary_graph_viewer_payload_includes_singleton_logit_supernodes() -> N
     )
 
     assert "L_0" in capped_ids
-    assert capped_grouped == [["SN_LOGIT_0", "L_0"]]
+    assert capped_grouped == [['Output "B" (p=0.700)', "L_0"]]
     assert capped_stats["dropped_supernodes"] == 1
+
+
+def test_summary_viewer_payload_maps_legacy_logit_ids_to_viewer_ids() -> None:
+    pinned_ids = ["27_4155_0", "14_503_15"]
+    supernodes = [['Output "Bra" (p=0.133)', "27_4155_0"], ["SN_0", "14_503_15"]]
+    viewer_graph = {
+        "nodes": [
+            {
+                "node_id": "27_4155_15",
+                "feature": 4155,
+                "layer": "27",
+                "feature_type": "logit",
+            },
+            {
+                "node_id": "14_503_15",
+                "feature": 503,
+                "feature_type": "cross layer transcoder",
+            },
+        ]
+    }
+
+    remapped_pinned_ids, remapped_supernodes = services.align_summary_viewer_payload_to_graph(
+        pinned_ids,
+        supernodes,
+        viewer_graph,
+    )
+
+    assert remapped_pinned_ids == ["27_4155_15", "14_503_15"]
+    assert remapped_supernodes == [['Output "Bra" (p=0.133)', "27_4155_15"], ["SN_0", "14_503_15"]]
 
 
 def test_summary_job_reports_progress(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -191,12 +191,18 @@ def _active_features_dir() -> Path:
     return Path(features_dir)
 
 
-def _viewer_file_response(base_dir: Path, relative_path: str) -> FileResponse:
+def _viewer_file_response(
+    base_dir: Path,
+    relative_path: str,
+    *,
+    cache_control: str | None = None,
+) -> FileResponse:
     path = (base_dir / relative_path).resolve()
     base = base_dir.resolve()
     if not path.is_file() or base not in path.parents and path != base:
         raise HTTPException(status_code=404, detail="Viewer file not found.")
-    return FileResponse(path)
+    headers = {"Cache-Control": cache_control} if cache_control else None
+    return FileResponse(path, headers=headers)
 
 
 def _feature_path(relative_path: str) -> Path:
@@ -254,12 +260,12 @@ def _features_response(relative_path: str, request: Request, *, head: bool = Fal
 
 @app.get("/viewer/data/{relative_path:path}")
 def viewer_data(relative_path: str) -> FileResponse:
-    return _viewer_file_response(_active_viewer_dir(), relative_path)
+    return _viewer_file_response(_active_viewer_dir(), relative_path, cache_control="no-store")
 
 
 @app.get("/viewer/graph_data/{relative_path:path}")
 def viewer_graph_data(relative_path: str) -> FileResponse:
-    return _viewer_file_response(_active_viewer_dir(), relative_path)
+    return _viewer_file_response(_active_viewer_dir(), relative_path, cache_control="no-store")
 
 
 @app.get("/viewer/{relative_path:path}")
@@ -538,6 +544,12 @@ def get_viewer_url(
 
         sng = SummaryGraph.load(str(path))
         pinned_ids, supernodes, stats = services.summary_graph_viewer_payload(sng)
+        viewer_graph = services._read_graph_json(Path(record.directory) / f"{safe_slug}.json")
+        pinned_ids, supernodes = services.align_summary_viewer_payload_to_graph(
+            pinned_ids,
+            supernodes,
+            viewer_graph,
+        )
         extra_params = services.summary_query_params(pinned_ids, supernodes)
         summary_data = {
             "stats": stats,

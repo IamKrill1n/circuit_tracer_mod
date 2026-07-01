@@ -67,6 +67,11 @@ The local evidence used to interpret a feature within the current computation. F
 evidence identifies where the feature appears in the computation and gives activation/logit
 signals, but it is distinct from the supernode's final display label.
 
+## Clerp
+
+A short natural-language explanation attached to one circuit node. A clerp is distinct from a
+supernode's display name, role, and description, which are assigned at the supernode level.
+
 ## Steering intervention
 
 A causal probe that scales the activations of selected feature supernodes in the original

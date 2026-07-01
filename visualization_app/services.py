@@ -926,6 +926,13 @@ def summary_graph_viewer_payload(
     dropped_supernodes = 0
     dropped_members = 0
 
+    def display_label(supernode) -> str:
+        if len(supernode.features) == 1 and supernode.type in {"emb", "logit"}:
+            clerp = str(supernode.features[0].clerp or "").strip()
+            if clerp:
+                return clerp
+        return str(supernode.name)
+
     for supernode in sng.supernodes:
         member_ids = supernode.member_node_ids()
         if supernode.type != "logit" or not member_ids:
@@ -942,7 +949,7 @@ def summary_graph_viewer_payload(
         member_ids = supernode.member_node_ids()
         if supernode.type == "logit":
             if member_ids and all(node_id in pinned_set for node_id in member_ids):
-                grouped.append([supernode.name, *member_ids])
+                grouped.append([display_label(supernode), *member_ids])
             continue
         if len(member_ids) <= 1:
             continue
@@ -955,7 +962,7 @@ def summary_graph_viewer_payload(
 
         pinned_ids.extend(new_member_ids)
         pinned_set.update(new_member_ids)
-        grouped.append([supernode.name, *member_ids])
+        grouped.append([display_label(supernode), *member_ids])
 
     for supernode in sng.supernodes:
         member_ids = supernode.member_node_ids()
@@ -980,16 +987,71 @@ def summary_graph_viewer_payload(
     return pinned_ids, grouped, stats
 
 
+def align_summary_viewer_payload_to_graph(
+    pinned_ids: list[str],
+    supernodes: list[list[str]],
+    viewer_graph: dict[str, Any],
+) -> tuple[list[str], list[list[str]]]:
+    """Map legacy summary logit ids onto the ids used by viewer JSON graph files."""
+    viewer_node_ids = {str(node.get("node_id")) for node in viewer_graph.get("nodes") or []}
+    logit_id_by_layer_feature: dict[tuple[str, int], str] = {}
+    ambiguous_keys: set[tuple[str, int]] = set()
+
+    for node in viewer_graph.get("nodes") or []:
+        if str(node.get("feature_type") or "").lower() != "logit":
+            continue
+        try:
+            feature = int(node.get("feature"))
+        except (TypeError, ValueError):
+            continue
+        key = (str(node.get("layer")), feature)
+        node_id = str(node.get("node_id"))
+        if key in logit_id_by_layer_feature:
+            ambiguous_keys.add(key)
+            continue
+        logit_id_by_layer_feature[key] = node_id
+
+    for key in ambiguous_keys:
+        logit_id_by_layer_feature.pop(key, None)
+
+    def remap_node_id(node_id: str) -> str:
+        if node_id in viewer_node_ids:
+            return node_id
+        parts = node_id.split("_")
+        if len(parts) != 3:
+            return node_id
+        try:
+            feature = int(parts[1])
+        except ValueError:
+            return node_id
+        return logit_id_by_layer_feature.get((parts[0], feature), node_id)
+
+    remapped_pinned_ids: list[str] = []
+    pinned_set: set[str] = set()
+    for node_id in pinned_ids:
+        remapped = remap_node_id(node_id)
+        if remapped in pinned_set:
+            continue
+        remapped_pinned_ids.append(remapped)
+        pinned_set.add(remapped)
+
+    remapped_supernodes = [
+        [supernode[0], *[remap_node_id(node_id) for node_id in supernode[1:]]]
+        for supernode in supernodes
+    ]
+    return remapped_pinned_ids, remapped_supernodes
+
+
 def summary_query_params(pinned_ids: list[str], supernodes: list[list[str]]) -> dict[str, str]:
     return {
         "pinnedIds": ",".join(pinned_ids),
         "supernodes": json.dumps(supernodes, separators=(",", ":")),
-        "viewerImport": str(int(time.time())),
+        "viewerImport": str(time.time_ns()),
     }
 
 
 def viewer_url(base_url: str, slug: str, extra_params: dict[str, str] | None = None) -> str:
-    params = {"slug": slugify(slug)}
+    params = {"slug": slugify(slug), "viewerImport": str(time.time_ns())}
     if extra_params:
         params.update(extra_params)
     return f"{base_url.rstrip('/')}/index.html?{urllib.parse.urlencode(params)}"
