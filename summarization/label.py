@@ -291,7 +291,7 @@ def _google_generate(
 def _load_system_prompt(scheme: LabelScheme) -> str:
     if scheme.system_prompt_path:
         return Path(scheme.system_prompt_path).read_text(encoding="utf-8").strip()
-    name = "label.txt" if scheme.scheme == "two_pass" else "label_graph.txt"
+    name = "label.txt" if scheme.scheme == "two_pass" else "label_graph_no_trash.txt"
     return (_PROMPT_DIR / name).read_text(encoding="utf-8").strip()
 
 

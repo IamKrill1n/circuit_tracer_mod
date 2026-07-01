@@ -21,7 +21,8 @@ The function a supernode plays in producing the prediction. Fixed vocabulary:
 
 The post-π directed acyclic graph over supernodes. Beyond structure, it also carries the
 **provenance** of the computation it summarizes: the prompt, the predicted target token, the
-transcoder scan, and the prompt tokens.
+transcoder scan, the prompt tokens, and the source set when the summarized attribution graph is
+part of one.
 
 ## Labeling scheme
 
@@ -85,7 +86,8 @@ default generation settings. The single place that knows how to reach and config
 ## Source set
 
 A named collection of attribution graphs within a dataset that share the same model and
-transcoder family.
+transcoder family. A source set is part of a graph's identity when the same dataset contains
+multiple model/transcoder families.
 
 ## Provider
 

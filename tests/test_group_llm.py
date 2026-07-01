@@ -12,6 +12,7 @@ from summarization.label import (
     _build_graph_user_message,
     _build_single_supernode_user_message,
     _google_generate,
+    _load_system_prompt,
     _merge_settings,
     _parse_graph_label_response,
     resolve_model,
@@ -110,6 +111,13 @@ def test_resolve_model_uses_gemma_registry_default(monkeypatch) -> None:
     assert route.defaults.thinking_effort == "high"
     assert not route.supports_thinking_budget
     assert route.supports_thinking_level
+
+
+def test_one_pass_default_prompt_excludes_trash_role() -> None:
+    system_prompt = _load_system_prompt(LabelScheme(scheme="one_pass"))
+
+    assert "<role_definitions>" in system_prompt
+    assert "Trash:" not in system_prompt
 
 
 def test_resolve_model_rejects_gemini_provider(tmp_path) -> None:

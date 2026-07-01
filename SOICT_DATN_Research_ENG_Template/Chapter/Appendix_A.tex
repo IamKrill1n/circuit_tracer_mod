@@ -1,7 +1,7 @@
 \documentclass[../main.tex]{subfiles}
 \begin{document}
 
-\section{Shap values calculation}
+\section{SHAP Value Calculation}
 \label{app:shap}
 
 The token weight vector $\tau$ in Section~\ref{sec:problem} is initialized from
@@ -35,8 +35,10 @@ backend returns segment counts along the wrong axis) to obtain one scalar per in
 segment. Special tokens matching \texttt{<...>} and any prefix-pinned positions
 receive zero mass after normalization.
 
-The raw scores are mapped to a probability vector over non-special prompt tokens
-via one of four normalizers: softmax, sparsemax, entmax-1.5, or entmax with
+The raw signed scores are passed directly to the selected normalizer; the implementation
+does not take a positive part or absolute value before normalization. These scores are
+mapped to a probability vector over non-special prompt tokens via one of four normalizers:
+softmax, sparsemax, entmax-1.5, or entmax with
 $\alpha \in (1, 2]$ (default $\alpha = 1.25$). Special-token positions are masked
 before normalization and forced to zero afterward; remaining mass is renormalized
 to sum to one. The graph entry point

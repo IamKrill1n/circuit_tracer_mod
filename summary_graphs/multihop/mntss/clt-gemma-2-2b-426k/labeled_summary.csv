@@ -1,0 +1,155 @@
+graph_file,graph_stem,graph_path,summary_graph_path,labeled_summary_graph_path,model_name,temperature,label_scheme,status,num_supernodes,labelled_supernodes,error,traceback
+000.pt,000,dataset/analogies/000.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/000.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/000.pt,gemma-4-31b-it,0.2,one_pass,ok,15,8,,
+001.pt,001,dataset/analogies/001.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/001.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/001.pt,gemma-4-31b-it,0.2,one_pass,ok,12,10,,
+002.pt,002,dataset/analogies/002.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/002.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/002.pt,gemma-4-31b-it,0.2,one_pass,ok,12,10,,
+003.pt,003,dataset/analogies/003.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/003.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/003.pt,gemma-4-31b-it,0.2,one_pass,ok,13,11,,
+004.pt,004,dataset/analogies/004.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/004.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/004.pt,gemma-4-31b-it,0.2,one_pass,ok,16,13,,
+005.pt,005,dataset/analogies/005.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/005.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/005.pt,gemma-4-31b-it,0.2,one_pass,ok,15,7,,
+006.pt,006,dataset/analogies/006.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/006.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/006.pt,gemma-4-31b-it,0.2,one_pass,ok,18,10,,
+007.pt,007,dataset/analogies/007.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/007.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/007.pt,gemma-4-31b-it,0.2,one_pass,ok,12,9,,
+008.pt,008,dataset/analogies/008.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/008.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/008.pt,gemma-4-31b-it,0.2,one_pass,ok,9,6,,
+009.pt,009,dataset/analogies/009.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/009.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/009.pt,gemma-4-31b-it,0.2,one_pass,ok,17,11,,
+010.pt,010,dataset/analogies/010.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/010.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/010.pt,gemma-4-31b-it,0.2,one_pass,ok,18,7,,
+011.pt,011,dataset/analogies/011.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/011.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/011.pt,gemma-4-31b-it,0.2,one_pass,ok,12,8,,
+012.pt,012,dataset/analogies/012.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/012.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/012.pt,gemma-4-31b-it,0.2,one_pass,ok,15,11,,
+013.pt,013,dataset/analogies/013.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/013.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/013.pt,gemma-4-31b-it,0.2,one_pass,ok,12,9,,
+014.pt,014,dataset/analogies/014.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/014.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/014.pt,gemma-4-31b-it,0.2,one_pass,ok,17,11,,
+015.pt,015,dataset/analogies/015.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/015.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/015.pt,gemma-4-31b-it,0.2,one_pass,ok,19,14,,
+016.pt,016,dataset/analogies/016.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/016.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/016.pt,gemma-4-31b-it,0.2,one_pass,ok,12,10,,
+017.pt,017,dataset/analogies/017.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/017.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/017.pt,gemma-4-31b-it,0.2,one_pass,ok,11,8,,
+018.pt,018,dataset/analogies/018.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/018.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/018.pt,gemma-4-31b-it,0.2,one_pass,ok,14,9,,
+019.pt,019,dataset/analogies/019.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/019.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/019.pt,gemma-4-31b-it,0.2,one_pass,ok,14,12,,
+020.pt,020,dataset/analogies/020.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/020.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/020.pt,gemma-4-31b-it,0.2,one_pass,ok,14,9,,
+021.pt,021,dataset/analogies/021.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/021.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/021.pt,gemma-4-31b-it,0.2,one_pass,ok,14,11,,
+022.pt,022,dataset/analogies/022.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/022.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/022.pt,gemma-4-31b-it,0.2,one_pass,ok,12,6,,
+023.pt,023,dataset/analogies/023.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/023.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/023.pt,gemma-4-31b-it,0.2,one_pass,ok,14,10,,
+024.pt,024,dataset/analogies/024.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/024.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/024.pt,gemma-4-31b-it,0.2,one_pass,ok,12,6,,
+025.pt,025,dataset/analogies/025.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/025.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/025.pt,gemma-4-31b-it,0.2,one_pass,ok,17,9,,
+026.pt,026,dataset/analogies/026.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/026.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/026.pt,gemma-4-31b-it,0.2,one_pass,ok,14,10,,
+027.pt,027,dataset/analogies/027.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/027.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/027.pt,gemma-4-31b-it,0.2,one_pass,ok,17,11,,
+028.pt,028,dataset/analogies/028.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/028.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/028.pt,gemma-4-31b-it,0.2,one_pass,ok,8,6,,
+029.pt,029,dataset/analogies/029.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/029.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/029.pt,gemma-4-31b-it,0.2,one_pass,ok,12,8,,
+030.pt,030,dataset/analogies/030.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/030.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/030.pt,gemma-4-31b-it,0.2,one_pass,ok,12,9,,
+031.pt,031,dataset/analogies/031.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/031.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/031.pt,gemma-4-31b-it,0.2,one_pass,ok,15,13,,
+032.pt,032,dataset/analogies/032.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/032.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/032.pt,gemma-4-31b-it,0.2,one_pass,ok,15,11,,
+033.pt,033,dataset/analogies/033.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/033.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/033.pt,gemma-4-31b-it,0.2,one_pass,ok,12,8,,
+034.pt,034,dataset/analogies/034.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/034.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/034.pt,gemma-4-31b-it,0.2,one_pass,error,,,ReadTimeout('graph labeling exceeded 600s'),"Traceback (most recent call last):
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpx/_transports/default.py"", line 101, in map_httpcore_exceptions
+    yield
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpx/_transports/default.py"", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpcore/_sync/connection_pool.py"", line 256, in handle_request
+    raise exc from None
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpcore/_sync/connection_pool.py"", line 236, in handle_request
+    response = connection.handle_request(
+        pool_request.request
+    )
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpcore/_sync/connection.py"", line 103, in handle_request
+    return self._connection.handle_request(request)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpcore/_sync/http11.py"", line 136, in handle_request
+    raise exc
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpcore/_sync/http11.py"", line 106, in handle_request
+    ) = self._receive_response_headers(**kwargs)
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpcore/_sync/http11.py"", line 177, in _receive_response_headers
+    event = self._receive_event(timeout=timeout)
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpcore/_sync/http11.py"", line 217, in _receive_event
+    data = self._network_stream.read(
+        self.READ_NUM_BYTES, timeout=timeout
+    )
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpcore/_backends/sync.py"", line 126, in read
+    with map_exceptions(exc_map):
+         ~~~~~~~~~~~~~~^^^^^^^^^
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/contextlib.py"", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpcore/_exceptions.py"", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ReadTimeout: graph labeling exceeded 600s
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File ""/home/tu/circuit_tracer_mod/eval/label_summary_graphs.py"", line 206, in main
+    labelled = label_supernodes(
+        sng,
+    ...<2 lines>...
+        scheme=scheme,
+    )
+  File ""/home/tu/circuit_tracer_mod/summarization/label.py"", line 655, in label_supernodes
+    return _label_one_pass(sng, route, merged, scheme, features_dir)
+  File ""/home/tu/circuit_tracer_mod/summarization/label.py"", line 566, in _label_one_pass
+    text = generate_text(route, settings, system_prompt, user_message)
+  File ""/home/tu/circuit_tracer_mod/summarization/label.py"", line 188, in generate_text
+    return _google_generate(route, settings, system_prompt, user_message)
+  File ""/home/tu/circuit_tracer_mod/summarization/label.py"", line 270, in _google_generate
+    resp = client.models.generate_content(
+        model=route.model, config=config, contents=user_message
+    )
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/google/genai/models.py"", line 5709, in generate_content
+    response = self._generate_content(
+        model=model, contents=contents, config=parsed_config
+    )
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/google/genai/models.py"", line 4371, in _generate_content
+    response = self._api_client.request(
+        'post', path, request_dict, http_options
+    )
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/google/genai/_api_client.py"", line 1401, in request
+    response = self._request(http_request, http_options, stream=False)
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/google/genai/_api_client.py"", line 1237, in _request
+    return self._retry(self._request_once, http_request, stream)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/tenacity/__init__.py"", line 470, in __call__
+    do = self.iter(retry_state=retry_state)
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/tenacity/__init__.py"", line 371, in iter
+    result = action(retry_state)
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/tenacity/__init__.py"", line 413, in exc_check
+    raise retry_exc.reraise()
+          ~~~~~~~~~~~~~~~~~^^
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/tenacity/__init__.py"", line 184, in reraise
+    raise self.last_attempt.result()
+          ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/concurrent/futures/_base.py"", line 449, in result
+    return self.__get_result()
+           ~~~~~~~~~~~~~~~~~^^
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/concurrent/futures/_base.py"", line 401, in __get_result
+    raise self._exception
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/tenacity/__init__.py"", line 473, in __call__
+    result = fn(*args, **kwargs)
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/google/genai/_api_client.py"", line 1207, in _request_once
+    response = self._httpx_client.request(
+        method=http_request.method,
+    ...<3 lines>...
+        timeout=http_request.timeout,
+    )
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpx/_client.py"", line 825, in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpx/_client.py"", line 914, in send
+    response = self._send_handling_auth(
+        request,
+    ...<2 lines>...
+        history=[],
+    )
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpx/_client.py"", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+        request,
+        follow_redirects=follow_redirects,
+        history=history,
+    )
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpx/_client.py"", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpx/_client.py"", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpx/_transports/default.py"", line 249, in handle_request
+    with map_httpcore_exceptions():
+         ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/contextlib.py"", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File ""/home/tu/.conda/envs/circuit/lib/python3.13/site-packages/httpx/_transports/default.py"", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ReadTimeout: graph labeling exceeded 600s
+"
+035.pt,035,dataset/analogies/035.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/035.pt,summary_graphs/multihop/mntss/clt-gemma-2-2b-426k/entmax/alpha_0.50/node_0.02/035.pt,gemma-4-31b-it,0.2,one_pass,ok,12,7,,

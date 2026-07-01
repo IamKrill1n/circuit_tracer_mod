@@ -10,7 +10,7 @@ are often too large and dense for direct inspection. To address this limitation,
 thesis formalized the problem of attribution-graph summarization and proposed an
 automated method for producing compact, human-readable summary graphs.
 
-The proposed method consists of three stages: pruning, clustering, and interpreting.
+The proposed method consists of three stages: pruning, clustering, and visualizing.
 The pruning stage removes nodes and edges that are unlikely to participate in the
 selected input-to-output computation. Instead of using only downstream influence
 on the target logit, it combines downstream influence with upstream relevance from
@@ -19,7 +19,7 @@ prompt context and relevant to the prediction. The clustering stage groups retai
 feature nodes into supernodes. It formulates clustering as an optimization problem
 that rewards atomicity, so that features inside a supernode have similar signed
 causal roles, while also preserving visible causal structure between supernodes. The
-interpreting stage aggregates the clustered graph into a directed acyclic summary
+visualizing stage aggregates the clustered graph into a directed acyclic summary
 graph and assigns labels and roles to the resulting supernodes. The final output is
 therefore a smaller graph that presents the model's computation as a sequence of
 interpretable causal steps.
@@ -40,8 +40,10 @@ causal structure.
 
 The approach nevertheless has several limitations. First, the relevance score uses
 SHAP values as a proxy for input-token importance. Although this helps suppress
-uninformative prompt tokens in practice, SHAP is a non-linear attribution method and it is not clear how it can transfer to the linear attribution graphs. Second, the experiments are
-limited in scale. Therefore, the thesis only uses SHAP to approximate human rationales and not for evaluations. They focus mainly on analogy and multi-hop reasoning prompts
+uninformative prompt tokens in practice, SHAP is a non-linear attribution method, and it is
+not clear how it transfers to linear attribution graphs. The thesis therefore uses SHAP to
+approximate human rationales rather than as an evaluation target. Second, the experiments are
+limited in scale. They focus mainly on analogy and multi-hop reasoning prompts
 for one circuit-tracing backbone, and do not test longer prompts, larger models, or
 a broader range of behaviors. Third, there is no
 established end-to-end baseline for summarizing CLT attribution graphs. The thesis
@@ -66,13 +68,14 @@ jailbreak susceptibility, and unfaithful reasoning traces.
 
 Future work should strengthen both the summarization method and its evaluation.
 A first direction is to replace the current SHAP-based relevance proxy with a
-relevance measure that align better with the attribution graph. Such a measure would
-express upstream and downstream importance within the same linear framework, while approximate human rationales closely.
+relevance measure that aligns better with the attribution graph. Such a measure would
+express upstream and downstream importance within the same linear framework, while
+approximating human rationales closely.
 
 A second direction is to evaluate the pipeline on a broader set of models, prompts,
 and tasks. The present experiments focus on controlled analogy and multi-hop
 reasoning settings. Future evaluations should include longer prompts, tasks with
-multiple competing answers,  and
+multiple competing answers, and
 models with different sizes or replacement-model quality. This would clarify which
 parts of the pipeline are robust and which depend on the structure of the current
 experimental setting.

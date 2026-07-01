@@ -3,7 +3,7 @@
 
 \section{Overview}
 
-The previous chapter presented the proposed a novel summarization pipeline. This chapter evaluates whether the proposed summarization pipeline preserves the
+The previous chapter presented the proposed summarization pipeline. This chapter evaluates whether the proposed summarization pipeline preserves the
 causal structure of attribution graphs while making them smaller and easier to
 interpret. The evaluation is organized around three questions. First, does
 influence--relevance pruning retain enough of the replacement-model computation
@@ -16,20 +16,19 @@ The chapter is therefore organized by experiment rather than by separating all
 metrics, baselines, and results into different sections. Section~\ref{sec:setup}
 describes the common datasets, implementation environment, and default pipeline
 configuration. Section~\ref{sec:pruning-experiment} evaluates pruning.
-Section~\ref{sec:clustering-experiment} evaluates supernode clustering.
-Section~\ref{sec:steering-experiment} validates summary graphs with steering
-interventions. Section~\ref{sec:multihop-stress-test} explains how the multi-hop
-graphs are used as a qualitative stress test.
+Section~\ref{sec:clustering-experiment} evaluates supernode clustering on both
+analogy and multi-hop graphs. Section~\ref{sec:steering-experiment} validates
+summary graphs with steering interventions.
 
 The main quantitative results support the three claims. Adding upstream
 relevance to the pruning score preserves graph completeness and replacement
 score at matched graph sizes. The ILP clusterer achieves the strongest
 structural preservation among the clustering baselines: at the $p65$ role-cosine
-threshold it obtains an internalized feature-edge mass of $0.0994$ and a DAG
-loss of $0.0359$, while retaining a high role gap. Finally, the final summary
-graphs obtain a sign consistency of $0.9361$ and a
-Spearman edge-effect correlation of $0.5633$, indicating that their signed edges
-largely agree with measured intervention responses.
+threshold it obtains internalized edge mass of $0.048$ on both analogy and
+multi-hop graphs, with DAG loss of $0.056$ on analogies and $0.038$ on multi-hop
+graphs. Finally, entity-swap steering shows that Output-role supernodes contain
+transferable answer information, with top-1 hit rates up to $0.4400$ and top-5
+hit rates up to $0.6800$ in the tested relations.
 
 \section{Common Experimental Setup}
 \label{sec:setup}
@@ -62,12 +61,10 @@ makes.
 The second dataset follows the multi-hop queries of Ameisen et
 al.~\cite{ameisen2025circuit}. Each prompt requires several reasoning steps
 before reaching the answer, so it tests whether the summary pipeline can preserve
-causal structure beyond a single local association. The dataset contains 35
+causal structure beyond a single local association. The dataset contains 36
 prompts covering basic knowledge in geography, biology, physics, and common
-knowledge. These graphs are used as a qualitative stress test for the
-summarization pipeline and viewer, while the quantitative tables focus on the
-BATS-derived analogy graphs, where enough examples are available for controlled
-sweeps.
+knowledge. These graphs are used to test whether the clustering results remain
+stable beyond the BATS-derived analogy graphs.
 
 \subsection{Environment and implementation}
 
@@ -76,7 +73,7 @@ Experiments run on a single workstation with an NVIDIA GeForce RTX 4090 GPU
 uses Python 3.13.5. Attribution graphs are generated with the circuit-tracing
 library~\cite{circuit-tracer}. The summary graphs reuse the same feature
 metadata and are rendered with an adapted version of the library's user
-interface
+interface.
 
 \subsection{Default pipeline configuration}
 
@@ -119,8 +116,8 @@ Replacement score measures the fraction of end-to-end influence from input
 tokens to output logits that flows through the retained part of the graph. Let
 $V'$ and $E'$ be the retained node and edge sets from the pruning stage. The
 complement $V \setminus V'$ denotes attribution-graph nodes outside the pruned
-graph. Let $W'$ be the adjacency after this
-merge, and let $\mathrm{Inf}'_v$ be the influence score computed from $W'$ using
+graph. Let $W'$ be the retained adjacency from Chapter~3, with all unretained
+nodes and edges zeroed, and let $\mathrm{Inf}'_v$ be the influence score computed from $W'$ using
 Eq.~\eqref{eq:inf}. The score is
 \begin{equation}
 \mathrm{Rep}
@@ -161,9 +158,8 @@ mostly explained by retained features even when some influence remains assigned
 to nodes outside the pruned graph.
 
 \paragraph{Irrelevant feature count}
-The irrelevant feature count measure the number of features that are not relevant to the information we care about.
-Ameisen et al.~\cite{ameisen2025circuit} mention the "boring circuit" problem where a large number of active features and graph edges are responsible for basic, obvious role, like task
-related features, punctuation, stopwords, format scalfolding, ... We usually care more about how the model derives the semantics required to output the next token rather than the syntactic features.
+The irrelevant feature count measures the number of features that are not relevant to the information we care about.
+Ameisen et al.~\cite{ameisen2025circuit} mention the ``boring circuit'' problem where a large number of active features and graph edges are responsible for basic, obvious roles, such as task-related features, punctuation, stopwords, and format scaffolding. We usually care more about how the model derives the semantics required to output the next token than about syntactic features.
 Therefore, this metric is used to measure the proportion of features that are not relevant to the information we care about.
 For the analogies dataset, we label the token positions of the entities $A$, $B$, $C$, and the final ``to'' token as relevant, and the remaining positions as irrelevant.
 After pruning, we report two counts of retained nodes at irrelevant positions: the number of cross-layer transcoder feature nodes and the number of input token (embedding) nodes. Lower values mean that pruning discards more of the syntactic scaffolding.
@@ -230,7 +226,8 @@ graph, so the comparison isolates partition quality rather than graph size. Let
 $F = V'_{\text{feature}}$ be the retained feature nodes, let $f$ be the
 partition from clustering, and let $r(i)$ be the role vector of
 Eq.~\eqref{eq:role}. All edge-mass formulas use the retained edge set $E'$ and
-the convention that $W_{uv}$ is the edge from source $u$ to target $v$.
+the retained adjacency $W'$, with the convention that $W'_{uv}$ is the edge from
+source $u$ to target $v$.
 
 \subsection{Baselines}
 
@@ -292,18 +289,18 @@ supernodes.
 
 \paragraph{Internalized edge mass.}
 Internalized edge mass measures how much fine-grained causal weight disappears
-inside feature supernodes. Unlike a graph-wide edge fraction, this metric is
-restricted to retained feature--feature edges and excludes embedding-to-feature
-and feature-to-logit edges:
+inside feature supernodes. It uses the same retained-edge denominator as the
+causal-information constraint in Chapter~3:
 \begin{equation}
 \mathrm{Internalized}
 =
-\frac{\sum_{(u,v)\in E'_{FF}:\, f(u)=f(v)} |W_{uv}|}
-     {\sum_{(u,v)\in E'_{FF}} |W_{uv}|}.
+\frac{\sum_{(u,v)\in E':\, u,v\in F,\, f(u)=f(v)} |W'_{uv}|}
+     {\sum_{(u,v)\in E'} |W'_{uv}|}.
 \label{eq:metric-internalized}
 \end{equation}
 Lower internalized edge mass means that more retained causal structure remains
-visible as edges between supernodes.
+visible as edges between supernodes rather than being hidden inside feature
+supernodes.
 
 \paragraph{DAG loss.}
 DAG loss measures the fraction of aggregated superedge mass that points backward
@@ -343,7 +340,7 @@ $100(m_{\mathrm{rand}}-m)/m_{\mathrm{rand}}$.
 \caption{Clustering evaluation on entmax-pruned analogy and multihop graphs.
 Higher role gap indicates more coherent signed causal roles inside supernodes. Lower
 internalized edge mass and lower DAG loss indicate better preservation of visible
-causal structure. Gains are measured against the random same-size baseline. \textbf{Best} and \underline{second-best} values are highlighted for each metric}
+causal structure. Gains are measured against the random same-size baseline. \textbf{Best} and \underline{second-best} values are highlighted for each metric.}
 \label{tab:clustering-baseline-entmax}
 \resizebox{\linewidth}{!}{%
 \begin{tabular}{lrrrrrrrrrrrr}
@@ -364,7 +361,7 @@ Ours ILP & \underline{0.675} & \textbf{0.048} & \textbf{0.056} & \underline{$+0.
 \end{table}
 
 The edge-mass metrics identify the intended advantage of the ILP formulation.
-The ILP row has the lowest internalized feature-edge mass and DAG loss on both
+The ILP row has the lowest internalized edge mass and DAG loss on both
 datasets. Relative to random same-size clusters, ILP reduces internalized mass by
 $41.1\%$ on analogies and $22.7\%$ on multihop, and reduces DAG loss by
 $54.9\%$ on analogies and $58.5\%$ on multihop. K-means gives the largest
@@ -408,25 +405,22 @@ Figure~\ref{fig:summary-steering} shows the summary graph for one animal--young 
 and the corresponding intervention view after replacing features that promote
 ``kid'' with features that promote ``calf''.
 
-\begin{figure}[H]
+\begin{figure}[tbp]
 \centering
-\begin{subfigure}{0.95\linewidth}
+\begin{subfigure}[t]{0.42\linewidth}
 \centering
 \includegraphics[width=\linewidth]{Figure/our_summary.png}
-\caption{Summary graph produced for the prompt ``The saying goes: fox is to cub as goat is to''.}
+\caption{Summary graph.}
 \end{subfigure}
-
-\vspace{0.4cm}
-
-\begin{subfigure}{0.95\linewidth}
+\hfill
+\begin{subfigure}[t]{0.54\linewidth}
 \centering
 \includegraphics[width=\linewidth]{Figure/our_steering.png}
-\caption{Intervention view for the same prompt. The model output changes after
-swapping Output features that promote ``kid'' with features that promote
-``calf''.}
+\caption{Intervention view after swapping Output features.}
 \end{subfigure}
-\caption{The summary graph and interventions of the prompt ``The saying goes:
-fox is to cub as goat is to''.}
+\caption{Summary graph and intervention view for the prompt ``The saying goes:
+fox is to cub as goat is to''. The model output changes after swapping Output
+features that promote ``kid'' with features that promote ``calf''.}
 \label{fig:summary-steering}
 \end{figure}
 

@@ -93,7 +93,7 @@ Recovering a feature direction leaves open what it means, and labelling features
 
 \section{Related Works}
 \label{sec:related}
-The work closest to this thesis automates the interpretation of attribution graphs directly. ADAG~\cite{arora2026adag} introduce attribution profiles to quantify the functional role of neurons, a clustering algorithm
+The work closest to this thesis automates the interpretation of attribution graphs directly. ADAG~\cite{arora2026adag} introduces attribution profiles to quantify the functional role of neurons and clusters nodes using those profiles. However, it does not explicitly optimize the structural causal-preservation objective used here.
 
 A parallel line of work questions the substrate on which circuits are built. Arora et al.~\cite{arora2026sparse} show that circuits traced directly in the neuron basis can be as sparse and as faithful as those built from transcoder features, avoiding transcoder training, reconstruction error, and the associated error nodes. The approach is attractive for those reasons, but the authors observe that the resulting circuits remain too large for a human to read and call for principled grouping methods to compress them. That is precisely the bottleneck this thesis targets, and the summarization method developed here is agnostic to the substrate: it operates on any signed attribution graph, whether its nodes are transcoder features or neurons.
 

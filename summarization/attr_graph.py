@@ -151,6 +151,7 @@ class AttrGraph:
 
         # --- Logit nodes ---
         num_layers_cfg = n_layers
+        logit_ctx_idx = graph.n_pos - 1
         for pos in range(n_log):
             vocab_idx = graph.logit_token_ids[pos]
             vid = int(vocab_idx.item()) if hasattr(vocab_idx, "item") else int(vocab_idx)
@@ -158,20 +159,20 @@ class AttrGraph:
             layer_logit = str(num_layers_cfg + 1)
             token_prob = float(graph.logit_probabilities[pos].item())
             target = pos == 0
-            nid = f"{layer_logit}_{vid}_{pos}"
+            nid = f"{layer_logit}_{vid}_{logit_ctx_idx}"
             nodes.append(
                 Node(
                     node_id=nid,
                     node_idx=len(nodes),
                     feature=vid,
                     layer=layer_logit,
-                    ctx_idx=pos,
+                    ctx_idx=logit_ctx_idx,
                     feature_type="logit",
                     token_prob=token_prob,
                     is_target_logit=target,
                     run_idx=0,
                     reverse_ctx_idx=0,
-                    jsNodeId=f"L_{vid}-{pos}",
+                    jsNodeId=f"L_{vid}-{logit_ctx_idx}",
                     clerp=f'Output "{tok_str}" (p={token_prob:.3f})',
                     influence=None,
                     activation=None,
