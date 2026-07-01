@@ -65,7 +65,9 @@ def test_attr_graph_from_graph_matches_expected_order_and_adjacency() -> None:
     by_id = {n.node_id: n for n in ag.nodes}
     assert by_id["E_101_0"].feature_type == "embedding"
     layer_log = str(cfg.n_layers + 1)
-    assert by_id[f"{layer_log}_201_0"].is_target_logit is True
+    target_logit = by_id[f"{layer_log}_201_{n_pos - 1}"]
+    assert target_logit.is_target_logit is True
+    assert target_logit.ctx_idx == n_pos - 1
 
 
 def test_prune_consumes_graph_directly() -> None:
