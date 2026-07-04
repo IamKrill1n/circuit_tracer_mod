@@ -339,15 +339,15 @@ def list_graphs(
         if not dataset_dir.is_dir():
             continue
         json_paths = sorted(
-            path for path in dataset_dir.rglob("*.json") if path.name != "graph-metadata.json"
+            path
+            for path in dataset_dir.rglob("*.json")
+            if path.name != "graph-metadata.json"
         )
         for graph_path in json_paths:
             directory = graph_path.parent
             slug = slugify(graph_path.stem)
             legacy_dir = dataset_dir / slug
-            source_set = (
-                "" if directory == legacy_dir else directory.relative_to(dataset_dir).as_posix()
-            )
+            source_set = "" if directory == legacy_dir else directory.relative_to(dataset_dir).as_posix()
 
             try:
                 payload = _read_graph_json(graph_path)
@@ -628,7 +628,7 @@ def _token_weights_from_shap(
     entmax_alpha: float | None,
     device: str,
 ) -> list[float]:
-    from summarization.shap_weights import token_weights_for_embeddings
+    from eval.prune_graphs import _token_weights_for_embeddings
     from summarization.token_attribution import get_token_attribution
     from summarization.utils import _build_index_sets
 
@@ -651,7 +651,7 @@ def _token_weights_from_shap(
     )
     emb_idx = _build_index_sets(ag.nodes)["embedding"]
     node_ids = [n.node_id for n in ag.nodes]
-    return token_weights_for_embeddings(normalized.detach().cpu(), node_ids, emb_idx)
+    return _token_weights_for_embeddings(normalized.detach().cpu(), node_ids, emb_idx)
 
 
 def _token_weights_from_shap_file(
@@ -661,22 +661,22 @@ def _token_weights_from_shap_file(
     normalize_method: str,
     entmax_alpha: float | None,
 ) -> list[float]:
-    from summarization.shap_weights import (
-        build_shap_lookup,
-        match_shap_row,
+    from eval.prune_graphs import (
+        _build_shap_lookup,
+        _match_shap_row,
+        _token_weights_for_embeddings,
         normalize_shap_values_for_prune,
-        token_weights_for_embeddings,
     )
     from summarization.utils import _build_index_sets
 
     payload = json.loads(shap_json_path.read_text(encoding="utf-8"))
-    by_prompt, by_index = build_shap_lookup(payload)
+    by_prompt, by_index = _build_shap_lookup(payload)
     metadata = ag.metadata
     prompt_tokens = [str(t) for t in (metadata.get("prompt_tokens") or [])]
     if not prompt_tokens:
         raise ValueError("Graph metadata lacks prompt_tokens for SHAP file.")
 
-    row = match_shap_row(stem="", metadata=metadata, by_prompt=by_prompt, by_index=by_index)
+    row = _match_shap_row(stem="", metadata=metadata, by_prompt=by_prompt, by_index=by_index)
     if row is None:
         raise ValueError(
             f"No matching SHAP row in {shap_json_path} for prompt {metadata.get('prompt')!r}"
@@ -699,7 +699,7 @@ def _token_weights_from_shap_file(
 
     emb_idx = _build_index_sets(ag.nodes)["embedding"]
     node_ids = [n.node_id for n in ag.nodes]
-    return token_weights_for_embeddings(normalized, node_ids, emb_idx)
+    return _token_weights_for_embeddings(normalized, node_ids, emb_idx)
 
 
 def run_summary(
@@ -732,7 +732,9 @@ def run_summary(
         custom_pt_root=custom_pt_root,
     )
     if pt_path is None:
-        raise FileNotFoundError(f"No .pt file exists for graph {safe_dataset}/{safe_slug!r}")
+        raise FileNotFoundError(
+            f"No .pt file exists for graph {safe_dataset}/{safe_slug!r}"
+        )
 
     def setting(name: str, default: Any) -> Any:
         value = settings.get(name, default)
@@ -924,6 +926,13 @@ def summary_graph_viewer_payload(
     dropped_supernodes = 0
     dropped_members = 0
 
+    def display_label(supernode) -> str:
+        if len(supernode.features) == 1 and supernode.type in {"emb", "logit"}:
+            clerp = str(supernode.features[0].clerp or "").strip()
+            if clerp:
+                return clerp
+        return str(supernode.name)
+
     for supernode in sng.supernodes:
         member_ids = supernode.member_node_ids()
         if supernode.type != "logit" or not member_ids:
@@ -940,7 +949,7 @@ def summary_graph_viewer_payload(
         member_ids = supernode.member_node_ids()
         if supernode.type == "logit":
             if member_ids and all(node_id in pinned_set for node_id in member_ids):
-                grouped.append([supernode.name, *member_ids])
+                grouped.append([display_label(supernode), *member_ids])
             continue
         if len(member_ids) <= 1:
             continue
@@ -953,7 +962,7 @@ def summary_graph_viewer_payload(
 
         pinned_ids.extend(new_member_ids)
         pinned_set.update(new_member_ids)
-        grouped.append([supernode.name, *member_ids])
+        grouped.append([display_label(supernode), *member_ids])
 
     for supernode in sng.supernodes:
         member_ids = supernode.member_node_ids()
@@ -978,16 +987,71 @@ def summary_graph_viewer_payload(
     return pinned_ids, grouped, stats
 
 
+def align_summary_viewer_payload_to_graph(
+    pinned_ids: list[str],
+    supernodes: list[list[str]],
+    viewer_graph: dict[str, Any],
+) -> tuple[list[str], list[list[str]]]:
+    """Map legacy summary logit ids onto the ids used by viewer JSON graph files."""
+    viewer_node_ids = {str(node.get("node_id")) for node in viewer_graph.get("nodes") or []}
+    logit_id_by_layer_feature: dict[tuple[str, int], str] = {}
+    ambiguous_keys: set[tuple[str, int]] = set()
+
+    for node in viewer_graph.get("nodes") or []:
+        if str(node.get("feature_type") or "").lower() != "logit":
+            continue
+        try:
+            feature = int(node.get("feature"))
+        except (TypeError, ValueError):
+            continue
+        key = (str(node.get("layer")), feature)
+        node_id = str(node.get("node_id"))
+        if key in logit_id_by_layer_feature:
+            ambiguous_keys.add(key)
+            continue
+        logit_id_by_layer_feature[key] = node_id
+
+    for key in ambiguous_keys:
+        logit_id_by_layer_feature.pop(key, None)
+
+    def remap_node_id(node_id: str) -> str:
+        if node_id in viewer_node_ids:
+            return node_id
+        parts = node_id.split("_")
+        if len(parts) != 3:
+            return node_id
+        try:
+            feature = int(parts[1])
+        except ValueError:
+            return node_id
+        return logit_id_by_layer_feature.get((parts[0], feature), node_id)
+
+    remapped_pinned_ids: list[str] = []
+    pinned_set: set[str] = set()
+    for node_id in pinned_ids:
+        remapped = remap_node_id(node_id)
+        if remapped in pinned_set:
+            continue
+        remapped_pinned_ids.append(remapped)
+        pinned_set.add(remapped)
+
+    remapped_supernodes = [
+        [supernode[0], *[remap_node_id(node_id) for node_id in supernode[1:]]]
+        for supernode in supernodes
+    ]
+    return remapped_pinned_ids, remapped_supernodes
+
+
 def summary_query_params(pinned_ids: list[str], supernodes: list[list[str]]) -> dict[str, str]:
     return {
         "pinnedIds": ",".join(pinned_ids),
         "supernodes": json.dumps(supernodes, separators=(",", ":")),
-        "viewerImport": str(int(time.time())),
+        "viewerImport": str(time.time_ns()),
     }
 
 
 def viewer_url(base_url: str, slug: str, extra_params: dict[str, str] | None = None) -> str:
-    params = {"slug": slugify(slug)}
+    params = {"slug": slugify(slug), "viewerImport": str(time.time_ns())}
     if extra_params:
         params.update(extra_params)
     return f"{base_url.rstrip('/')}/index.html?{urllib.parse.urlencode(params)}"
@@ -1188,9 +1252,7 @@ def rebuild_supernode_storage(
     )
     path_infos: list[tuple[Path, str, str, str]] = []
     for path in legacy_paths:
-        path_infos.append(
-            (path, validate_dataset(path.parent.name), "", _summary_slug_from_path(path))
-        )
+        path_infos.append((path, validate_dataset(path.parent.name), "", _summary_slug_from_path(path)))
     for path in source_paths:
         source_info = _source_summary_info_from_path(path, summary_graph_root)
         if source_info is not None:
@@ -1430,12 +1492,10 @@ def steering_options(
         summary_graph_root=summary_graph_root,
     )
     if not summary_file.exists():
-        graph_name = (
-            f"{safe_dataset}/{safe_source_set}/{safe_slug}"
-            if safe_source_set
-            else f"{safe_dataset}/{safe_slug}"
+        graph_name = f"{safe_dataset}/{safe_source_set}/{safe_slug}" if safe_source_set else f"{safe_dataset}/{safe_slug}"
+        raise FileNotFoundError(
+            f"Summary has not been generated for graph {graph_name!r}."
         )
-        raise FileNotFoundError(f"Summary has not been generated for graph {graph_name!r}.")
 
     sng = SummaryGraph.load(str(summary_file))
     prompt = str(sng.metadata.get("prompt", "") or record.prompt or "")
@@ -1669,7 +1729,7 @@ def run_steering(
     progress: Callable[[str, float | None], None] | None = None,
 ) -> dict[str, Any]:
     from summarization.summarize import SummaryGraph, steer_interventions_constrained
-    from visualization_app.intervention_viz import create_intervention_svg
+    from summarization.cluster_viz import supernode_graph_figure
 
     safe_slug = slugify(slug)
     safe_dataset = validate_dataset(dataset)
@@ -1764,21 +1824,36 @@ def run_steering(
         orig_activations,
         new_activations,
     )
-    top_probs, top_ids = new_logits.squeeze(0)[-1].softmax(-1).topk(int(top_k))
+    base_last_logits = base_logits.squeeze(0)[-1]
+    new_last_logits = new_logits.squeeze(0)[-1]
+    base_probs = base_last_logits.softmax(-1)
+    new_probs = new_last_logits.softmax(-1)
+    top_probs, top_ids = new_probs.topk(int(top_k))
     tokenizer = cast(Any, model.tokenizer)
-    top_outputs = [
-        {"token": tokenizer.decode([int(token_id)]), "probability": float(probability)}
-        for token_id, probability in zip(top_ids.tolist(), top_probs.tolist())
-    ]
-    svg = create_intervention_svg(
-        sng=sng,
+    top_outputs = []
+    for token_id, probability in zip(top_ids.tolist(), top_probs.tolist()):
+        token_idx = int(token_id)
+        probability_value = float(probability)
+        clean_probability = float(base_probs[token_idx])
+        top_outputs.append(
+            {
+                "token": tokenizer.decode([token_idx]),
+                "probability": probability_value,
+                "clean_probability": clean_probability,
+                "probability_delta": probability_value - clean_probability,
+                "logit_delta": float(new_last_logits[token_idx] - base_last_logits[token_idx]),
+            }
+        )
+    fig = supernode_graph_figure(
+        sng,
+        title="Steering visualization",
         prompt=prompt,
+        prompt_tokens=list(options["prompt_tokens"]) or None,
+        edge_threshold=edge_threshold,
         steering_factors=factors,
         activation_ratios=activation_ratios,
         top_outputs=top_outputs,
         stored_interventions=selected_stored,
-        prompt_tokens=list(options["prompt_tokens"]),
-        edge_threshold=edge_threshold,
     )
     return {
         "slug": safe_slug,
@@ -1790,5 +1865,9 @@ def run_steering(
         "steered": factors,
         "stored_supernodes": selected_stored,
         "top_outputs": top_outputs,
-        "svg": svg,
+        "figure_html": fig.to_html(
+            include_plotlyjs="cdn",
+            full_html=True,
+            config={"responsive": True, "displaylogo": False},
+        ),
     }
