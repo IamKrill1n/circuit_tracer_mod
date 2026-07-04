@@ -482,6 +482,7 @@ def test_supernode_figure_html_uses_draggable_svg_renderer() -> None:
     assert "node.rankPy" in page
     assert "selectedNodeId" in page
     assert "stroke-dasharray" in page
+    assert "node.py + node.heightPx / 2 + 4" in page
     assert "function renderEdges()" in page
     assert "pathFromRoute" in page
     assert "Plotly.newPlot" not in page
@@ -497,7 +498,7 @@ def test_initial_edge_paths_are_orthogonal_not_curved() -> None:
     assert all(" C " not in path for path in paths)
 
 
-def test_display_labels_use_node_kind_role_and_ignore_steering_overlays() -> None:
+def test_display_labels_use_node_kind_role_and_render_steering_overlays() -> None:
     sng = _summary_graph()
     sng.supernodes[1].name = "Hue"
     sng.supernodes[1].role = "Abstract"
@@ -506,9 +507,17 @@ def test_display_labels_use_node_kind_role_and_ignore_steering_overlays() -> Non
         sng,
         prompt_tokens=["<bos>", "The", "sky", "is"],
         prompt="<bos>The sky is",
-        steering_factors={"SN_0": -1.0},
-        activation_ratios={"SN_0": 0.20},
-        top_outputs=[{"token": " blue", "probability": 0.42}],
+        steering_factors={"Hue": -1.0},
+        activation_ratios={"Hue": 0.20},
+        top_outputs=[
+            {
+                "token": " blue",
+                "probability": 0.42,
+                "clean_probability": 0.10,
+                "probability_delta": 0.32,
+                "logit_delta": 1.25,
+            }
+        ],
         stored_interventions=[
             {
                 "record_id": "donor:0",
@@ -524,14 +533,58 @@ def test_display_labels_use_node_kind_role_and_ignore_steering_overlays() -> Non
     assert "Emb: The" in annotation_text
     assert "Abstract: Hue" in annotation_text
     assert "Logit: red" in annotation_text
+    assert "\u0394 Logit: blue" in annotation_text
     assert "red" in annotation_text
     assert "-1x" not in annotation_text
     assert "20%" not in annotation_text
-    assert "blue 0.420" not in annotation_text
-    assert "External interventions" not in annotation_text
-    assert "Stored color" not in annotation_text
+    assert "Stored color" in annotation_text
 
     hover_trace = next(trace for trace in fig.data if getattr(trace, "hovertext", None))
     hover_text = "<br>".join(str(item) for item in hover_trace.hovertext)
-    assert "Intervention: -1x" not in hover_text
-    assert "Activation ratio: 20%" not in hover_text
+    assert "Intervention: -1x" in hover_text
+    assert "Activation ratio: 20%" in hover_text
+    assert "Stored: Stored color 2x @ pos 2" in hover_text
+
+    page = fig.to_html(full_html=False)
+    assert "ct-intervention-summary" in page
+    assert '"active": true' in page
+    assert '"steeredCount": 1' in page
+    assert '"storedCount": 1' in page
+    assert '"text": "-1x"' in page
+    assert '"text": "20%"' in page
+    assert '"text": "Stored"' in page
+    assert '"kind": "delta"' in page
+    assert '"text": "\u0394 +1.25"' in page
+    assert "\u0394 Logit: blue" in page
+    assert "Clean probability: 10%" in page
+    assert "\u0394 probability: +32.0%" in page
+    assert " blue" in page
+    assert "0.42" in page
+    assert "Stored color" in page
+
+    nodes = fig.payload["nodes"]
+    synthetic_nodes = [
+        node for node in nodes if node["kind"] in {"intervention", "output_delta"}
+    ]
+    graph_nodes = [
+        node for node in nodes if node["kind"] not in {"intervention", "output_delta"}
+    ]
+    assert len(synthetic_nodes) == 2
+    assert synthetic_nodes[0]["x"] == pytest.approx(synthetic_nodes[1]["x"])
+    assert synthetic_nodes[0]["x"] > max(node["x"] for node in graph_nodes)
+    stored_node = next(node for node in synthetic_nodes if node["kind"] == "intervention")
+    output_node = next(node for node in synthetic_nodes if node["kind"] == "output_delta")
+    assert output_node["y"] > stored_node["y"]
+
+
+def test_non_steering_summary_graph_keeps_intervention_payload_inactive() -> None:
+    fig = supernode_graph_figure(_summary_graph())
+
+    page = fig.to_html(full_html=False)
+
+    assert '"active": false' in page
+    assert '"steeredCount": 0' in page
+    assert '"storedCount": 0' in page
+    assert '"topOutputs": []' in page
+    assert '"badges": []' in page
+    assert "Intervention: -1x" not in page

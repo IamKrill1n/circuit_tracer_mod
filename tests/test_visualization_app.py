@@ -1244,15 +1244,21 @@ def test_run_steering_uses_current_and_stored_supernodes(
             "n_features": 1,
         }
     ]
-    assert "figure_html" not in result
-    assert "svg" in result
-    assert "Steering intervention graph" in result["svg"]
-    assert "Current SN" in result["svg"]
-    assert "-1x" in result["svg"]
-    assert "Stored entity" in result["svg"]
-    assert "current prompt" in result["svg"]
-    assert "Top Outputs" in result["svg"]
-    assert "tok0" in result["svg"]
+    assert "svg" not in result
+    assert "figure_html" in result
+    assert "logit_delta" in result["top_outputs"][0]
+    assert "clean_probability" in result["top_outputs"][0]
+    assert "probability_delta" in result["top_outputs"][0]
+    assert "data-cluster-viz" in result["figure_html"]
+    assert "Steering visualization" in result["figure_html"]
+    assert "Current SN" in result["figure_html"]
+    assert "-1x" in result["figure_html"]
+    assert "Stored entity" in result["figure_html"]
+    assert "current prompt" in result["figure_html"]
+    assert "Top outputs" in result["figure_html"]
+    assert "tok0" in result["figure_html"]
+    assert "\u0394 Logit: tok0" in result["figure_html"]
+    assert "\u0394 logit:" in result["figure_html"]
 
 
 def test_summary_graph_viewer_payload_respects_200_node_limit() -> None:

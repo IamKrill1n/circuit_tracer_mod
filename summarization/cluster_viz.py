@@ -34,6 +34,7 @@ _MIN_CARD_X_GAP = 3.45
 _RANK_Y_GAP = 2.05
 _DEFAULT_EDGE_TOP_K = 3
 _EDGE_TOP_K_VALUES = (1, 2, 3, 5, 10)
+_LOW_ACTIVATION_RATIO = 0.25
 
 
 def _sn_kind(sn_name: str, node_by_name: dict[str, Supernode]) -> str:
@@ -224,6 +225,63 @@ def _edge_style(weight: float, max_abs_w: float) -> tuple[float, str, float, str
     return width, color, alpha, dash
 
 
+def _format_factor(factor: float) -> str:
+    value = float(factor)
+    if value.is_integer():
+        return f"{int(value)}x"
+    return f"{value:g}x"
+
+
+def _format_percent(value: float) -> str:
+    return f"{round(float(value) * 100)}%"
+
+
+def _format_probability_delta(value: float) -> str:
+    return f"{float(value) * 100:+.1f}%"
+
+
+def _format_logit_delta(value: float) -> str:
+    return f"\u0394 {float(value):+.2f}"
+
+
+def _format_output(item: Any) -> dict[str, Any]:
+    token = str(getattr(item, "token", "") if not isinstance(item, dict) else item.get("token", ""))
+    probability = (
+        getattr(item, "probability", 0.0)
+        if not isinstance(item, dict)
+        else item.get("probability", 0.0)
+    )
+    out = {
+        "token": token or "(empty)",
+        "probability": float(probability or 0.0),
+    }
+    for key in ("clean_probability", "probability_delta", "logit_delta"):
+        raw = getattr(item, key, None) if not isinstance(item, dict) else item.get(key)
+        if raw is not None:
+            out[key] = float(raw)
+    return out
+
+
+def _stored_intervention_host(
+    stored: dict[str, Any],
+    candidates: list[str],
+    mapping: dict[str, list[str]],
+    attr: dict[str, dict[str, Any]] | None,
+    node_by_name: dict[str, Supernode],
+) -> str | None:
+    if not candidates:
+        return None
+
+    target_layer = float(stored.get("layer", 0))
+    target_pos = float(stored.get("target_pos", 0))
+    ranked: list[tuple[tuple[float, float, str], str]] = []
+    for sn in candidates:
+        layer, ctx_mean = _layer_and_ctx_for_supernode(sn, mapping.get(sn, []), attr, node_by_name)
+        key = (abs(float(layer) - target_layer), abs(ctx_mean - target_pos), sn)
+        ranked.append((key, sn))
+    return min(ranked, key=lambda item: item[0])[1]
+
+
 def _rounded_rect_path(x0: float, y0: float, x1: float, y1: float, rx: float, ry: float) -> str:
     """SVG path string for a rounded rectangle (y0 < y1). Quadratic corners."""
     return (
@@ -407,6 +465,7 @@ def _cluster_graph_html(payload: dict[str, Any], *, full_html: bool) -> str:
       Positive only
     </label>
     <button type="button" data-reset-layout>Reset layout</button>
+    <div class="ct-intervention-summary" data-intervention-summary hidden></div>
   </div>
   <div class="ct-cluster-canvas" data-canvas>
     <svg data-svg role="img" aria-label="Summary graph"></svg>
@@ -421,6 +480,7 @@ def _cluster_graph_html(payload: dict[str, Any], *, full_html: bool) -> str:
   const topKSelect = root.querySelector("[data-top-k]");
   const positiveOnly = root.querySelector("[data-positive-only]");
   const resetButton = root.querySelector("[data-reset-layout]");
+  const interventionSummary = root.querySelector("[data-intervention-summary]");
   const edgePanel = root.querySelector("[data-edge-panel]");
   const svg = root.querySelector("[data-svg]");
   const scale = graphData.scale;
@@ -502,6 +562,9 @@ def _cluster_graph_html(payload: dict[str, Any], *, full_html: bool) -> str:
     const positive = positiveOnly.checked;
     const bySource = new Map();
     graphData.edges.forEach((edge, idx) => {
+      if (edge.alwaysVisible) {
+        return;
+      }
       if (positive && edge.weight <= 0) {
         return;
       }
@@ -511,6 +574,11 @@ def _cluster_graph_html(payload: dict[str, Any], *, full_html: bool) -> str:
       bySource.get(edge.source).push({ idx, edge });
     });
     const visible = new Set();
+    graphData.edges.forEach((edge, idx) => {
+      if (edge.alwaysVisible) {
+        visible.add(idx);
+      }
+    });
     bySource.forEach((items) => {
       items.sort((a, b) => Math.abs(b.edge.weight) - Math.abs(a.edge.weight) || a.edge.target.localeCompare(b.edge.target));
       const kept = topK === null ? items : items.slice(0, topK);
@@ -549,14 +617,54 @@ def _cluster_graph_html(payload: dict[str, Any], *, full_html: bool) -> str:
       .sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight) || a.source.localeCompare(b.source));
     const title = document.createElement("strong");
     title.textContent = selectedNodeId;
+    const selectedNode = nodeById.get(selectedNodeId);
+    const details = document.createElement("div");
+    details.className = "ct-node-details";
+    if (selectedNode && selectedNode.interventionDetails && selectedNode.interventionDetails.length) {
+      selectedNode.interventionDetails.forEach((text) => {
+        const item = document.createElement("span");
+        item.textContent = text;
+        details.appendChild(item);
+      });
+    }
     const list = document.createElement("ul");
     rows.forEach((edge) => {
       const item = document.createElement("li");
       item.textContent = `${edge.source} -> ${edge.target}: ${edge.weight.toFixed(4)}`;
       list.appendChild(item);
     });
-    edgePanel.replaceChildren(title, list);
+    edgePanel.replaceChildren(title);
+    if (details.childNodes.length) {
+      edgePanel.appendChild(details);
+    }
+    edgePanel.appendChild(list);
     edgePanel.hidden = false;
+  }
+
+  function renderInterventionSummary() {
+    const summary = graphData.interventionSummary;
+    if (!summary || !summary.active) {
+      interventionSummary.hidden = true;
+      interventionSummary.replaceChildren();
+      return;
+    }
+    const counts = document.createElement("span");
+    counts.className = "ct-intervention-counts";
+    counts.textContent = `${summary.steeredCount} steered · ${summary.storedCount} stored`;
+    interventionSummary.appendChild(counts);
+    if (summary.topOutputs.length) {
+      const outputLabel = document.createElement("span");
+      outputLabel.className = "ct-output-label";
+      outputLabel.textContent = "Top outputs";
+      interventionSummary.appendChild(outputLabel);
+    }
+    summary.topOutputs.forEach((item) => {
+      const pill = document.createElement("span");
+      pill.className = "ct-output-pill";
+      pill.textContent = `${item.token} ${Number(item.probability).toFixed(3)}`;
+      interventionSummary.appendChild(pill);
+    });
+    interventionSummary.hidden = false;
   }
 
   function applyHighlight() {
@@ -657,7 +765,14 @@ def _cluster_graph_html(payload: dict[str, Any], *, full_html: bool) -> str:
     nodeLayer.replaceChildren();
     nodeElements.clear();
     graphData.nodes.forEach((node) => {
-      const group = svgEl("g", { class: "ct-node", tabindex: "0" });
+      const classes = ["ct-node"];
+      if (node.lowActivation) {
+        classes.push("has-low-activation");
+      }
+      if (node.badges && node.badges.length) {
+        classes.push("has-intervention");
+      }
+      const group = svgEl("g", { class: classes.join(" "), tabindex: "0" });
       group.dataset.nodeId = node.id;
       group.style.cursor = "grab";
       if (node.stacked) {
@@ -699,7 +814,32 @@ def _cluster_graph_html(payload: dict[str, Any], *, full_html: bool) -> str:
       });
       const title = svgEl("title");
       title.textContent = node.hover;
-      group.append(text, title);
+      group.appendChild(text);
+      if (node.badges && node.badges.length) {
+        let badgeX = node.px - node.widthPx / 2 + 7;
+        const badgeY = node.py + node.heightPx / 2 + 4;
+        node.badges.forEach((badge) => {
+          const textWidth = Math.max(32, badge.text.length * 7 + 14);
+          const badgeGroup = svgEl("g", { class: `ct-badge ct-badge-${badge.kind}` });
+          badgeGroup.appendChild(svgEl("rect", {
+            x: badgeX,
+            y: badgeY,
+            width: textWidth,
+            height: 18,
+            rx: 5,
+          }));
+          const badgeText = svgEl("text", {
+            x: badgeX + textWidth / 2,
+            y: badgeY + 13,
+            "text-anchor": "middle",
+          });
+          badgeText.textContent = badge.text;
+          badgeGroup.appendChild(badgeText);
+          group.appendChild(badgeGroup);
+          badgeX += textWidth + 5;
+        });
+      }
+      group.appendChild(title);
       group.addEventListener("pointerdown", (event) => {
         const point = svgPoint(event);
         dragState = {
@@ -792,6 +932,7 @@ def _cluster_graph_html(payload: dict[str, Any], *, full_html: bool) -> str:
   });
 
   renderTokens();
+  renderInterventionSummary();
   rerenderGraph();
 })();
 </script>
@@ -844,6 +985,36 @@ def _cluster_graph_html(payload: dict[str, Any], *, full_html: bool) -> str:
     font: inherit;
     padding: 5px 8px;
   }
+  .ct-intervention-summary {
+    align-items: center;
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-left: 4px;
+  }
+  .ct-intervention-counts,
+  .ct-output-label,
+  .ct-output-pill {
+    background: #f2f5f8;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    color: #334155;
+    font-size: 11px;
+    font-weight: 650;
+    padding: 4px 8px;
+  }
+  .ct-output-pill {
+    background: #fff7ed;
+    border-color: #fed7aa;
+    color: #9a3412;
+  }
+  .ct-output-label {
+    background: transparent;
+    border-color: transparent;
+    color: #64748b;
+    padding-left: 2px;
+    padding-right: 0;
+  }
   .ct-cluster-canvas {
     background: #ffffff;
     min-height: 0;
@@ -886,10 +1057,40 @@ def _cluster_graph_html(payload: dict[str, Any], *, full_html: bool) -> str:
   .ct-node.is-neighbor > rect:last-of-type {
     stroke-width: 2.1;
   }
+  .ct-node.has-low-activation > rect:last-of-type {
+    fill: #f3f4f6;
+    stroke: #cbd5e1;
+  }
+  .ct-node.has-low-activation .ct-node-label {
+    fill: #64748b;
+  }
   .ct-node-label {
     fill: #1a1a1a;
-    font-size: 12px;
+    font-size: 13px;
     pointer-events: none;
+  }
+  .ct-badge {
+    pointer-events: none;
+  }
+  .ct-badge rect {
+    stroke-width: 0;
+  }
+  .ct-badge text {
+    fill: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .ct-badge-factor rect {
+    fill: #d2691e;
+  }
+  .ct-badge-activation rect {
+    fill: #64748b;
+  }
+  .ct-badge-stored rect {
+    fill: #8b5cf6;
+  }
+  .ct-badge-delta rect {
+    fill: #d2691e;
   }
   .ct-token-label {
     fill: #333333;
@@ -909,6 +1110,19 @@ def _cluster_graph_html(payload: dict[str, Any], *, full_html: bool) -> str:
     list-style: none;
     margin: 6px 0 0;
     padding: 0;
+  }
+  .ct-node-details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 7px;
+  }
+  .ct-node-details span {
+    background: #f8fafc;
+    border: 1px solid #d8e0ea;
+    border-radius: 999px;
+    color: #334155;
+    padding: 3px 8px;
   }
   .ct-edge-panel li {
     break-inside: avoid;
@@ -1212,6 +1426,27 @@ def _routed_edge_points(
     )
 
 
+def _resolve_synthetic_column(
+    synthetic_nodes: list[dict[str, Any]],
+    geom: dict[str, tuple[float, float, float, float]],
+    column_x: float,
+) -> None:
+    if not synthetic_nodes:
+        return
+
+    previous_top: float | None = None
+    for node in sorted(synthetic_nodes, key=lambda item: (float(item["y"]), str(item["id"]))):
+        node_id = str(node["id"])
+        _cx, cy, w, h = geom[node_id]
+        if previous_top is not None:
+            min_cy = previous_top + 0.35 + h / 2
+            cy = max(cy, min_cy)
+        geom[node_id] = (column_x, cy, w, h)
+        node["x"] = column_x
+        node["y"] = cy
+        previous_top = cy + h / 2
+
+
 def supernode_graph_figure(
     sng: SummaryGraph | dict[str, Any],
     final_supernodes: dict[str, list[str]] | None = None,
@@ -1239,16 +1474,15 @@ def supernode_graph_figure(
     the largest edge weight. ``top_k_logits`` keeps only the k highest-probability
     logit supernodes (and their edges); ``None`` shows all.
     """
-    # Kept for callers that still pass the old display/steering overlay options.
     _ = (
         seed,
         prompt,
         use_supernode_names,
-        steering_factors,
-        activation_ratios,
-        top_outputs,
-        stored_interventions,
     )
+    steering_factors = steering_factors or {}
+    activation_ratios = activation_ratios or {}
+    top_output_payload = [_format_output(item) for item in (top_outputs or [])]
+    stored_interventions = stored_interventions or []
 
     # Duck-typing rather than isinstance so this survives Streamlit hot-reload,
     # which re-imports SummaryGraph and breaks isinstance on session-state objects.
@@ -1317,6 +1551,133 @@ def supernode_graph_figure(
         if kind == "emb":
             emb_ctx.add(int(round(cx)))
 
+    visible_feature_names = [
+        sn for sn in layout_names if sn in geom and _sn_kind(sn, node_by_name) == "middle"
+    ]
+    stored_by_host: dict[str, list[dict[str, Any]]] = {}
+    for stored in stored_interventions:
+        host = _stored_intervention_host(stored, visible_feature_names, mapping, attr, node_by_name)
+        if host is not None:
+            stored_by_host.setdefault(host, []).append(stored)
+
+    synthetic_nodes: list[dict[str, Any]] = []
+    synthetic_edges: list[tuple[str, str, float, str]] = []
+    synthetic_column_x = max((cx for cx, _cy, _w, _h in geom.values()), default=0.0)
+    synthetic_column_x += _MIN_CARD_X_GAP
+    intervention_source_ids = [sn for sn in steering_factors if sn in geom]
+    for host, stored_items in stored_by_host.items():
+        _hx, hy, _hw, _hh = geom[host]
+        for stored in stored_items:
+            label = str(stored.get("label") or stored.get("record_id") or "Stored intervention")
+            factor = float(stored.get("factor", 0.0))
+            factor_text = _format_factor(factor)
+            synthetic_id = f"__stored_intervention_{len(synthetic_nodes)}"
+            card_w, card_h = _label_card_size(label, int(stored.get("n_features", 1)))
+            sx = synthetic_column_x
+            sy = hy
+            geom[synthetic_id] = (sx, sy, card_w, card_h)
+            hover = "\n".join(
+                [
+                    f"Stored intervention: {label}",
+                    f"Factor: {factor_text}",
+                    f"Target position: {int(stored.get('target_pos', 0))}",
+                ]
+            )
+            synthetic_nodes.append(
+                {
+                    "id": synthetic_id,
+                    "x": sx,
+                    "y": sy,
+                    "width": card_w,
+                    "height": card_h,
+                    "kind": "intervention",
+                    "fill": "#FFF7ED",
+                    "border": "#D2691E",
+                    "stacked": False,
+                    "label": label,
+                    "labelLines": _wrap_label(label).split("<br>"),
+                    "hover": hover,
+                    "badges": [{"kind": "factor", "text": factor_text}],
+                    "lowActivation": False,
+                    "interventionDetails": [
+                        f"Stored intervention: {label}",
+                        f"Factor: {factor_text}",
+                    ],
+                }
+            )
+            synthetic_edges.append((synthetic_id, host, factor if factor != 0.0 else 1.0, "#D2691E"))
+            intervention_source_ids.append(synthetic_id)
+
+    output_change = top_output_payload[0] if top_output_payload else None
+    if output_change is not None and ("logit_delta" in output_change or steering_factors):
+        token = _clean_token(str(output_change["token"]))
+        label = f"\u0394 Logit: {token}"
+        card_w, card_h = _label_card_size(label, 1)
+        logit_hosts = [
+            sn for sn in layout_names if sn in geom and _sn_kind(sn, node_by_name) == "logit"
+        ]
+        token_key = token.casefold()
+        matching_logit_hosts = [
+            sn
+            for sn in logit_hosts
+            if token_key
+            and token_key in _node_label(sn, mapping.get(sn, []), attr, node_by_name.get(sn)).casefold()
+        ]
+        ranked_logit_hosts = sorted(
+            matching_logit_hosts or logit_hosts,
+            key=lambda sn: (geom[sn][1], -abs(geom[sn][0]), sn),
+            reverse=True,
+        )
+        output_id = "__output_logit_delta_0"
+        if ranked_logit_hosts:
+            logit_host = ranked_logit_hosts[0]
+            _lx, ly, _lw, lh = geom[logit_host]
+            ox = synthetic_column_x
+            oy = ly + lh / 2 + card_h / 2 + 0.52
+        else:
+            ox = synthetic_column_x
+            oy = max((cy for _cx, cy, _w, _h in geom.values()), default=0.0) + _RANK_Y_GAP
+        geom[output_id] = (ox, oy, card_w, card_h)
+        badges = [{"kind": "activation", "text": _format_percent(output_change["probability"])}]
+        if "logit_delta" in output_change:
+            badges.insert(0, {"kind": "delta", "text": _format_logit_delta(output_change["logit_delta"])})
+        details = [f"Output probability: {_format_percent(output_change['probability'])}"]
+        if "clean_probability" in output_change:
+            details.append(f"Clean probability: {_format_percent(output_change['clean_probability'])}")
+        if "probability_delta" in output_change:
+            details.append(
+                f"\u0394 probability: {_format_probability_delta(output_change['probability_delta'])}"
+            )
+        if "logit_delta" in output_change:
+            details.append(f"\u0394 logit: {_format_logit_delta(output_change['logit_delta'])}")
+        synthetic_nodes.append(
+            {
+                "id": output_id,
+                "x": ox,
+                "y": oy,
+                "width": card_w,
+                "height": card_h,
+                "kind": "output_delta",
+                "fill": "#FFF7ED",
+                "border": "#D2691E",
+                "stacked": False,
+                "label": label,
+                "labelLines": _wrap_label(label).split("<br>"),
+                "hover": "\n".join(details),
+                "badges": badges,
+                "lowActivation": False,
+                "interventionDetails": details,
+            }
+        )
+        delta_weight = float(output_change.get("logit_delta", 1.0))
+        for source in intervention_source_ids:
+            if source in geom:
+                synthetic_edges.append(
+                    (source, output_id, delta_weight if delta_weight != 0.0 else 1.0, "#D2691E")
+                )
+
+    _resolve_synthetic_column(synthetic_nodes, geom, synthetic_column_x)
+
     # --- Edges ---
     top_k_values = _edge_filter_k_values(rendered_edges)
     default_top_k = _DEFAULT_EDGE_TOP_K if _DEFAULT_EDGE_TOP_K in top_k_values else None
@@ -1349,6 +1710,27 @@ def supernode_graph_figure(
                 "initialPath": _orthogonal_path(route),
             }
         )
+    for u, v, w, color in synthetic_edges:
+        if u not in geom or v not in geom:
+            continue
+        edge_idx = len(edge_payload)
+        route = _routed_edge_points(u, v, geom)
+        edge_xs.extend(x for x, _y in route)
+        edge_ys.extend(y for _x, y in route)
+        edge_payload.append(
+            {
+                "index": edge_idx,
+                "source": u,
+                "target": v,
+                "weight": w,
+                "width": 3.2,
+                "color": color,
+                "opacity": 0.92,
+                "dash": "",
+                "initialPath": _orthogonal_path(route),
+                "alwaysVisible": True,
+            }
+        )
 
     # --- Cards + labels ---
     node_payload: list[dict[str, Any]] = []
@@ -1360,6 +1742,27 @@ def supernode_graph_figure(
         fill, line_color = _KIND_STYLE.get(kinds[sn], _KIND_STYLE["middle"])
         label_text = _node_label(sn, members, attr, node_by_name.get(sn))
         hover_title = html.unescape(_sn_title(sn, members, attr, node_by_name.get(sn)))
+        badges: list[dict[str, str]] = []
+        intervention_details: list[str] = []
+        if sn in steering_factors:
+            factor_text = _format_factor(float(steering_factors[sn]))
+            badges.append({"kind": "factor", "text": factor_text})
+            intervention_details.append(f"Intervention: {factor_text}")
+        activation_ratio = activation_ratios.get(sn)
+        if activation_ratio is not None:
+            activation_text = _format_percent(float(activation_ratio))
+            badges.append({"kind": "activation", "text": activation_text})
+            intervention_details.append(f"Activation ratio: {activation_text}")
+        hosted_stored = stored_by_host.get(sn, [])
+        if hosted_stored:
+            badges.append({"kind": "stored", "text": "Stored"})
+            for stored in hosted_stored:
+                label = str(stored.get("label") or stored.get("record_id") or "Stored intervention")
+                factor = _format_factor(float(stored.get("factor", 0.0)))
+                target_pos = int(stored.get("target_pos", 0))
+                intervention_details.append(f"Stored: {label} {factor} @ pos {target_pos}")
+        if intervention_details:
+            hover_title = "\n".join([hover_title, *intervention_details])
         node_payload.append(
             {
                 "id": sn,
@@ -1374,16 +1777,26 @@ def supernode_graph_figure(
                 "label": label_text,
                 "labelLines": _wrap_label(label_text).split("<br>"),
                 "hover": hover_title.replace("<br>", "\n"),
+                "badges": badges,
+                "lowActivation": (
+                    activation_ratio is not None
+                    and float(activation_ratio) <= _LOW_ACTIVATION_RATIO
+                ),
+                "interventionDetails": intervention_details,
             }
         )
+    node_payload.extend(synthetic_nodes)
 
     # --- Tokenized prompt strip ---
     prompt_payload: list[dict[str, Any]] = []
+    prompt_y = float(top_y)
+    if synthetic_nodes:
+        prompt_y = max(prompt_y, max(float(node["y"]) for node in synthetic_nodes) + _RANK_Y_GAP)
     if prompt_tokens:
         prompt_payload = [
             {
                 "x": float(i),
-                "y": float(top_y),
+                "y": prompt_y,
                 "text": _clean_token(tok),
                 "highlight": i in emb_ctx,
             }
@@ -1395,7 +1808,7 @@ def supernode_graph_figure(
     xs_for_range = [g[0] for g in geom.values()] + edge_xs + token_xs + [0.0]
     ys_for_range = [g[1] for g in geom.values()] + edge_ys
     if prompt_tokens:
-        ys_for_range.append(float(top_y))
+        ys_for_range.append(prompt_y)
     if not ys_for_range:
         ys_for_range.append(0.0)
     x_min = min(xs_for_range) - 1.5
@@ -1409,6 +1822,7 @@ def supernode_graph_figure(
     return ClusterGraphFigure(
         {
             "title": title,
+            "prompt": prompt or "",
             "nodes": node_payload,
             "edges": edge_payload,
             "initialEdgeIndices": sorted(initial_edge_indices),
@@ -1422,5 +1836,11 @@ def supernode_graph_figure(
             "canvasWidth": canvas_width,
             "canvasHeight": canvas_height,
             "tokenHeight": _BAR_H,
+            "interventionSummary": {
+                "active": bool(steering_factors or activation_ratios or stored_interventions or top_outputs),
+                "steeredCount": len(steering_factors),
+                "storedCount": len(stored_interventions),
+                "topOutputs": top_output_payload[:6],
+            },
         }
     )

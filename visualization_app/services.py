@@ -1729,7 +1729,7 @@ def run_steering(
     progress: Callable[[str, float | None], None] | None = None,
 ) -> dict[str, Any]:
     from summarization.summarize import SummaryGraph, steer_interventions_constrained
-    from visualization_app.intervention_viz import create_intervention_svg
+    from summarization.cluster_viz import supernode_graph_figure
 
     safe_slug = slugify(slug)
     safe_dataset = validate_dataset(dataset)
@@ -1824,21 +1824,36 @@ def run_steering(
         orig_activations,
         new_activations,
     )
-    top_probs, top_ids = new_logits.squeeze(0)[-1].softmax(-1).topk(int(top_k))
+    base_last_logits = base_logits.squeeze(0)[-1]
+    new_last_logits = new_logits.squeeze(0)[-1]
+    base_probs = base_last_logits.softmax(-1)
+    new_probs = new_last_logits.softmax(-1)
+    top_probs, top_ids = new_probs.topk(int(top_k))
     tokenizer = cast(Any, model.tokenizer)
-    top_outputs = [
-        {"token": tokenizer.decode([int(token_id)]), "probability": float(probability)}
-        for token_id, probability in zip(top_ids.tolist(), top_probs.tolist())
-    ]
-    svg = create_intervention_svg(
-        sng=sng,
+    top_outputs = []
+    for token_id, probability in zip(top_ids.tolist(), top_probs.tolist()):
+        token_idx = int(token_id)
+        probability_value = float(probability)
+        clean_probability = float(base_probs[token_idx])
+        top_outputs.append(
+            {
+                "token": tokenizer.decode([token_idx]),
+                "probability": probability_value,
+                "clean_probability": clean_probability,
+                "probability_delta": probability_value - clean_probability,
+                "logit_delta": float(new_last_logits[token_idx] - base_last_logits[token_idx]),
+            }
+        )
+    fig = supernode_graph_figure(
+        sng,
+        title="Steering visualization",
         prompt=prompt,
+        prompt_tokens=list(options["prompt_tokens"]) or None,
+        edge_threshold=edge_threshold,
         steering_factors=factors,
         activation_ratios=activation_ratios,
         top_outputs=top_outputs,
         stored_interventions=selected_stored,
-        prompt_tokens=list(options["prompt_tokens"]),
-        edge_threshold=edge_threshold,
     )
     return {
         "slug": safe_slug,
@@ -1850,5 +1865,9 @@ def run_steering(
         "steered": factors,
         "stored_supernodes": selected_stored,
         "top_outputs": top_outputs,
-        "svg": svg,
+        "figure_html": fig.to_html(
+            include_plotlyjs="cdn",
+            full_html=True,
+            config={"responsive": True, "displaylogo": False},
+        ),
     }
