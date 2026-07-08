@@ -19,6 +19,7 @@ NormalizationMethod = Literal["min_max", "rank"]
 
 
 def normalize_scores_min_max(scores: torch.Tensor, eps: float = 1e-10) -> torch.Tensor:
+    """Min-max normalize a 1D score tensor without changing its shape."""
     scores = scores.clone()
     scores = scores - scores.min()
     scores = scores / (scores.max() + eps)
@@ -26,11 +27,19 @@ def normalize_scores_min_max(scores: torch.Tensor, eps: float = 1e-10) -> torch.
 
 
 def normalize_scores_rank(scores: torch.Tensor) -> torch.Tensor:
+    """Convert a 1D score tensor to fractional ranks in [0, 1]."""
     ranks = torch.argsort(torch.argsort(scores))
     return ranks.float() / (len(scores) - 1)
 
 
 def normalize_matrix(matrix: torch.Tensor) -> torch.Tensor:
+    """Row-normalize absolute edge weights.
+
+    Input and output both have shape (N, N). With ``adj[target, source]``,
+    row-normalizing ``adj`` gives each target node a distribution over its
+    immediate sources; row-normalizing ``adj.T`` gives each source a distribution
+    over its immediate targets.
+    """
     normalized = matrix.abs()
     return normalized / normalized.sum(dim=1, keepdim=True).clamp(min=1e-10)
 
@@ -40,6 +49,20 @@ def compute_influence(
     logit_weights: torch.Tensor,
     max_iter: int = 1000,
 ) -> torch.Tensor:
+    """Propagate output-side influence backward through normalized adjacency.
+
+    Inputs
+    ------
+    A:
+        Row-normalized adjacency, shape (N, N), usually from ``normalize_matrix(adj)``.
+    logit_weights:
+        Initial mass on logit/output nodes, shape (N,).
+
+    Returns
+    -------
+    torch.Tensor
+        Accumulated influence for every node, shape (N,).
+    """
     current_influence = logit_weights.clone()
     influence = current_influence
     iterations = 0
@@ -58,6 +81,7 @@ def compute_node_influence(
     adjacency_matrix: torch.Tensor,
     logit_weights: torch.Tensor,
 ) -> torch.Tensor:
+    """Node influence scores, shape (N,), from raw adjacency shape (N, N)."""
     return compute_influence(normalize_matrix(adjacency_matrix), logit_weights)
 
 
@@ -65,9 +89,10 @@ def compute_edge_influence(
     pruned_matrix: torch.Tensor,
     logit_weights: torch.Tensor,
 ) -> torch.Tensor:
-    normalized_pruned = normalize_matrix(pruned_matrix)
-    pruned_influence = compute_influence(normalized_pruned, logit_weights)
-    edge_scores = normalized_pruned * pruned_influence[:, None]
+    """Edge influence scores, shape (N, N), aligned with ``pruned_matrix``."""
+    normalized_pruned = normalize_matrix(pruned_matrix)  # (N, N)
+    pruned_influence = compute_influence(normalized_pruned, logit_weights)  # (N,)
+    edge_scores = normalized_pruned * pruned_influence[:, None]  # (N, N)
     return edge_scores
 
 
@@ -76,6 +101,21 @@ def compute_relevance(
     emb_weights: torch.Tensor,
     max_iter: int = 1000,
 ) -> torch.Tensor:
+    """Propagate input-side relevance forward through normalized transposed adjacency.
+
+    Inputs
+    ------
+    A:
+        Row-normalized transposed adjacency, shape (N, N), usually from
+        ``normalize_matrix(adj.T)``.
+    emb_weights:
+        Initial mass on embedding/input nodes, shape (N,).
+
+    Returns
+    -------
+    torch.Tensor
+        Accumulated relevance for every node, shape (N,).
+    """
     current_relevance = emb_weights.clone()
     relevance = current_relevance
     iterations = 0
@@ -94,6 +134,7 @@ def compute_node_relevance(
     adjacency_matrix: torch.Tensor,
     emb_weights: torch.Tensor,
 ) -> torch.Tensor:
+    """Node relevance scores, shape (N,), from raw adjacency shape (N, N)."""
     return compute_relevance(normalize_matrix(adjacency_matrix.T), emb_weights)
 
 
@@ -101,6 +142,7 @@ def compute_edge_relevance(
     pruned_matrix: torch.Tensor,
     emb_weights: torch.Tensor,
 ) -> torch.Tensor:
+    """Edge relevance scores, shape (N, N), returned in ``adj[target, source]`` layout."""
     normalized_pruned = normalize_matrix(pruned_matrix.T)  # (N, N)
     pruned_relevance = compute_relevance(normalized_pruned, emb_weights)  # (N,)
     edge_scores = normalized_pruned * pruned_relevance[:, None]  # (N, N)
@@ -108,6 +150,7 @@ def compute_edge_relevance(
 
 
 def find_threshold(scores: torch.Tensor, threshold: float) -> torch.Tensor:
+    """Choose the score cutoff that retains the requested cumulative score mass."""
     sorted_scores = torch.sort(scores, descending=True).values
     cumulative_score = torch.cumsum(sorted_scores, dim=0) / torch.sum(sorted_scores)
     threshold_index: int = int(torch.searchsorted(cumulative_score, threshold).item())
@@ -352,6 +395,12 @@ def remove_dangling_nodes(
     require_in: torch.Tensor,
     require_out: torch.Tensor,
 ) -> torch.Tensor:
+    """Iteratively drop kept nodes that no longer have required incident edges.
+
+    ``node_mask`` has shape (N,) and ``edge_mask`` has shape (N, N). The
+    ``require_in`` and ``require_out`` index tensors identify roles whose kept
+    nodes must still have at least one incoming or outgoing retained edge.
+    """
     # edge_mask[target, source] — same convention as adj. A node dangles when it loses all
     # edges in the direction its role requires: sources (embedding/error) need an outgoing
     # edge, the logit needs an incoming edge, features need both. old starts != node_mask so
@@ -457,6 +506,25 @@ def prune_combined(
     alpha: float = 0.5,
     keep_all_tokens_and_logits: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute node/edge pruning masks from influence and relevance scores.
+
+    Inputs
+    ------
+    adj:
+        Raw attribution adjacency, shape (N, N), with ``adj[target, source]``.
+    nodes:
+        Node metadata list of length N.
+    logit_weights / logits_seed:
+        Output-side seed mass. If ``logits_seed`` is provided it must have shape (N,).
+    token_weights / emb_weights_seed:
+        Input-side seed mass. If ``emb_weights_seed`` is provided it must have shape (N,).
+
+    Returns
+    -------
+    tuple
+        ``node_mask`` shape (N,), ``edge_mask`` shape (N, N), then node influence,
+        node relevance, edge influence, and edge relevance tensors.
+    """
     n = adj.shape[0]
     idx = _build_index_sets(nodes)
 
@@ -491,8 +559,8 @@ def prune_combined(
             for k, i in enumerate(emb_idx):
                 emb_weights_t[i] = float(token_weights[k])
 
-    node_inf = compute_node_influence(adj, logits_seed_t)
-    node_rel = compute_node_relevance(adj, emb_weights_t)
+    node_inf = compute_node_influence(adj, logits_seed_t)  # (N,), output -> source influence.
+    node_rel = compute_node_relevance(adj, emb_weights_t)  # (N,), input -> target relevance.
 
     node_score = _combine_scores(combine_method, node_inf, node_rel, normalization, alpha)
     node_mask = (node_score >= find_threshold(node_score, node_threshold)).bool()
@@ -506,7 +574,7 @@ def prune_combined(
         for i in idx["target_logit"]:
             node_mask[i] = True
 
-    pruned = adj.clone()
+    pruned = adj.clone()  # (N, N), still indexed in the original node space.
     pruned[~node_mask] = 0
     pruned[:, ~node_mask] = 0
     edge_inf = compute_edge_influence(pruned, logits_seed_t)
@@ -542,10 +610,13 @@ def prune_attr_graph(
     alpha: float = 0.5,
     keep_all_tokens_and_logits: bool = False,
 ) -> PruneGraph:
-    """Prune from a canonical ``AttrGraph`` (pure tensor math).
+    """Prune from a canonical ``AttrGraph`` into a compact ``PruneGraph``.
 
-    Neuronpedia-dependent annotation/activation-density filtering lives in
-    ``summarization.prune.filter_act_density`` and runs as a separate pruning substage.
+    ``attr_graph.adj`` has shape (N, N) and follows ``adj[target, source]``.
+    This computes full-size node/edge scores, thresholds them, removes dangling
+    nodes, then subsets all tensors to the kept node set. Neuronpedia-dependent
+    annotation/activation-density filtering lives in ``filter_act_density`` and
+    runs as a separate pruning substage.
     """
     _validate_threshold("node_threshold", node_threshold)
     _validate_threshold("edge_threshold", edge_threshold)

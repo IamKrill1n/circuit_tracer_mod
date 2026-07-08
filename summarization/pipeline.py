@@ -166,6 +166,29 @@ def _supernodes_for_upload(rows: list) -> list[list[str]]:
 
 
 def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
+    """Run the full summarization pipeline and save requested artifacts.
+
+    Inputs
+    ------
+    args:
+        Parsed CLI/API namespace. It either identifies an existing attribution
+        graph (``graph_pt``) or enough model/prompt settings to create one.
+
+    Returns
+    -------
+    dict[str, Any]
+        Small JSON-compatible run summary: pruned graph sizes, resolved cluster
+        count, supernode mapping, optional figure path, and optional upload result.
+
+    Algorithm stages
+    ----------------
+    0. Acquire a ``circuit_tracer.Graph``.
+    1. Convert it to ``AttrGraph`` with node list length N and adjacency (N, N).
+    2. Optionally compute P prompt-token weights and map them to embedding nodes.
+    3. Prune nodes/edges into ``PruneGraph``.
+    4. Cluster middle nodes into K supernodes.
+    5. Assemble a ``SummaryGraph`` with post-π adjacency shape (K, K).
+    """
     # Stage 0: produce a circuit_tracer Graph (local attribution or loaded .pt).
     _report_progress(args, "Loading attribution graph", 0.05)
     graph = _acquire_graph(args)
@@ -173,6 +196,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     ag = AttrGraph.from_graph(graph)
 
     # Stage 0b (optional): SHAP token weights from the graph's prompt.
+    # token_weights is length P in prompt-token order, then remapped to embedding nodes.
     token_weights = _parse_token_weights(args.token_weights)
     if args.auto_token_weights and token_weights is None:
         _report_progress(args, "Computing token attribution weights", 0.22)
@@ -187,7 +211,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             device=args.device,
         )
 
-    # Stage 1: prune (Graph -> PruneGraph, pure tensor math).
+    # Stage 1: prune (AttrGraph -> PruneGraph, pure tensor math over adj[target, source]).
     _report_progress(args, "Pruning attribution graph", 0.35)
     prune_graph = prune_attr_graph(
         ag,
@@ -211,6 +235,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     # Stage 2: cluster (ILP canonical; legacy baselines remain eval-owned).
+    # rows contains K typed Supernode objects, including embedding/logit singleton anchors.
     _report_progress(args, "Clustering supernodes", 0.62)
     sweep: dict[int, dict[str, Any]] = {}
     if args.method == "ilp":
@@ -251,7 +276,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         )
     supernode_map = {s.name: s.member_node_ids() for s in rows}
 
-    # Stage 3: summarize.
+    # Stage 3: summarize. SummaryGraph re-computes a post-π supernode DAG of shape (K, K).
     _report_progress(args, "Assembling summary graph", 0.78)
     sng = summarize(rows, prune_graph.pruned_adj, prune_graph.metadata)
     labelled_supernodes = _supernodes_for_upload(rows)

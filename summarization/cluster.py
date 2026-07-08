@@ -98,7 +98,8 @@ def compute_phi_vectors(
 
     Shape: (N, 2N). ``pruned_adj[target, source]`` is the adjacency convention.
     """
-    adj = prune_graph.pruned_adj.float()  # (N, N)
+    # N = pruned nodes. phi has shape (N, 2N): [outgoing-role | incoming-role].
+    adj = prune_graph.pruned_adj.float()  # (N, N), adj[target, source].
     n_nodes = adj.shape[0]
     device = adj.device
     influence = _prepare_node_weights(
@@ -113,15 +114,19 @@ def compute_phi_vectors(
         device,
         normalize=normalize_weights,
     )
-    sqrt_influence = influence.clamp(min=0.0).sqrt()
-    sqrt_relevance = relevance.clamp(min=0.0).sqrt()
-    v_out = adj.T * sqrt_influence.unsqueeze(0)
-    v_in = adj * sqrt_relevance.unsqueeze(0)
+    sqrt_influence = influence.clamp(min=0.0).sqrt()  # (N,)
+    sqrt_relevance = relevance.clamp(min=0.0).sqrt()  # (N,)
+    v_out = adj.T * sqrt_influence.unsqueeze(0)  # (N, N): source rows -> target cols.
+    v_in = adj * sqrt_relevance.unsqueeze(0)  # (N, N): target rows -> source cols.
     return torch.cat([v_out, v_in], dim=1)
 
 
 def _cosine_similarity(features: np.ndarray, nonnegative: bool = False) -> np.ndarray:
-    """Pairwise cosine similarity of row features."""
+    """Pairwise cosine similarity of row features.
+
+    Input shape is (M, D); output shape is (M, M), where M is the number of
+    middle feature nodes considered by the ILP.
+    """
     safe = np.asarray(features, dtype=np.float64)
     if safe.size == 0:
         return np.zeros((0, 0), dtype=np.float64)
@@ -289,6 +294,7 @@ def _pair_key(a: int, b: int) -> tuple[int, int]:
 
 
 def _allowed_pairs(layers: np.ndarray, max_layer_span: int) -> list[tuple[int, int]]:
+    """Enumerate middle-node pairs allowed to share a supernode by layer span."""
     n = len(layers)
     return [
         (i, j)
@@ -338,6 +344,12 @@ def _causal_coefficients(
     mid_idx: list[int],
     col_x: dict[tuple[int, int], int],
 ) -> tuple[np.ndarray, float]:
+    """Compute coefficients for the hidden-internal-edge budget.
+
+    ``mid_idx`` maps local middle-node indices i,j in [0, M) back to global
+    ``pruned_adj`` indices. Each x_ij coefficient is the fraction of total
+    pruned edge mass hidden if i and j are merged.
+    """
     prune_adj = prune_graph.pruned_adj.detach().cpu().numpy()  # adj[tgt, src]
     w_total = float(np.abs(prune_adj).sum())
     coeff = np.zeros(len(col_x), dtype=np.float64)
@@ -358,6 +370,7 @@ def _objective(
     cos: np.ndarray,
     theta_val: float,
 ) -> np.ndarray:
+    """Build the MILP objective vector over x_ij and optional representative vars."""
     c = np.zeros(n_var, dtype=np.float64)
     for (i, j), k in col_x.items():
         c[k] = theta_val - float(cos[i, j])
@@ -377,6 +390,13 @@ def _build_constraints(
     has_causal_mass: bool,
     max_layer_span: int = DEFAULT_MAX_LAYER_SPAN,
 ) -> LinearConstraint:
+    """Assemble sparse MILP constraints.
+
+    Variables are binary. The first ``len(pairs)`` variables are x_ij indicators
+    for allowed same-supernode pairs among M middle nodes. Optional r_i variables
+    mark the lowest-index representative of each recovered feature supernode,
+    which lets the ILP enforce ``K <= max_sn``.
+    """
     rows: list[int] = []
     cols: list[int] = []
     data: list[float] = []
@@ -391,7 +411,8 @@ def _build_constraints(
 
     partners = _partners_by_node(n, pairs)
 
-    # Transitivity over same-cluster indicators.
+    # Transitivity over same-cluster indicators: if apex merges with p and q,
+    # then p and q must also merge unless their pair was structurally disallowed.
     for apex in range(n):
         apex_partners = partners[apex]
         for ii, p in enumerate(apex_partners):
@@ -407,6 +428,7 @@ def _build_constraints(
                 row += 1
 
     if max_sn is not None:
+        # Representative constraints count one r_i per connected component in x-space.
         for i in range(n):
             earlier = [j for j in partners[i] if j < i]
             for j in earlier:
@@ -430,6 +452,8 @@ def _build_constraints(
         row += 1
 
     if eps_causal is not None and has_causal_mass:
+        # C_causal <= eps_causal: bound the fraction of retained edge mass hidden
+        # inside feature supernodes after merging.
         for k, coeff in enumerate(causal_coeff):
             if coeff > 0.0:
                 add(k, float(coeff))
@@ -457,6 +481,7 @@ def _solve_ilp(
     max_layer_span: int,
     eps_causal: float | None,
 ) -> np.ndarray:
+    """Run SciPy/HiGHS MILP and return the binary solution vector."""
     res = milp(
         c=c,
         constraints=constraints,
@@ -489,6 +514,7 @@ def _recover_clusters(
     col_x: dict[tuple[int, int], int],
     x_values: np.ndarray,
 ) -> list[list[str]]:
+    """Recover connected components of middle nodes whose x_ij variables are 1."""
     parent = list(range(len(middle_ids)))
 
     def find(a: int) -> int:
@@ -575,6 +601,7 @@ def cluster_graph_ilp(
     if not kept_ids:
         return []
 
+    # M middle nodes are eligible for ILP merging; embeddings/logits stay singleton anchors.
     mid_idx = [i for i, nid in enumerate(kept_ids) if not node_is_fixed(nodes_by_id[nid])]
     middle_ids = [kept_ids[i] for i in mid_idx]
     emb_singletons, logit_singletons = _fixed_singletons(kept_ids, nodes_by_id)
@@ -593,7 +620,7 @@ def cluster_graph_ilp(
 
     # Disallowed pairs are structurally x_ij = 0 (cannot share a supernode).
     pairs = _allowed_pairs(layers, max_layer_span)
-    col_x = {pair: k for k, pair in enumerate(pairs)}
+    col_x = {pair: k for k, pair in enumerate(pairs)}  # local pair -> MILP column.
     n_var_x = len(pairs)
 
     if n_var_x == 0 and max_sn is None:

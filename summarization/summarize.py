@@ -67,7 +67,12 @@ def node_from_prune_graph(
     node_id: str,
     id_to_idx: dict[str, int] | None = None,
 ) -> Node:
-    """Build a typed summarization node from ``PruneGraph.nodes`` plus score tensors."""
+    """Build a typed summarization node from ``PruneGraph.nodes`` plus score tensors.
+
+    ``prune_graph`` has N nodes and optional influence/relevance tensors of shape
+    (N,). The returned ``Node`` preserves graph metadata and attaches scalar
+    influence/relevance values when they are available.
+    """
     nodes: list[Node] = prune_graph.nodes
     lookup = {n.node_id: n for n in nodes}
     base = lookup.get(node_id)
@@ -104,19 +109,23 @@ def compute_sn_adj(
     index_lists: list[list[int]],
     pruned_adj: torch.Tensor,
 ) -> np.ndarray:
-    """Block-sum supernode adjacency. ``block[t, s] = sum_{u in S_s, v in S_t} adj[v, u]``.
+    """Block-sum node adjacency into supernode adjacency.
 
-    May contain antiparallel pairs and longer SCCs; ``get_adj`` resolves these.
+    ``index_lists`` contains K supernode member lists. ``pruned_adj`` has shape
+    (N, N), with ``adj[target, source]``. The returned block matrix has shape
+    (K, K), where ``block[t, s] = sum_{u in S_s, v in S_t} adj[v, u]``. It may
+    contain antiparallel pairs and longer SCCs; ``get_adj`` resolves these.
     """
     adj = pruned_adj.detach().cpu().numpy().astype(np.float64)  # [tgt, src]
     n_total = adj.shape[0]
     n_sn = len(index_lists)
+    # indicator[sn, node] = 1 iff node belongs to that supernode; shape (K, N).
     indicator = np.zeros((n_sn, n_total), dtype=np.float64)
     for sn_idx, idxs in enumerate(index_lists):
         for i in idxs:
             if 0 <= i < n_total:
                 indicator[sn_idx, i] = 1.0
-    block = indicator @ adj @ indicator.T  # block[t, s]
+    block = indicator @ adj @ indicator.T  # (K, K), block[t, s].
     np.fill_diagonal(block, 0.0)
     return block
 
@@ -179,6 +188,7 @@ def get_adj(supernodes: list[Supernode], pruned_adj: torch.Tensor) -> np.ndarray
     back-edges against an anchor-depth ordering (emb forced source, logit forced
     sink). ``out[t, s]`` is the edge weight source ``s`` → target ``t``.
     """
+    # K supernodes are projected from the node-level graph into a (K, K) block graph.
     index_lists = [[n.node_idx for n in sn.features if n.node_idx >= 0] for sn in supernodes]
     M = compute_sn_adj(index_lists, pruned_adj)  # block[t, s]; may contain cycles
     n = M.shape[0]
@@ -210,6 +220,7 @@ def get_adj(supernodes: list[Supernode], pruned_adj: torch.Tensor) -> np.ndarray
         for s in range(n):
             if M[t, s] != 0.0 and rank[s] > rank[t]:  # source ranks later → back-edge
                 M[t, s] = 0.0
+    # Return shape (K, K), still in target/source layout.
     return M
 
 
@@ -265,7 +276,11 @@ def summarize(
     pruned_adj: torch.Tensor,
     metadata: dict | None = None,
 ) -> SummaryGraph:
-    """Stage 3: assemble grouped supernodes into the post-π summary graph."""
+    """Stage 3: assemble grouped supernodes into the post-π summary graph.
+
+    Inputs are K supernodes and the original node-level pruned adjacency (N, N).
+    The returned ``SummaryGraph.adj_matrix`` is re-derived as a (K, K) DAG.
+    """
     return SummaryGraph(supernodes=supernodes, pruned_adj=pruned_adj, metadata=metadata or {})
 
 
@@ -290,6 +305,7 @@ def steer_interventions(
                 continue
             layer, feat = int(n.node_id.split("_")[0]), int(n.node_id.split("_")[1])
             pos = n.ctx_idx
+            # orig_activations[layer, pos, feature] indexes shape (L, P, D_tc).
             if layer < n_layers and pos < n_pos and feat < d_tc:
                 out.append((layer, pos, feat, factor * orig_activations[layer, pos, feat].item()))
     return out
@@ -333,6 +349,7 @@ def steer_interventions_constrained(
                 continue
             layer, feat = int(n.node_id.split("_")[0]), int(n.node_id.split("_")[1])
             pos = n.ctx_idx
+            # Group interventions by source layer so each group can use its own layer window.
             if layer < n_layers and pos < n_pos and feat < d_tc:
                 value = factor * orig_activations[layer, pos, feat].item()
                 by_layer.setdefault(layer, []).append((layer, pos, feat, value))

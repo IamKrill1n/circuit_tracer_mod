@@ -25,12 +25,39 @@ class AttrGraph:
 
     @classmethod
     def from_graph_file(cls, path: str) -> AttrGraph:
+        """Load a frontend-style graph JSON into the canonical node/adjacency view.
+
+        Inputs
+        ------
+        path:
+            JSON file containing node metadata plus directed weighted links.
+
+        Returns
+        -------
+        AttrGraph
+            ``nodes`` has length N and ``adj`` has shape (N, N), with
+            ``adj[target, source]`` storing edge weight from source to target.
+        """
         adj, nodes, metadata = get_data_from_json(path)
         return cls(nodes=nodes, adj=adj, metadata=metadata)
 
     @classmethod
     def from_graph(cls, graph_or_path: Graph | str) -> AttrGraph:
-        """Convert a ``circuit_tracer.graph.Graph`` into attribute-oriented nodes and adjacency."""
+        """Convert a ``circuit_tracer.graph.Graph`` into summarization-ready nodes.
+
+        Inputs
+        ------
+        graph_or_path:
+            Either an in-memory attribution ``Graph`` or a ``.pt`` path that loads to one.
+
+        Returns
+        -------
+        AttrGraph
+            A flat node list ordered to match ``graph.adjacency_matrix`` and an
+            adjacency tensor of shape (N, N). The node order is:
+            selected features, reconstruction-error nodes, embedding/token nodes,
+            then logit nodes.
+        """
         from circuit_tracer.graph import Graph as GraphCls
 
         if isinstance(graph_or_path, Graph):
@@ -40,6 +67,7 @@ class AttrGraph:
             if not isinstance(graph, GraphCls):
                 raise TypeError(f"expected Graph, got {type(graph)!r}")
 
+        # Node count components. N = n_feat + n_err + n_tok + n_log.
         n_feat = len(graph.selected_features)
         n_pos = graph.n_pos
         n_layers = int(graph.cfg.n_layers)
@@ -71,7 +99,7 @@ class AttrGraph:
             return (x + y) * (x + y + 1) // 2 + y
 
         # --- Feature nodes (same ids as frontend Node.feature_node) ---
-        sel = graph.selected_features.long()
+        sel = graph.selected_features.long()  # (n_feat,), rows into graph.active_features.
         for j in range(n_feat):
             af_row = int(sel[j].item())
             layer, pos, feat_idx = graph.active_features[af_row].tolist()
@@ -187,6 +215,7 @@ class AttrGraph:
                 f"expected {expected_n} from feature/error/token/logit counts."
             )
 
+        # Preserve the Graph convention exactly: adj[target, source], shape (N, N).
         adj = graph.adjacency_matrix.detach().to(dtype=dtype, device=device)
         scan_val = graph.scan
         if isinstance(scan_val, list):

@@ -18,6 +18,11 @@ DEFAULT_ENTMAX_ALPHA = 1.25
 
 
 def _special_token_mask(prompt_tokens: list[str]) -> torch.Tensor:
+    """Mark prompt-token positions that should carry zero attribution mass.
+
+    Input length is P. The returned boolean tensor has shape (P,), aligned with
+    ``prompt_tokens`` and with the raw SHAP vector before normalization.
+    """
     return torch.tensor(
         [bool(SPECIAL_TOKEN_RE.fullmatch(token)) for token in prompt_tokens],
         dtype=torch.bool,
@@ -30,6 +35,23 @@ def _normalize_scores(
     special_mask: torch.Tensor,
     entmax_alpha: float | None = None,
 ) -> torch.Tensor:
+    """Normalize raw per-token scores into a probability-like token-weight vector.
+
+    Inputs
+    ------
+    values:
+        Raw SHAP contribution scores, shape (P,).
+    method:
+        Normalizer used to distribute mass over non-special tokens.
+    special_mask:
+        Boolean mask, shape (P,), where True positions are forced to zero.
+
+    Returns
+    -------
+    torch.Tensor
+        Float32 weights of shape (P,), nonnegative and summing to 1 over
+        non-special tokens.
+    """
     if values.ndim != 1:
         raise ValueError(f"Expected 1D token scores, got shape={tuple(values.shape)}")
     if special_mask.ndim != 1 or special_mask.shape[0] != values.shape[0]:
@@ -43,7 +65,7 @@ def _normalize_scores(
             "All prompt tokens are special tokens; cannot normalize attribution scores."
         )
 
-    masked_scores = values.to(torch.float32).clone()
+    masked_scores = values.to(torch.float32).clone()  # (P,)
     if method == "softmax":
         masked_scores[special_mask] = float("-inf")
         normalized = torch.softmax(masked_scores, dim=0)
@@ -266,6 +288,8 @@ def _extract_shap_values(raw_explanation: Any) -> torch.Tensor:
 
     tensor_values = torch.as_tensor(values, dtype=torch.float32).squeeze()
     if tensor_values.ndim == 2:
+        # SHAP normally returns (P, Y), where Y is the number of output tokens.
+        # Some explainers return (Y, P), so feature_names is used to identify P.
         if (
             n_input is not None
             and tensor_values.shape[1] == n_input
@@ -291,14 +315,23 @@ def get_token_attribution(
     pin_special_tokens: bool = False,
     target_token_id: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Same pipeline as ``shap.Explainer(model, tokenizer)`` on an HF causal LM.
+    """Compute raw and normalized prompt-token attribution weights.
 
-    Uses Teacher forcing + log-odds of **generated** ``Y`` (see ``shap.models.TeacherForcing``),
-    identical to the high-level SHAP constructor when given ``mask_token='...'`` and
-    ``collapse_mask_token=True``.
+    This follows ``shap.Explainer(model, tokenizer)`` on an HF causal LM. It uses
+    teacher forcing plus log-odds of the generated or explicitly provided target
+    continuation ``Y``. The output is aligned to ``prompt_tokens`` so downstream
+    pruning can map token weights to embedding nodes by ``Node.ctx_idx``.
 
     Parameters
     ----------
+    prompt:
+        Original text prompt.
+    prompt_tokens:
+        Token strings from the attribution graph metadata; length P.
+    model_name:
+        HF causal-LM name used by SHAP.
+    normalize_method:
+        Softmax/sparsemax/entmax variant used to convert raw scores to weights.
     masker_keep_prefix
         Optional SHAP masker setting to keep the first *k* token segments fixed
         (unmasked) during masking.
@@ -318,6 +351,7 @@ def get_token_attribution(
     work_prompt, work_tokens, n_prefix_tokens_dropped = _strip_leading_bos_for_shap(
         prompt, list(prompt_tokens), tokenizer
     )
+    # work_tokens may be length P or P-1 if a leading BOS token is removed for SHAP.
     target_text: str | None = None
     if target_token_id is not None:
         target_text = tokenizer.decode([int(target_token_id)])
@@ -355,7 +389,7 @@ def get_token_attribution(
             shap_values = explainer([work_prompt], batch_size=1)
         else:
             shap_values = explainer([work_prompt], [target_text], batch_size=1)
-    values = _extract_shap_values(shap_values)
+    values = _extract_shap_values(shap_values)  # (len(work_tokens),) after checks below.
     expected = len(work_tokens)
     if values.shape[0] == expected + 1:
         # SHAP's Text masker prepends an empty '' segment in some configurations.
@@ -365,7 +399,7 @@ def get_token_attribution(
             f"SHAP token length mismatch: got {values.shape[0]}, expected {expected} from prompt_tokens."
         )
 
-    special_mask = _special_token_mask(work_tokens)
+    special_mask = _special_token_mask(work_tokens)  # (len(work_tokens),)
     if masker_keep_prefix is not None and masker_keep_prefix > 0:
         k = min(int(masker_keep_prefix), special_mask.shape[0])
         special_mask = special_mask.clone()
@@ -377,6 +411,7 @@ def get_token_attribution(
         entmax_alpha=entmax_alpha,
     )
     if n_prefix_tokens_dropped > 0:
+        # Re-pad the removed BOS position so callers receive tensors of length P.
         prefix = torch.zeros(
             n_prefix_tokens_dropped,
             dtype=normalized.dtype,
