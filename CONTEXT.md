@@ -23,6 +23,17 @@ The post-π directed acyclic graph over supernodes. Beyond structure, it also ca
 **provenance** of the computation it summarizes: the prompt, the predicted target token, the
 transcoder scan, and the prompt tokens.
 
+## Behavioral contrast
+
+A controlled difference between groups of model inputs and outputs that isolates a
+safety-relevant behavior and gives interventions a specific effect to test.
+
+## Task-level circuit claim
+
+A hypothesis that a recurring model mechanism causally mediates a behavioral contrast across
+examples. Individual attribution graphs provide local evidence for the claim but are not the
+claim itself.
+
 ## Labeling scheme
 
 The strategy by which an LLM assigns each supernode its name/role/description. The current
