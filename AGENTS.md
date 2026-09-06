@@ -1,52 +1,31 @@
-# Repository Guidelines
+# AUTOMATIC ATTRIBUTION GRAPHS SUMMARIZATION FOR CIRCUIT TRACING PIPELINE
 
-## Project Structure & Module Organization
+Extends `circuit-tracer` with a summarization pipeline: attribute → prune → cluster → summarize into supernode graphs.
 
-This repository extends `circuit-tracer` for attribution-graph analysis and summarization. Core library code lives in `circuit_tracer/`, including `attribution/`, `replacement_model/`, `transcoder/`, `utils/`, and browser visualization support in `frontend/`. The graph summarization pipeline is in `summarization/`; prompts and model routing data are under `summarization/prompts/` and `summarization/llm_models.json`. Evaluation and pruning scripts are in `eval/`. Tests mirror the package layout in `tests/`. Research writing and generated reports live in `paper/`, `SOICT_DATN_Research_ENG_Template/`, `docs/adr/`, `reports/`, and `figures/`.
+## Structure
 
-## Build, Test, and Development Commands
+- `circuit_tracer/` — upstream attribution library (graph, replacement model, transcoder). Don't fork logic here; import it.
+- `summarization/` — the pipeline. Entry: `summarization/pipeline.py::run_pipeline`, CLI: `python -m summarization`. Stages: `prune.py` → `cluster.py` (`ilp_cluster.py`) → `summarize.py`. `label.py` / `group_llm.py` handle LLM supernode labeling via registry in `summarization/llm_models.json`; prompts in `summarization/prompts/`.
+- `eval/` — experiment scripts (`eval_prune.py`, `eval_cluster.py`, `eval_faithfulness.py`, `eval_intervention.py`, `eval_steering.py`) + `legacy_cluster_baselines.py` (spectral/agglomerative baselines; `--method spectral|agglomerative` routes here, `ilp` is canonical).
+- `visualization_app/` — Streamlit app (`server.py`, `services.py`). Root `api.py`, `config.py`, `attribute_utils.py`, `import_dataset.py` support it.
+- `tests/` mirror package layout. `CONTEXT.md` defines domain terms (supernode, role vocabulary Input/Abstract/Output/Trash, summary graph).
 
-- `pip install -e ".[dev]"`: install the package in editable mode with pytest, Ruff, Pyright, and IPython.
-- `python -m pytest tests -m "not requires_disk"`: run the CI test set, excluding disk-heavy tests.
-- `python -m pytest tests/test_prune.py`: run a targeted test file while developing.
-- `python -m ruff format .`: format Python files.
-- `python -m ruff check .`: lint for Pyflakes, pycodestyle, and tidy-import issues.
-- `python -m pyright`: run basic type checking.
-- `python -m summarization ...` or `circuit-tracer ...`: use package entry points.
+## Commands
 
-Always run commands that involve Python, pytest, pip, or project scripts in the `circuit` conda environment. Prefix commands with `conda run -n circuit`, for example:
+Install: `pip install -e ".[dev]"` (Python >=3.10). CI order — run in this order:
+`python -m ruff format --check` → `python -m ruff check` → `python -m pyright` → `python -m pytest tests -m "not requires_disk"`
 
-```bash
-conda run -n circuit pytest tests/test_prune.py
-conda run -n circuit python -m summarization --help
-```
+- Full pipeline: `python -m summarization --prompt "..." --model google/gemma-2-2b --transcoder mntss/clt-gemma-2-2b-2.5M` (needs GPU/CUDA; `--graph-pt` loads a saved graph instead, `--graph-pt-out` saves one).
+- Focused test: `python -m pytest tests/test_prune.py` (same for `test_group_llm.py`, `test_pipeline_cli.py`, `test_ilp_cluster.py`).
+- Skip GPU/disk-heavy suites with `-m "not requires_disk"`; attribution tests (`test_attributions_*`, `test_transformerlens_*`) need model weights + VRAM.
 
-Do not assume the environment is already active because shell state does not persist between tool calls.
+## Conventions
 
-## Coding Style & Naming Conventions
-
-Use Python 3.10+ syntax. Ruff uses a 100-column line length, with `E501` ignored, and prefers modern types: `list`, `dict`, `tuple`, `A | B`, and `T | None` instead of legacy `typing` aliases. Keep module and test filenames lowercase with underscores, for example `test_group_llm.py`. Prefer small, explicit functions and keep experiment scripts separate from reusable package modules.
-
-This is a research codebase. Optimize for readability, traceability of assumptions, and fast iteration. Prioritize readability, reproducibility, maintainability, then correctness on real inputs. Prefer explicit, flat code over abstractions, and avoid speculative robustness such as fallback branches, broad `try`/`except` blocks, or type coercions for cases that cannot happen in the current workflow.
-
-Name variables after their mathematical meaning, such as `phi_vectors`, `influence_scores`, or `adj`, rather than their container type. Use short comments only for non-obvious invariants, tensor shapes, adjacency conventions, threshold semantics, numerical pitfalls, or deliberate deviations from a paper. Validate early at research boundaries such as CLI args, config values, files, and API responses; do not re-check types or shapes mid-pipeline when callers already guarantee them.
-
-For numeric code, prefer named intermediate tensors over long chained expressions, and add a shape comment like `# (N, d)` the first time a tensor appears in a non-trivial computation. Every stochastic operation must accept an explicit seed parameter. Do not hardcode or silently default to a random seed.
-
-Treat eval scripts as experiments, not frameworks. Do not create base classes, registries, or plugin systems speculatively. Duplication across a small number of eval scripts is acceptable; introduce abstractions only when at least three concrete cases already exist.
-
-Never use LaTeX math syntax in chat or terminal output. Use Unicode math symbols such as `∑`, `∫`, `√`, `θ`, `α`, `→`, `∞`, `x²`, and `xᵢ`. LaTeX is permitted only inside `paper/`.
-
-## Testing Guidelines
-
-Tests use `pytest`. Name tests `test_*.py` and place package-specific tests near the matching area under `tests/`. Mark storage-heavy cases with `@pytest.mark.requires_disk` so CI can skip them. Add focused tests for new graph logic, pruning behavior, model routing, prompts, or frontend serialization changes.
-
-Write tests that verify concrete research invariants, such as pruning retaining the target logit or clustering producing non-overlapping supernodes. Skip tests for internal helpers unless they encode a subtle invariant worth pinning down.
-
-## Commit & Pull Request Guidelines
-
-Recent commits use short, imperative summaries such as `add pruning eval`, `fix visualization`, and `add labeling prompt`. Keep subjects concise and behavior-focused. PRs should describe the change, list verification commands, note skipped heavy tests or notebook checks, and link related issues or design notes. Include screenshots or report paths for graph visualization, Streamlit UI, or HTML report changes.
-
-## Security & Configuration Tips
-
-Do not commit `.env`, API keys, model tokens, large generated graph artifacts, or cache directories. Keep provider details in `config.py` or `summarization/llm_models.json`, and document new required environment variables in the PR.
+- Ruff: line-length 100, `E501` ignored; `TID` rules ban `typing.List/Dict/Tuple/Union/Optional` — use `list`, `dict`, `A | B`, `T | None`. Pyright `basic`, excludes `demos/`.
+- Research code: flat explicit functions, no speculative frameworks. Eval scripts may duplicate; abstract only at ≥3 concrete cases. No broad `try/except`, no fallback branches for impossible cases.
+- Numeric code: named intermediate tensors + shape comment `# (N, d)` on first non-trivial appearance.
+- Every stochastic op takes an explicit seed param (`random_state`, never hardcoded); `tests/conftest.py` seeds `torch.manual_seed(42)`.
+- Validate early at boundaries (CLI args, config, `.pt` files, LLM responses); don't re-check shapes mid-pipeline.
+- Test invariants, not helpers: pruning retains target logit, supernodes are non-overlapping DAG, use `@pytest.mark.requires_disk` for storage-heavy cases.
+- Secrets via `.env` loaded by `config.py` (`OPENAI_API_KEY`, `GEMINI_API_KEY`/`GENAI_API_KEY`, `HUGGINGFACE_API_KEY`, `NEURONPEDIA_API_KEY`). Never commit `.env`, keys, or `temp_graph_files/` artifacts. New provider → update `summarization/llm_models.json` + document env var in PR.
+- Commits: short imperative (`add pruning eval`, `fix visualization`). PRs list verification commands + skipped heavy tests.
