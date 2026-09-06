@@ -1,2 +1,0 @@
-source_set,graph_file,graph_stem,graph_path,shap_json,shap_row_index,masker_keep_prefix,normalize_method,node_threshold,edge_threshold,combine_method,score_normalization,alpha,logit_weights,keep_all_tokens_and_logits,num_nodes,num_edges,prune_graph_path
-analogies,083.pt,083,dataset\analogies\083.pt,dataset\analogies\shap_values.json,84,,softmax,0.02,0.95,geometric,rank,0.5,target,False,41,693,eval_outputs\prune\analogies_083\analogies\softmax\alpha_0.50\node_0.02\083_prune_graph.pt
