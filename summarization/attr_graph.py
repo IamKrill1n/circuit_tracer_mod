@@ -10,6 +10,7 @@ from summarization.summarize import Node
 from summarization.utils import get_data_from_json
 from circuit_tracer.graph import Graph
 
+
 @dataclass
 class AttrGraph:
     """
@@ -125,7 +126,6 @@ class AttrGraph:
             )
 
         # --- Embedding / token nodes ---
-        error_end_idx = n_feat + n_err
         for pos in range(n_tok):
             vocab_idx = graph.input_tokens[pos]
             vid = int(vocab_idx.item()) if hasattr(vocab_idx, "item") else int(vocab_idx)
@@ -188,7 +188,7 @@ class AttrGraph:
             )
 
         adj = graph.adjacency_matrix.detach().to(dtype=dtype, device=device)
-        scan_val = graph.scan
+        scan_val = graph.scan_name
         if isinstance(scan_val, list):
             scan_meta = "-".join(scan_val)
         else:

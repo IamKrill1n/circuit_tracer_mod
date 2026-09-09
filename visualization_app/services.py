@@ -259,7 +259,7 @@ def infer_graph_model_and_scan(pt_path: Path) -> tuple[str, str]:
     import torch
 
     data = torch.load(pt_path, map_location="cpu", weights_only=False)
-    scan = data.get("scan")
+    scan = data.get("scan_name", data.get("scan"))
     scan_str = "-".join(scan) if isinstance(scan, list) else str(scan or "")
     return data["cfg"].tokenizer_name, scan_str
 
@@ -289,7 +289,7 @@ def convert_pt_to_viewer(
         graph_or_path=graph,
         slug=safe_slug,
         output_path=str(viewer_dir),
-        scan=scan or graph.scan,
+        scan_name=scan or graph.scan_name,
         node_threshold=node_threshold,
         edge_threshold=edge_threshold,
     )
@@ -379,7 +379,7 @@ def generate_graph(
             graph_or_path=graph,
             slug=safe_slug,
             output_path=str(viewer_dir),
-            scan=transcoder,
+            scan_name=transcoder,
             node_threshold=node_threshold,
             edge_threshold=edge_threshold,
         )
@@ -560,9 +560,7 @@ def run_summary(
         custom_pt_root=custom_pt_root,
     )
     if pt_path is None:
-        raise FileNotFoundError(
-            f"No .pt file exists for graph {safe_dataset}/{safe_slug!r}"
-        )
+        raise FileNotFoundError(f"No .pt file exists for graph {safe_dataset}/{safe_slug!r}")
 
     def setting(name: str, default: Any) -> Any:
         value = settings.get(name, default)

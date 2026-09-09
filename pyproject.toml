@@ -1,6 +1,6 @@
 [project]
 name = "circuit-tracer"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Library for circuit tracing in language models"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -10,7 +10,7 @@ dependencies = [
     "huggingface_hub<1.0.0",
     "ipykernel>=6.29.5,<7.0.0",
     "ipywidgets>=8.1.7",
-    "nnsight>=0.5.13",
+    "nnsight==0.6.1",
     "numpy>=1.24.0",
     "pydantic>=2.0.0",
     "safetensors>=0.5.0",
@@ -40,8 +40,14 @@ viz = [
 circuit-tracer = "circuit_tracer.__main__:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+fallback_version = "0.0.0"
 
 [tool.ruff]
 line-length = 100
