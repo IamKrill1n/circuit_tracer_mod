@@ -122,3 +122,7 @@ The strongest defensible result would be: **on controlled tasks, internal circui
 - [Evaluating honesty and lie detection techniques on a diverse suite of dishonest models](https://alignment.anthropic.com/2025/honesty-elicitation/) (2025) finds strong performance from asking models to classify their own honesty. Include this prompted self-classification baseline as a separate diagnostic call, preserving the original generation and reporting its extra inference cost. This is especially relevant for retrospective detection; an early baseline must receive only information available at its decision time.
 
 Original-model intervention validation is a separate requirement from testing the replacement model: reproduce the predicted behavioral effect in the original network using supported feature-direction interventions. If only replacement-model results are available, limit the causal claim accordingly.
+
+## Follow-up: pruning around the claim
+
+The current bottleneck is SHAP-guided pruning rather than joint graph summarization. See [Pruning to test a mechanistic claim](claim_based_pruning.md) for a concrete proposal: trace the false-versus-true answer contrast, optionally add a validated detector direction, and prune according to preservation of intervention effects. A detector direction explains its own score unless separate interventions link it to reporting behavior. Multiple targets can be included in one graph per run.
