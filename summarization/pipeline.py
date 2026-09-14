@@ -1,7 +1,7 @@
 """End-to-end pipeline: attribution -> token weights -> prune -> cluster -> summarize.
 
 ``run_pipeline`` produces a ``circuit_tracer.Graph`` by running local attribution on a
-prompt (or loading an existing ``.pt``), optionally computes SHAP token weights, prunes
+prompt (or loading an existing ``.pt``), optionally selects claim-relevant semantic spans, prunes
 the graph directly, optionally filters by activation density, clusters, and assembles
 the supernode ``SummaryGraph``. Legacy spectral/agglomerative clustering is available
 only through eval-owned baseline helpers.
@@ -25,7 +25,6 @@ from summarization.cluster import DEFAULT_THETA, cluster
 from summarization.cluster_viz import supernode_graph_figure
 from summarization.prune import filter_act_density, prune_attr_graph
 from summarization.summarize import summarize
-from summarization.utils import node_is_embedding
 
 
 def _acquire_graph(args: argparse.Namespace):
@@ -70,49 +69,6 @@ def _acquire_graph(args: argparse.Namespace):
         out.parent.mkdir(parents=True, exist_ok=True)
         graph.to_pt(str(out))
     return graph
-
-
-def _shap_token_weights(
-    ag: AttrGraph,
-    *,
-    model_name: str,
-    normalize_method: str,
-    entmax_alpha: float | None,
-    device: str,
-) -> list[float]:
-    """SHAP token attribution for the graph's prompt, mapped to embedding-node order.
-
-    Embedding nodes are 1:1 with input-token positions (``Node.ctx_idx``), so the
-    normalized per-token weight at ``ctx_idx`` is the weight for that embedding node.
-    """
-    from summarization.token_attribution import get_token_attribution
-
-    prompt = str(ag.metadata.get("prompt", "") or "")
-    prompt_tokens = [str(t) for t in (ag.metadata.get("prompt_tokens") or [])]
-    if not prompt or not prompt_tokens:
-        raise ValueError("Graph metadata lacks prompt / prompt_tokens for SHAP token attribution.")
-
-    # Force SHAP's target Y to the graph's target logit token (aligns with logit_weights="target").
-    target_token_id = next((n.feature for n in ag.nodes if n.is_target_logit), None)
-
-    # pin_special_tokens keeps BOS / chat scaffold aligned 1:1 with prompt_tokens.
-    _raw, normalized = get_token_attribution(
-        prompt=prompt,
-        prompt_tokens=prompt_tokens,
-        model_name=model_name,
-        normalize_method=normalize_method,  # type: ignore[arg-type]
-        device=device,
-        entmax_alpha=entmax_alpha,
-        pin_special_tokens=True,
-        target_token_id=target_token_id,
-    )
-    norm = [float(x) for x in normalized.detach().cpu().tolist()]
-    weights: list[float] = []
-    for node in ag.nodes:
-        if node_is_embedding(node):
-            ci = int(node.ctx_idx)
-            weights.append(norm[ci] if 0 <= ci < len(norm) else 0.0)
-    return weights
 
 
 def _parse_token_weights(raw: str | None) -> list[float] | None:
@@ -166,26 +122,27 @@ def _supernodes_for_upload(rows: list) -> list[list[str]]:
 
 
 def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
+    claim = getattr(args, "claim", None)
+    selector_model = getattr(args, "selector_model", None)
+    if claim is not None and not claim.strip():
+        raise ValueError("claim must not be empty")
+    if bool(claim) != bool(selector_model):
+        raise ValueError("Supply both --claim and --selector-model.")
+    if claim and _parse_token_weights(args.token_weights) is not None:
+        raise ValueError("Manual token weights and semantic selection are mutually exclusive.")
     # Stage 0: produce a circuit_tracer Graph (local attribution or loaded .pt).
     _report_progress(args, "Loading attribution graph", 0.05)
     graph = _acquire_graph(args)
     _report_progress(args, "Building attribution graph view", 0.12)
     ag = AttrGraph.from_graph(graph)
 
-    # Stage 0b (optional): SHAP token weights from the graph's prompt.
+    # Semantic seed selection is separate from graph attribution.
     token_weights = _parse_token_weights(args.token_weights)
-    if args.auto_token_weights and token_weights is None:
-        _report_progress(args, "Computing token attribution weights", 0.22)
-        shap_model = (
-            args.token_attr_model or getattr(graph.cfg, "tokenizer_name", None) or args.model
-        )
-        token_weights = _shap_token_weights(
-            ag,
-            model_name=shap_model,
-            normalize_method=args.token_attr_normalize,
-            entmax_alpha=args.entmax_alpha if args.token_attr_normalize == "entmax" else None,
-            device=args.device,
-        )
+    if claim:
+        from summarization.semantic_seeds import select_semantic_seeds
+
+        _report_progress(args, "Selecting claim-relevant spans", 0.22)
+        token_weights = select_semantic_seeds(ag, claim, selector_model)
 
     # Stage 1: prune (Graph -> PruneGraph, pure tensor math).
     _report_progress(args, "Pruning attribution graph", 0.35)

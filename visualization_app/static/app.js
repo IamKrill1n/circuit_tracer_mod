@@ -19,13 +19,6 @@ function graphApiPath(dataset, slug, suffix = "") {
   return `/api/graphs/${encodeURIComponent(dataset)}/${encodeURIComponent(slug)}${suffix}`;
 }
 
-function defaultShapPath(dataset) {
-  if (dataset === "analogies" || dataset === "multihop") {
-    return `dataset/${dataset}/shap_values.json`;
-  }
-  return "";
-}
-
 function isActiveGraph(graph) {
   return graph.dataset === state.activeDataset && graph.slug === state.activeSlug;
 }
@@ -204,10 +197,9 @@ function summaryPayload() {
   return {
     logit_weights: el("sumLogitWeights").value,
     token_weights_source: el("sumTokenWeights").value,
-    token_attr_model: el("sumTokenAttrModel").value,
-    token_attr_normalize: el("sumTokenAttrNormalize").value,
-    entmax_alpha: numberValue("sumEntmaxAlpha"),
-    shap_values_path: el("sumShapValuesPath").value,
+    claim: el("sumClaim").value,
+    selector_model: el("sumSelectorModel").value,
+    token_weights: el("sumManualWeights").value,
     device: el("sumDevice").value,
     node_threshold: numberValue("sumNodeThreshold"),
     edge_threshold: numberValue("sumEdgeThreshold"),
@@ -567,7 +559,6 @@ el("newGraphBtn").addEventListener("click", () => el("generateDialog").showModal
 el("uploadBtn").addEventListener("click", () => el("uploadDialog").showModal());
 el("summaryBtn").addEventListener("click", () => {
   if (state.activeDataset) {
-    el("sumShapValuesPath").value = defaultShapPath(state.activeDataset);
   }
   syncThetaModeInputs();
   el("summaryDialog").showModal();

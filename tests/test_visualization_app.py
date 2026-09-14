@@ -126,9 +126,9 @@ def test_summary_request_defaults_match_graph_workflow() -> None:
 
     req = SummaryRequest()
 
-    assert req.token_weights_source == "shap"
-    assert req.token_attr_normalize == "entmax"
-    assert req.shap_values_path == ""
+    assert req.token_weights_source == "uniform"
+    assert req.claim == ""
+    assert req.selector_model == ""
     assert req.node_threshold == 0.02
     assert req.edge_threshold == 0.9
     assert req.filter_act_density is True
@@ -454,138 +454,6 @@ def test_stored_supernode_intervention_rejects_model_mismatch(tmp_path: Path) ->
         )
 
 
-def test_token_weights_from_shap_uses_graph_target_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    from summarization.summarize import Node
-
-    captured: dict[str, int | None] = {}
-
-    def fake_get_token_attribution(**kwargs):
-        captured["target_token_id"] = kwargs["target_token_id"]
-        return torch.ones(2), torch.tensor([0.25, 0.75])
-
-    def fake_build_index_sets(_nodes):
-        return {"embedding": [0, 1]}
-
-    monkeypatch.setattr(
-        "summarization.token_attribution.get_token_attribution",
-        fake_get_token_attribution,
-    )
-    monkeypatch.setattr("summarization.utils._build_index_sets", fake_build_index_sets)
-    ag = type(
-        "FakeAttrGraph",
-        (),
-        {
-            "metadata": {"prompt": "A B", "prompt_tokens": ["A", " B"]},
-            "nodes": [
-                Node("E_0_0", 0, 0, "E", 0, "embedding"),
-                Node("E_0_1", 1, 0, "E", 1, "embedding"),
-                Node("L_0", 2, 1234, "L", 1, "logit", is_target_logit=True),
-            ],
-        },
-    )()
-
-    weights = services._token_weights_from_shap(
-        ag,
-        model_name="model",
-        normalize_method="entmax",
-        entmax_alpha=1.25,
-        device="cpu",
-    )
-
-    assert captured["target_token_id"] == 1234
-    assert weights == [0.25, 0.75]
-
-
-def test_token_attribution_passes_explicit_target_to_shap(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from summarization import token_attribution
-
-    captured: dict[str, tuple] = {}
-
-    class FakeTokenizer:
-        def decode(self, ids):
-            assert ids == [7]
-            return " target"
-
-        def __call__(self, text, add_special_tokens):
-            assert text == " target"
-            assert add_special_tokens is False
-            return {"input_ids": [7]}
-
-    class FakeExplanation:
-        values = [2.0]
-        feature_names = ["A"]
-
-    class FakeExplainer:
-        def __call__(self, *args, batch_size):
-            captured["args"] = args
-            captured["batch_size"] = batch_size
-            return FakeExplanation()
-
-    monkeypatch.setattr(token_attribution, "_cached_tokenizer", lambda _model_name: FakeTokenizer())
-    monkeypatch.setattr(
-        token_attribution,
-        "_build_shap_lm_explainer",
-        lambda **_kwargs: FakeExplainer(),
-    )
-
-    _raw, normalized = token_attribution.get_token_attribution(
-        prompt="A",
-        prompt_tokens=["A"],
-        model_name="model",
-        normalize_method="softmax",
-        device="cpu",
-        target_token_id=7,
-    )
-
-    assert captured["args"] == (["A"], [" target"])
-    assert captured["batch_size"] == 1
-    assert normalized.tolist() == [1.0]
-
-
-def test_token_attribution_strips_graph_bos_before_pinned_shap(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from summarization import token_attribution
-
-    captured: dict[str, tuple] = {}
-
-    class FakeTokenizer:
-        bos_token = "<bos>"
-
-    class FakeExplanation:
-        values = [0.0, 2.0]
-        feature_names = ["", "A"]
-
-    class FakeExplainer:
-        def __call__(self, *args, batch_size):
-            captured["args"] = args
-            captured["batch_size"] = batch_size
-            return FakeExplanation()
-
-    monkeypatch.setattr(token_attribution, "_cached_tokenizer", lambda _model_name: FakeTokenizer())
-    monkeypatch.setattr(
-        token_attribution,
-        "_build_shap_lm_explainer",
-        lambda **_kwargs: FakeExplainer(),
-    )
-
-    raw, normalized = token_attribution.get_token_attribution(
-        prompt="<bos>A",
-        prompt_tokens=["<bos>", "A"],
-        model_name="model",
-        normalize_method="softmax",
-        device="cpu",
-        pin_special_tokens=True,
-    )
-
-    assert captured["args"] == (["A"],)
-    assert captured["batch_size"] == 1
-    assert raw.tolist() == [0.0, 2.0]
-    assert normalized.tolist() == [0.0, 1.0]
-
-
 def test_format_generation_prompt_formats_qwen_with_chat_template(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -686,7 +554,8 @@ def test_run_summary_delegates_core_work_to_pipeline(
         captured["graph_pt"] = args.graph_pt
         captured["method"] = args.method
         captured["theta"] = args.theta
-        captured["auto_token_weights"] = args.auto_token_weights
+        captured["claim"] = args.claim
+        captured["selector_model"] = args.selector_model
         captured["summary_graph_out"] = args.summary_graph_out
         sng = SummaryGraph(
             [
@@ -719,7 +588,9 @@ def test_run_summary_delegates_core_work_to_pipeline(
         slug="austin",
         dataset="custom",
         settings={
-            "token_weights_source": "shap",
+            "token_weights_source": "semantic",
+            "claim": "The model retrieves the capital.",
+            "selector_model": "test-selector",
             "theta": "p80",
             "label_supernodes": False,
         },
@@ -731,7 +602,8 @@ def test_run_summary_delegates_core_work_to_pipeline(
         "graph_pt": str(pt_path),
         "method": "ilp",
         "theta": "p80",
-        "auto_token_weights": True,
+        "claim": "The model retrieves the capital.",
+        "selector_model": "test-selector",
         "summary_graph_out": str(services.summary_path("austin", "custom", summary_root)),
     }
     assert result["summary_path"] == str(services.summary_path("austin", "custom", summary_root))

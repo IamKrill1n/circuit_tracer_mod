@@ -199,6 +199,11 @@ class AttrGraph:
             "model_name": graph.cfg.model_name,  # Neuronpedia modelId (base LM, not SAE scan ID)
             "prompt": graph.input_string,
             "prompt_tokens": prompt_tokens,
+            "tokens_decoded": tokenizer is not None,
+            "special_token_indices": (
+                [i for i, tid in enumerate(graph.input_tokens) if int(tid) in tokenizer.all_special_ids]
+                if tokenizer is not None else None
+            ),
             "info": {},
         }
 

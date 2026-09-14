@@ -2,8 +2,8 @@
 
 Example:
     conda run -n circuit python -u eval/label_summary_graphs.py \
-      --summary-dir summary_graphs/entmax/alpha_0.50/node_0.02 \
-      --labeled-dir labeled_summary/entmax/alpha_0.50/node_0.02 \
+      --summary-dir summary_graphs/semantic/alpha_0.50/node_0.02 \
+      --labeled-dir labeled_summary/semantic/alpha_0.50/node_0.02 \
       --resume
 """
 
@@ -20,8 +20,8 @@ from types import FrameType
 from typing import Any
 
 
-DEFAULT_SUMMARY_DIR = Path("summary_graphs/entmax/alpha_0.50/node_0.02")
-DEFAULT_LABELED_DIR = Path("labeled_summary/entmax/alpha_0.50/node_0.02")
+DEFAULT_SUMMARY_DIR = Path("summary_graphs/semantic/alpha_0.50/node_0.02")
+DEFAULT_LABELED_DIR = Path("labeled_summary/semantic/alpha_0.50/node_0.02")
 DEFAULT_MODEL_NAME = "gemma-4-31b-it"
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_GRAPH_TIMEOUT_SECONDS = 600

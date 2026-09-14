@@ -9,7 +9,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -68,11 +68,10 @@ class PreviewRequest(BaseModel):
 class SummaryRequest(BaseModel):
     model_name: str = "google/gemma-2-2b"
     logit_weights: str = "target"
-    token_weights_source: str = "shap"
-    token_attr_model: str = ""
-    token_attr_normalize: str = "entmax"
-    entmax_alpha: float = 1.25
-    shap_values_path: str = ""
+    token_weights_source: Literal["uniform", "manual", "semantic"] = "uniform"
+    claim: str = ""
+    selector_model: str = ""
+    token_weights: str = ""
     device: str = "cuda"
     node_threshold: float = 0.02
     edge_threshold: float = 0.9
@@ -355,8 +354,6 @@ def summarize_graph(dataset: str, slug: str, req: SummaryRequest) -> dict[str, A
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     settings = req.model_dump()
-    if not settings.get("shap_values_path"):
-        settings["shap_values_path"] = services.default_shap_path(safe_dataset)
 
     job = _submit_job(
         "summary",

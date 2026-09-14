@@ -42,13 +42,6 @@ def validate_dataset(dataset: str) -> str:
     return dataset
 
 
-def default_shap_path(dataset: str) -> str:
-    safe = validate_dataset(dataset)
-    if safe in KNOWN_DATASETS:
-        return f"dataset/{safe}/shap_values.json"
-    return ""
-
-
 @contextmanager
 def _quiet_dependency_output() -> Iterator[None]:
     with open(os.devnull, "w", encoding="utf-8") as sink:
@@ -452,88 +445,6 @@ def preview_prompt(
         cleanup_cuda()
 
 
-def _token_weights_from_shap(
-    ag,
-    *,
-    model_name: str,
-    normalize_method: str,
-    entmax_alpha: float | None,
-    device: str,
-) -> list[float]:
-    from eval.prune_graphs import _token_weights_for_embeddings
-    from summarization.token_attribution import get_token_attribution
-    from summarization.utils import _build_index_sets
-
-    metadata = ag.metadata
-    prompt = str(metadata.get("prompt", "") or "")
-    prompt_tokens = [str(t) for t in (metadata.get("prompt_tokens") or [])]
-    if not prompt or not prompt_tokens:
-        raise ValueError("Graph metadata lacks prompt or prompt_tokens for SHAP.")
-
-    target_token_id = next((int(n.feature) for n in ag.nodes if n.is_target_logit), None)
-    _raw, normalized = get_token_attribution(
-        prompt=prompt,
-        prompt_tokens=prompt_tokens,
-        model_name=model_name,
-        normalize_method=normalize_method,  # type: ignore[arg-type]
-        device=device,
-        entmax_alpha=entmax_alpha,
-        pin_special_tokens=True,
-        target_token_id=target_token_id,
-    )
-    emb_idx = _build_index_sets(ag.nodes)["embedding"]
-    node_ids = [n.node_id for n in ag.nodes]
-    return _token_weights_for_embeddings(normalized.detach().cpu(), node_ids, emb_idx)
-
-
-def _token_weights_from_shap_file(
-    ag,
-    *,
-    shap_json_path: Path,
-    normalize_method: str,
-    entmax_alpha: float | None,
-) -> list[float]:
-    from eval.prune_graphs import (
-        _build_shap_lookup,
-        _match_shap_row,
-        _token_weights_for_embeddings,
-        normalize_shap_values_for_prune,
-    )
-    from summarization.utils import _build_index_sets
-
-    payload = json.loads(shap_json_path.read_text(encoding="utf-8"))
-    by_prompt, by_index = _build_shap_lookup(payload)
-    metadata = ag.metadata
-    prompt_tokens = [str(t) for t in (metadata.get("prompt_tokens") or [])]
-    if not prompt_tokens:
-        raise ValueError("Graph metadata lacks prompt_tokens for SHAP file.")
-
-    row = _match_shap_row(stem="", metadata=metadata, by_prompt=by_prompt, by_index=by_index)
-    if row is None:
-        raise ValueError(
-            f"No matching SHAP row in {shap_json_path} for prompt {metadata.get('prompt')!r}"
-        )
-    raw_shap = row.get("raw_shap")
-    if not isinstance(raw_shap, list) or not raw_shap:
-        raise ValueError(f"Matched SHAP row in {shap_json_path} has no raw_shap list.")
-
-    json_keep = payload.get("masker_keep_prefix")
-    keep_prefix = (
-        int(json_keep) if isinstance(json_keep, (int, float)) and int(json_keep) > 0 else None
-    )
-    normalized = normalize_shap_values_for_prune(
-        prompt_tokens,
-        [float(x) for x in raw_shap],
-        normalize_method,  # type: ignore[arg-type]
-        masker_keep_prefix=keep_prefix,
-        entmax_alpha=entmax_alpha,
-    )
-
-    emb_idx = _build_index_sets(ag.nodes)["embedding"]
-    node_ids = [n.node_id for n in ag.nodes]
-    return _token_weights_for_embeddings(normalized, node_ids, emb_idx)
-
-
 def run_summary(
     *,
     slug: str,
@@ -547,7 +458,6 @@ def run_summary(
 ) -> dict[str, Any]:
     from argparse import Namespace
 
-    from summarization.attr_graph import AttrGraph
     from summarization.pipeline import run_pipeline
     from summarization.summarize import SummaryGraph
 
@@ -572,31 +482,23 @@ def run_summary(
 
     report("Preparing summary settings", 0.02)
     token_weights_source = str(settings.get("token_weights_source") or "uniform")
-    normalize_method = str(settings.get("token_attr_normalize") or "entmax")
-    entmax_alpha = float(setting("entmax_alpha", 1.25)) if normalize_method == "entmax" else None
-    token_weights_json = None
-    auto_token_weights = token_weights_source in {"shap", "generate shap"}
-    if auto_token_weights:
-        pass
-    elif token_weights_source in {"shap_file", "load shap file"}:
-        shap_path_raw = str(settings.get("shap_values_path") or "").strip()
-        if not shap_path_raw:
-            raise ValueError("shap_values_path is required when token_weights_source='shap_file'.")
-        shap_path = Path(shap_path_raw).expanduser()
-        if not shap_path.is_absolute():
-            shap_path = REPO / shap_path
-        if not shap_path.exists():
-            raise FileNotFoundError(f"SHAP file does not exist: {shap_path}")
-        ag = AttrGraph.from_graph(str(pt_path))
-        token_weights = _token_weights_from_shap_file(
-            ag,
-            shap_json_path=shap_path,
-            normalize_method=normalize_method,
-            entmax_alpha=entmax_alpha,
-        )
-        token_weights_json = json.dumps(token_weights)
-    elif token_weights_source != "uniform":
+    if token_weights_source not in {"semantic", "manual", "uniform"}:
         raise ValueError(f"Unknown token_weights_source: {token_weights_source!r}")
+    claim = str(settings.get("claim") or "").strip()
+    selector_model = str(settings.get("selector_model") or "").strip()
+    manual_weights = str(settings.get("token_weights") or "").strip()
+    if token_weights_source == "semantic":
+        if not claim or not selector_model:
+            raise ValueError("Semantic selection requires a claim and selector model.")
+        if manual_weights:
+            raise ValueError("Manual token weights and semantic selection are mutually exclusive.")
+    elif claim or selector_model:
+        raise ValueError("Choose semantic token weights when supplying a claim or selector model.")
+    if token_weights_source == "manual" and not manual_weights:
+        raise ValueError("Manual token weights are required.")
+    if token_weights_source == "uniform" and manual_weights:
+        raise ValueError("Choose manual token weights to supply weights.")
+    token_weights_json = manual_weights or None
 
     out = summary_path(safe_slug, safe_dataset, summary_root)
     sidecar_dir = summary_sidecar_dir(safe_dataset, summary_root)
@@ -620,10 +522,8 @@ def run_summary(
             "max_feature_nodes": int(setting("max_feature_nodes", 8192)),
             "batch_size": int(setting("batch_size", 256)),
             "token_weights": token_weights_json,
-            "auto_token_weights": auto_token_weights,
-            "token_attr_model": str(setting("token_attr_model", "")) or None,
-            "token_attr_normalize": normalize_method,
-            "entmax_alpha": float(setting("entmax_alpha", 1.25)),
+            "claim": claim or None,
+            "selector_model": selector_model or None,
             "device": str(setting("device", "cuda")),
             "logit_weights": str(setting("logit_weights", "target")),
             "combine_method": str(setting("combine_method", "geometric")),

@@ -8,8 +8,8 @@ def test_pipeline_cli_prune_defaults() -> None:
     args = build_parser().parse_args([])
 
     assert args.logit_weights == "target"
-    assert args.token_attr_normalize == "entmax"
-    assert args.entmax_alpha == 1.25
+    assert args.claim is None
+    assert args.selector_model is None
     assert args.combine_method == "geometric"
     assert args.normalization == "rank"
     assert args.node_threshold == 0.02

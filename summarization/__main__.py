@@ -39,28 +39,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-feature-nodes", type=int, default=8192)
     parser.add_argument("--batch-size", type=int, default=256)
 
-    # Token weights: uniform (default), an explicit JSON list, or SHAP token attribution.
-    parser.add_argument(
-        "--token-weights", type=str, default=None, help="JSON list string, e.g. '[0,0,0.5,0.5]'."
-    )
-    parser.add_argument(
-        "--auto-token-weights",
-        action="store_true",
-        help="Compute SHAP token weights from the prompt (token_attribution stage).",
-    )
-    parser.add_argument(
-        "--token-attr-model",
-        type=str,
-        default=None,
-        help="HF model for SHAP (defaults to the graph's).",
-    )
-    parser.add_argument(
-        "--token-attr-normalize",
-        type=str,
-        choices=["softmax", "sparsemax", "entmax15", "entmax"],
-        default="entmax",
-    )
-    parser.add_argument("--entmax-alpha", type=float, default=1.25)
+    # Uniform by default; semantic selection requires a fixed human-written claim.
+    parser.add_argument("--token-weights", default=None, help="Manual embedding weights as JSON.")
+    parser.add_argument("--claim", default=None, help="Human-written mechanistic claim.")
+    parser.add_argument("--selector-model", default=None, help="Semantic selector model in the LLM registry.")
     parser.add_argument("--device", type=str, default="cuda")
 
     # Prune.

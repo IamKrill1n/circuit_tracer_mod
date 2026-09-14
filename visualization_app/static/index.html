@@ -146,15 +146,12 @@
               <select id="sumLogitWeights"><option>target</option><option>probs</option></select>
             </label>
             <label>Token Weights
-              <select id="sumTokenWeights"><option value="shap">generate shap</option><option value="shap_file">load shap file</option><option value="uniform">uniform</option></select>
+              <select id="sumTokenWeights"><option value="uniform">Uniform</option><option value="semantic">Claim-relevant spans</option><option value="manual">Manual weights</option></select>
             </label>
-            <label>Token Attribution Normalization
-              <select id="sumTokenAttrNormalize"><option value="entmax">entmax</option><option value="softmax">softmax</option><option value="entmax15">entmax15</option><option value="sparsemax">sparsemax</option></select>
-            </label>
-            <label>Entmax Alpha <input id="sumEntmaxAlpha" type="number" min="1" step="0.05" value="1.25" /></label>
-            <label>SHAP Values JSON <input id="sumShapValuesPath" value="" placeholder="dataset/analogies/shap_values.json" /></label>
-            <label>Token Attribution Model <input id="sumTokenAttrModel" placeholder="default = graph model" /></label>
-            <label>Token Attribution Device <input id="sumDevice" value="cuda" /></label>
+            <label>Mechanistic Claim <textarea id="sumClaim" placeholder="The model combines the named country with the capital relation to retrieve and promote the capital answer."></textarea></label>
+            <label>Span Selector Model <input id="sumSelectorModel" placeholder="Model name from the LLM registry" /></label>
+            <label>Manual Weights (JSON) <input id="sumManualWeights" placeholder="[0, 0.5, 0.5]" /></label>
+            <label>Device <input id="sumDevice" value="cuda" /></label>
             <label>Combine Method
               <select id="sumCombine"><option>geometric</option><option>arithmetic</option><option>harmonic</option></select>
             </label>

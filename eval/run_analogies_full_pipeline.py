@@ -21,13 +21,7 @@ from typing import Any
 
 import torch
 
-from eval.prune_graphs import (
-    _build_shap_lookup,
-    _load_shap_values_json,
-    _match_shap_row,
-    _token_weights_for_embeddings,
-    normalize_shap_values_for_prune,
-)
+from summarization.semantic_seeds import select_semantic_seeds
 from summarization.attr_graph import AttrGraph
 from summarization.cluster import (
     DEFAULT_EPS_CAUSAL,
@@ -48,13 +42,11 @@ from summarization.prune import (
     save_prune_graph,
 )
 from summarization.summarize import SummaryGraph
-from summarization.utils import _build_index_sets
 
 
-NORMALIZATIONS = ("softmax", "entmax")
+NORMALIZATIONS = ("semantic",)
 ALPHA = 0.5
 NODE_THRESHOLD = 0.02
-ENTMAX_ALPHA = 1.25
 EDGE_THRESHOLD = 0.95
 COMBINE_METHOD = "geometric"
 SCORE_NORMALIZATION = "rank"
@@ -143,7 +135,8 @@ def _prune_one(
     *,
     graph_path: Path,
     normalization: str,
-    shap_row: dict[str, Any],
+    claim: str,
+    selector_model: str,
     output_path: Path,
     device: str,
 ) -> tuple[PruneGraph, dict[str, Any]]:
@@ -156,22 +149,7 @@ def _prune_one(
         attr_graph.adj = attr_graph.adj.to(device)
     attr_graph.metadata.setdefault("info", {})["neuronpedia_source_set"] = "analogies"
 
-    node_ids = [n.node_id for n in attr_graph.nodes]
-    idx = _build_index_sets(attr_graph.nodes)
-    emb_idx = idx["embedding"]
-    prompt_tokens = [str(t) for t in (attr_graph.metadata.get("prompt_tokens") or [])]
-    raw_shap = shap_row.get("raw_shap")
-    if not isinstance(raw_shap, list) or not raw_shap:
-        raise ValueError("matched SHAP row has no raw_shap list")
-
-    normalized = normalize_shap_values_for_prune(
-        prompt_tokens,
-        [float(x) for x in raw_shap],
-        normalization,  # type: ignore[arg-type]
-        masker_keep_prefix=None,
-        entmax_alpha=ENTMAX_ALPHA,
-    )
-    token_weights = _token_weights_for_embeddings(normalized, node_ids, emb_idx)
+    token_weights = select_semantic_seeds(attr_graph, claim, selector_model)
 
     prune_graph = prune_attr_graph(
         attr_graph,
@@ -239,7 +217,8 @@ def _label_one(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run analogies full pipeline.")
     parser.add_argument("--graphs-root", default="dataset/analogies")
-    parser.add_argument("--shap-values-json", default="dataset/analogies/shap_values.json")
+    parser.add_argument("--claim", required=True)
+    parser.add_argument("--selector-model", required=True)
     parser.add_argument("--pruned-root", default="pruned_graphs")
     parser.add_argument("--summary-root", default="summary_graphs")
     parser.add_argument("--labeled-root", default="labeled_summary")
@@ -252,22 +231,19 @@ def main() -> None:
     args = build_parser().parse_args()
 
     graphs_root = Path(args.graphs_root)
-    shap_path = Path(args.shap_values_json)
     pruned_root = Path(args.pruned_root)
     summary_root = Path(args.summary_root)
     labeled_root = Path(args.labeled_root)
 
-    payload = _load_shap_values_json(shap_path)
-    by_prompt, by_index = _build_shap_lookup(payload)
     graph_paths = _load_graphs(graphs_root, args.limit)
 
     settings = {
         "graphs_root": str(graphs_root),
-        "shap_values_json": str(shap_path),
+        "claim": args.claim,
+        "selector_model": args.selector_model,
         "normalizations": list(NORMALIZATIONS),
         "alpha": ALPHA,
         "node_threshold": NODE_THRESHOLD,
-        "entmax_alpha": ENTMAX_ALPHA,
         "edge_threshold": EDGE_THRESHOLD,
         "combine_method": COMBINE_METHOD,
         "score_normalization": SCORE_NORMALIZATION,
@@ -320,15 +296,11 @@ def main() -> None:
             }
             stage = "prune"
             try:
-                attr_graph_for_match = AttrGraph.from_graph(str(graph_path))
-                shap_row = _match_shap_row(stem, attr_graph_for_match.metadata, by_prompt, by_index)
-                if shap_row is None:
-                    raise ValueError("no matching SHAP row (prompt / pNN index)")
-
                 prune_graph, prune_info = _prune_one(
                     graph_path=graph_path,
                     normalization=normalization,
-                    shap_row=shap_row,
+                    claim=args.claim,
+                    selector_model=args.selector_model,
                     output_path=prune_path,
                     device=args.device,
                 )
@@ -336,7 +308,6 @@ def main() -> None:
                     {
                         **base,
                         **prune_info,
-                        "shap_row_index": shap_row.get("index"),
                         "num_nodes": prune_graph.num_nodes,
                         "num_edges": prune_graph.num_edges,
                         "prune_graph_path": str(prune_path),
