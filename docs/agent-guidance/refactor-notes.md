@@ -5,7 +5,9 @@
 - Package management resolved by the user: use conda for Python environments and pip for editable project installation.
 - Seed policy resolved by the user: production stochastic operations require explicit seed parameters; fixed test seeds are allowed. The policy is recorded in `research-code.md`.
 
-Shared Research code, Research practice, and Math guidance lives under `~/.agents/docs/agent-guidance/`. The follow-up also aligns shared guide names and package/seed policies with the repository guidance.
+Shared Coding, Verification, and Presentation guidance lives under `~/.agents/docs/agent-guidance/` and applies across projects. Package management, seed policy, and research workflow requirements are local to this repository.
+
+Research workflow guidance preserves source inputs, uses each evaluation command's existing output conventions, and requires run metadata. It replaces the former global prescriptions for `data/raw/`, `experiments/runs/<timestamp>/`, and JSON/Parquet-only evaluation outputs.
 
 ## Deletion and clarification candidates
 
@@ -28,6 +30,7 @@ docs/
   agent-guidance/
     architecture.md
     research-code.md
+    research-workflow.md
     testing.md
     pipeline.md
     git-and-providers.md

@@ -8,6 +8,7 @@ Read the relevant guidance before working:
 
 - Locating components or changing pipeline structure: [Architecture](docs/agent-guidance/architecture.md).
 - Editing Python or numerical code: [Research code](docs/agent-guidance/research-code.md).
+- Handling datasets, running experiments, or reporting evaluation results: [Research workflow](docs/agent-guidance/research-workflow.md).
 - Running checks or writing tests: [Testing](docs/agent-guidance/testing.md).
 - Running attribution or loading saved graphs: [Pipeline usage](docs/agent-guidance/pipeline.md).
 - Configuring providers, handling secrets, committing, or preparing PRs: [Git and providers](docs/agent-guidance/git-and-providers.md).
