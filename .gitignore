@@ -178,6 +178,7 @@ cython_debug/
 .vscode/
 
 #Big files
+*.pt
 demos/graphs/
 demos/temp_graph_files/
 demos/graph_files/
