@@ -2,8 +2,8 @@
 
 ``run_pipeline`` produces a ``circuit_tracer.Graph`` by running local attribution on a
 prompt (or loading an existing ``.pt``), optionally selects claim-relevant semantic spans, prunes
-the graph directly, optionally filters by activation density, clusters, and assembles
-the supernode ``SummaryGraph``. Legacy spectral/agglomerative clustering is available
+the graph directly, optionally filters by activation density and/or Jev relevance, clusters, and
+assembles the supernode ``SummaryGraph``. Legacy spectral/agglomerative clustering is available
 only through eval-owned baseline helpers.
 """
 
@@ -23,6 +23,7 @@ from eval.legacy_cluster_baselines import find_best_k
 from summarization.attr_graph import AttrGraph
 from summarization.cluster import DEFAULT_THETA, cluster
 from summarization.cluster_viz import supernode_graph_figure
+from summarization.jev_relevance import filter_by_jev_relevance
 from summarization.prune import filter_act_density, prune_attr_graph
 from summarization.summarize import summarize
 
@@ -163,8 +164,24 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         _report_progress(args, "Filtering activation density", 0.48)
         prune_graph = filter_act_density(
             prune_graph,
+            features_dir=getattr(args, "features_dir", None),
             act_density_lb=args.act_density_lb,
             act_density_ub=args.act_density_ub,
+        )
+
+    # Stage 1c (optional): drop features TypeSafe Jev judges irrelevant to the query.
+    if getattr(args, "jev_query", None):
+        _report_progress(args, "Filtering features by Jev relevance", 0.55)
+        prune_graph = filter_by_jev_relevance(
+            prune_graph,
+            args.jev_query,
+            model=args.jev_model,
+            threshold=args.jev_threshold,
+            features_dir=getattr(args, "features_dir", None),
+            features_per_request=args.jev_features_per_request,
+            max_concurrent_requests=args.jev_max_concurrent_requests,
+            max_state_chars=args.jev_max_state_chars,
+            max_concurrent_fetches=args.jev_max_concurrent_fetches,
         )
 
     # Stage 2: cluster (ILP canonical; legacy baselines remain eval-owned).

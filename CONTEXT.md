@@ -56,6 +56,13 @@ A pruning refinement that removes circuit nodes whose feature activation frequen
 the chosen interpretability band. It changes which evidence remains before supernodes are
 formed, but does not assign roles or labels.
 
+## Jev relevance filter
+
+A pruning refinement that removes circuit features a query says do not matter. Each feature's
+dashboard is judged by TypeSafe Jev in a batched Noul question against a **query** containing a
+mechanistic claim and what the user wants to see; features below the relevance threshold, and
+features whose dashboard or answer is missing, are removed before clustering.
+
 ## Clustering
 
 The stage that partitions a pruned attribution graph into supernodes.

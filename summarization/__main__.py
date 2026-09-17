@@ -87,6 +87,57 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--act-density-lb", type=float, default=2e-5)
     parser.add_argument("--act-density-ub", type=float, default=0.1)
+    parser.add_argument(
+        "--features-dir",
+        default=None,
+        help="Optional local dir of feature dashboard JSONs, used by the density and Jev filters.",
+    )
+
+    # Optional pruning substage: drop features TypeSafe Jev judges irrelevant.
+    parser.add_argument(
+        "--jev-query",
+        default=None,
+        help=(
+            "Mechanistic claim plus what you want to see out of the circuit. Enables the "
+            "Jev relevance filter, which drops features whose Noul p(relevant) is below "
+            "--jev-threshold."
+        ),
+    )
+    parser.add_argument(
+        "--jev-model",
+        default="jev-latest",
+        help="TypeSafe System One model for the Jev filter.",
+    )
+    parser.add_argument(
+        "--jev-threshold",
+        type=float,
+        default=0.5,
+        help="Drop features with Noul p(relevant) below this threshold.",
+    )
+    parser.add_argument(
+        "--jev-features-per-request",
+        type=int,
+        default=64,
+        help="Feature dashboards batched into one TypeSafe request.",
+    )
+    parser.add_argument(
+        "--jev-max-concurrent-requests",
+        type=int,
+        default=4,
+        help="TypeSafe requests issued in parallel when features span several batches.",
+    )
+    parser.add_argument(
+        "--jev-max-state-chars",
+        type=int,
+        default=48000,
+        help="Character budget for one TypeSafe state; overflow is split and retried.",
+    )
+    parser.add_argument(
+        "--jev-max-concurrent-fetches",
+        type=int,
+        default=4,
+        help="Feature dashboard downloads issued in parallel.",
+    )
 
     # Cluster.
     parser.add_argument(

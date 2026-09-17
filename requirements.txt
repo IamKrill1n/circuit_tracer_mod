@@ -3,6 +3,7 @@ networkx
 transformers
 google-genai
 openai
+typesafe-sdk
 pytest
 plotly
 streamlit

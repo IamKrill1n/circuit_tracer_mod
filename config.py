@@ -21,3 +21,5 @@ HUGGINGFACE_API_KEY = get_env("HUGGINGFACE_API_KEY", "")
 # Support both names for Gemini
 GENAI_API_KEY = get_env("GEMINI_API_KEY", "") or get_env("GENAI_API_KEY", "")
 OPENAI_API_KEY = get_env("OPENAI_API_KEY", "")
+# TypeSafe System One (Jev) reads TYPESAFE_API_KEY from the environment itself.
+TYPESAFE_API_KEY = get_env("TYPESAFE_API_KEY", "")
