@@ -15,16 +15,17 @@ from __future__ import annotations
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import torch
-from typesafe_sdk import Noul, NoulCriteria, TypeSafeBadRequestError, TypeSafeClient
+from typesafe_sdk import Noul, NoulCriteria, TypeSafeClient
 
 from summarization.feature_source import FeatureInfo, fetch_feature_info
 from summarization.prune import PruneGraph, _subset_prune_graph, remove_dangling_nodes
 from summarization.summarize import Node
+from summarization.typesafe_batch import BatchResult, ask_with_split, merge_results
 from summarization.utils import _build_index_sets
 
 DEFAULT_MODEL = "jev-latest"
@@ -82,63 +83,24 @@ def _digest_is_empty(digest: dict[str, Any]) -> bool:
     return not digest["examples"] and not digest["top_logits"]
 
 
-@dataclass
-class _ChunkResult:
-    scores: dict[str, float]
-    response_model: str
-    input_tokens: int
-    output_tokens: int
-    requests: int
-
-    def merge(self, other: _ChunkResult) -> _ChunkResult:
-        return _ChunkResult(
-            scores={**self.scores, **other.scores},
-            response_model=self.response_model or other.response_model,
-            input_tokens=self.input_tokens + other.input_tokens,
-            output_tokens=self.output_tokens + other.output_tokens,
-            requests=self.requests + other.requests,
-        )
-
-
-def _is_max_tokens_error(exc: TypeSafeBadRequestError) -> bool:
-    body = exc.body
-    if isinstance(body, dict):
-        detail = body.get("detail")
-        if isinstance(detail, dict) and detail.get("error_type") == "max_tokens_exceeded":
-            return True
-    return "max_tokens_exceeded" in str(exc)
-
-
 def _ask_chunk(
     client: Any,
     model: str,
     query: str,
     digests: dict[str, dict[str, Any]],
-) -> _ChunkResult:
+) -> BatchResult:
     """One batched TypeSafe call, halving and retrying when Jev rejects it as too long."""
-    try:
-        state = {"query": query, "features": digests}
-        questions = {node_id: relevance_question(node_id) for node_id in digests}
-        response = client.system_one(state, questions, model=model)
-    except TypeSafeBadRequestError as exc:
-        if not _is_max_tokens_error(exc) or len(digests) < 2:
-            raise
-        node_ids = list(digests)
-        mid = len(node_ids) // 2
-        left = _ask_chunk(client, model, query, {i: digests[i] for i in node_ids[:mid]})
-        right = _ask_chunk(client, model, query, {i: digests[i] for i in node_ids[mid:]})
-        return left.merge(right)
-    scores = {
-        node_id: float(response.nouls[node_id].noul)
-        for node_id in digests
-        if node_id in response.nouls
-    }
-    return _ChunkResult(
-        scores=scores,
-        response_model=response.model,
-        input_tokens=response.usage.input_tokens,
-        output_tokens=response.usage.output_tokens,
-        requests=1,
+    state = {"query": query, "features": digests}
+    questions = {node_id: relevance_question(node_id) for node_id in digests}
+    return ask_with_split(
+        client,
+        model,
+        state,
+        questions,
+        lambda full_state, ids: {
+            "query": full_state["query"],
+            "features": {node_id: full_state["features"][node_id] for node_id in ids},
+        },
     )
 
 
@@ -206,7 +168,7 @@ def judge_feature_relevance(
 
     chunks = _chunk_features(digests, features_per_request, max_state_chars)
 
-    def ask_all(active_client: Any) -> list[_ChunkResult]:
+    def ask_all(active_client: Any) -> list[BatchResult]:
         workers = min(max_concurrent_requests, len(chunks))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [
@@ -227,26 +189,7 @@ def judge_feature_relevance(
     else:
         results = ask_all(client)
 
-    scores: dict[str, float] = {}
-    response_models: set[str] = set()
-    input_tokens = 0
-    output_tokens = 0
-    requests = 0
-    for result in results:
-        scores.update(result.scores)
-        response_models.add(result.response_model)
-        input_tokens += result.input_tokens
-        output_tokens += result.output_tokens
-        requests += result.requests
-
-    usage = {
-        "model": model,
-        "response_models": sorted(response_models),
-        "requests": requests,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-    }
-    return scores, usage
+    return merge_results(results, model)
 
 
 def filter_by_jev_relevance(

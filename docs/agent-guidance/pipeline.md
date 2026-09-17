@@ -17,3 +17,15 @@ python -m summarization --graph-pt demos/000.pt --jev-query "The model identifie
 
 Tune with `--jev-threshold` (default 0.5), `--jev-model`, `--jev-features-per-request`,
 `--jev-max-state-chars`, and `--jev-max-concurrent-requests`/`--jev-max-concurrent-fetches`.
+
+For claim-conditioned token weights, use `--claim` with either `--selector-model` (selector LLM spans,
+default) or `--seed-selector jev` (per-token Jev Nouls, requires `TYPESAFE_API_KEY`):
+
+```bash
+python -m summarization --graph-pt demos/000.pt --claim "..." --seed-selector jev
+```
+
+With `--seed-selector jev`, tokens above `--jev-threshold` are grouped into runs with equal mass per
+run; tune batching with `--jev-tokens-per-request` (default 64). When no token clears the threshold,
+the run prunes by influence only (`arithmetic`, alpha=1) and records `fallback="output_only"` in the
+graph metadata and the pipeline result.

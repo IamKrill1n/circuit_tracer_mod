@@ -1,9 +1,11 @@
 """End-to-end pipeline: attribution -> token weights -> prune -> cluster -> summarize.
 
 ``run_pipeline`` produces a ``circuit_tracer.Graph`` by running local attribution on a
-prompt (or loading an existing ``.pt``), optionally selects claim-relevant semantic spans, prunes
-the graph directly, optionally filters by activation density and/or Jev relevance, clusters, and
-assembles the supernode ``SummaryGraph``. Legacy spectral/agglomerative clustering is available
+prompt (or loading an existing ``.pt``), optionally selects claim-relevant semantic spans
+with a selector LLM or claim-relevant tokens with TypeSafe Jev (``--seed-selector jev``;
+falls back to influence-only pruning when no token qualifies), prunes the graph directly,
+optionally filters by activation density and/or Jev relevance, clusters, and assembles
+the supernode ``SummaryGraph``. Legacy spectral/agglomerative clustering is available
 only through eval-owned baseline helpers.
 """
 
@@ -24,7 +26,7 @@ from summarization.attr_graph import AttrGraph
 from summarization.cluster import DEFAULT_THETA, cluster
 from summarization.cluster_viz import supernode_graph_figure
 from summarization.jev_relevance import filter_by_jev_relevance
-from summarization.prune import filter_act_density, prune_attr_graph
+from summarization.prune import CombineMethod, filter_act_density, prune_attr_graph
 from summarization.summarize import summarize
 
 
@@ -122,13 +124,63 @@ def _supernodes_for_upload(rows: list) -> list[list[str]]:
     return [[s.name, *s.member_node_ids()] for s in rows if len(s.features) > 1]
 
 
+def _select_claim_seeds(
+    args: argparse.Namespace, ag: AttrGraph, claim: str
+) -> tuple[list[float] | None, CombineMethod | None, float | None, str | None]:
+    """Select claim-conditioned embedding weights.
+
+    Returns ``(weights, combine_override, alpha_override, fallback)``. The Jev selector
+    reports ``fallback="output_only"`` with arithmetic/alpha=1 overrides when no token
+    clears its threshold, so that run prunes by influence only.
+    """
+    from summarization.jev_seeds import (
+        DEFAULT_MAX_CONCURRENT_REQUESTS,
+        DEFAULT_MAX_STATE_CHARS,
+        DEFAULT_MODEL,
+        DEFAULT_THRESHOLD,
+        DEFAULT_TOKENS_PER_REQUEST,
+        select_jev_semantic_seeds,
+    )
+
+    if getattr(args, "seed_selector", "llm") == "jev":
+        _report_progress(args, "Judging claim-relevant tokens with Jev", 0.22)
+        weights = select_jev_semantic_seeds(
+            ag,
+            claim,
+            model=getattr(args, "jev_model", DEFAULT_MODEL),
+            threshold=getattr(args, "jev_threshold", DEFAULT_THRESHOLD),
+            tokens_per_request=getattr(args, "jev_tokens_per_request", DEFAULT_TOKENS_PER_REQUEST),
+            max_concurrent_requests=getattr(
+                args, "jev_max_concurrent_requests", DEFAULT_MAX_CONCURRENT_REQUESTS
+            ),
+            max_state_chars=getattr(args, "jev_max_state_chars", DEFAULT_MAX_STATE_CHARS),
+        )
+        if weights is None:
+            return None, "arithmetic", 1.0, "output_only"
+        return weights, None, None, None
+
+    from summarization.semantic_seeds import select_semantic_seeds
+
+    _report_progress(args, "Selecting claim-relevant spans", 0.22)
+    return select_semantic_seeds(ag, claim, args.selector_model), None, None, None
+
+
 def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     claim = getattr(args, "claim", None)
     selector_model = getattr(args, "selector_model", None)
+    seed_selector = getattr(args, "seed_selector", "llm")
     if claim is not None and not claim.strip():
         raise ValueError("claim must not be empty")
-    if bool(claim) != bool(selector_model):
-        raise ValueError("Supply both --claim and --selector-model.")
+    if seed_selector == "llm":
+        if bool(claim) != bool(selector_model):
+            raise ValueError("Supply both --claim and --selector-model.")
+    elif seed_selector == "jev":
+        if not claim:
+            raise ValueError("--seed-selector jev requires --claim.")
+        if selector_model:
+            raise ValueError("--selector-model is not used with --seed-selector jev.")
+    else:
+        raise ValueError(f"Unknown seed selector: {seed_selector}")
     if claim and _parse_token_weights(args.token_weights) is not None:
         raise ValueError("Manual token weights and semantic selection are mutually exclusive.")
     # Stage 0: produce a circuit_tracer Graph (local attribution or loaded .pt).
@@ -139,11 +191,17 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
     # Semantic seed selection is separate from graph attribution.
     token_weights = _parse_token_weights(args.token_weights)
+    combine_method: CombineMethod = getattr(args, "combine_method", "geometric")
+    alpha = getattr(args, "alpha", 0.5)
+    seed_fallback: str | None = None
     if claim:
-        from summarization.semantic_seeds import select_semantic_seeds
-
-        _report_progress(args, "Selecting claim-relevant spans", 0.22)
-        token_weights = select_semantic_seeds(ag, claim, selector_model)
+        token_weights, combine_override, alpha_override, seed_fallback = _select_claim_seeds(
+            args, ag, claim
+        )
+        if combine_override is not None:
+            combine_method = combine_override
+        if alpha_override is not None:
+            alpha = alpha_override
 
     # Stage 1: prune (Graph -> PruneGraph, pure tensor math).
     _report_progress(args, "Pruning attribution graph", 0.35)
@@ -153,9 +211,9 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         token_weights=token_weights,
         node_threshold=args.node_threshold,
         edge_threshold=args.edge_threshold,
-        combine_method=getattr(args, "combine_method", "geometric"),
+        combine_method=combine_method,
         normalization=getattr(args, "normalization", "rank"),
-        alpha=getattr(args, "alpha", 0.5),
+        alpha=alpha,
         keep_all_tokens_and_logits=args.keep_all_tokens_and_logits,
     )
 
@@ -300,4 +358,5 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         "figure_html_out": figure_path,
         "upload_status": upload_status,
         "upload_body": upload_body,
+        "seed_fallback": seed_fallback,
     }

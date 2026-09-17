@@ -42,7 +42,20 @@ def build_parser() -> argparse.ArgumentParser:
     # Uniform by default; semantic selection requires a fixed human-written claim.
     parser.add_argument("--token-weights", default=None, help="Manual embedding weights as JSON.")
     parser.add_argument("--claim", default=None, help="Human-written mechanistic claim.")
-    parser.add_argument("--selector-model", default=None, help="Semantic selector model in the LLM registry.")
+    parser.add_argument(
+        "--selector-model", default=None, help="Semantic selector model in the LLM registry."
+    )
+    parser.add_argument(
+        "--seed-selector",
+        type=str,
+        choices=["llm", "jev"],
+        default="llm",
+        help=(
+            "Claim-conditioned token seed selector: 'llm' selects spans with --selector-model, "
+            "'jev' judges every prompt token with TypeSafe Jev and falls back to "
+            "influence-only pruning when no token qualifies."
+        ),
+    )
     parser.add_argument("--device", type=str, default="cuda")
 
     # Prune.
@@ -119,6 +132,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=64,
         help="Feature dashboards batched into one TypeSafe request.",
+    )
+    parser.add_argument(
+        "--jev-tokens-per-request",
+        type=int,
+        default=64,
+        help="Prompt tokens batched into one TypeSafe request for --seed-selector jev.",
     )
     parser.add_argument(
         "--jev-max-concurrent-requests",

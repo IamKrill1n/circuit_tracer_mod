@@ -25,6 +25,16 @@ def test_pipeline_cli_can_disable_act_density_filter() -> None:
     assert args.filter_act_density is False
 
 
+def test_pipeline_cli_seed_selector_defaults() -> None:
+    args = build_parser().parse_args([])
+
+    assert args.seed_selector == "llm"
+    assert args.jev_tokens_per_request == 64
+
+    jev_args = build_parser().parse_args(["--claim", "claim", "--seed-selector", "jev"])
+    assert jev_args.seed_selector == "jev"
+
+
 def test_prune_api_defaults_match_pipeline_defaults() -> None:
     combined_defaults = prune_combined.__defaults__
     attr_graph_defaults = prune_attr_graph.__defaults__
